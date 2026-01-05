@@ -11,7 +11,7 @@ module Clacky
     end
 
     def send_message(content, model: "gpt-3.5-turbo", max_tokens: 4096)
-      response = connection.post("/v1/chat/completions") do |req|
+      response = connection.post("chat/completions") do |req|
         req.body = {
           model: model,
           max_tokens: max_tokens,
@@ -28,7 +28,7 @@ module Clacky
     end
 
     def send_messages(messages, model: "gpt-3.5-turbo", max_tokens: 4096)
-      response = connection.post("/v1/chat/completions") do |req|
+      response = connection.post("chat/completions") do |req|
         req.body = {
           model: model,
           max_tokens: max_tokens,
@@ -57,7 +57,7 @@ module Clacky
         puts JSON.pretty_generate(body)
       end
 
-      response = connection.post("/v1/chat/completions") do |req|
+      response = connection.post("chat/completions") do |req|
         req.body = body.to_json
       end
 
