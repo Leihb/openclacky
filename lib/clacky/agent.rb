@@ -149,6 +149,10 @@ module Clacky
       # Always send tools definitions to allow multi-step tool calling
       tools_to_send = @tool_registry.allowed_definitions(@config.allowed_tools)
 
+      # Show progress indicator while waiting for LLM response
+      progress = ProgressIndicator.new(verbose: @config.verbose)
+      progress.start
+
       response = @client.send_messages_with_tools(
         @messages,
         model: @config.model,
@@ -156,6 +160,8 @@ module Clacky
         max_tokens: @config.max_tokens,
         verbose: @config.verbose
       )
+
+      progress.finish
 
       track_cost(response[:usage])
 

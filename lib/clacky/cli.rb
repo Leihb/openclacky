@@ -67,8 +67,8 @@ module Clacky
     option :mode, type: :string, default: "confirm_all",
            desc: "Permission mode: auto_approve, confirm_edits, confirm_all, plan_only"
     option :tools, type: :array, default: ["all"], desc: "Allowed tools"
-    option :max_iterations, type: :numeric, default: 10, desc: "Maximum iterations"
-    option :max_cost, type: :numeric, default: 1.0, desc: "Maximum cost in USD"
+    option :max_iterations, type: :numeric, desc: "Maximum iterations (default: 50)"
+    option :max_cost, type: :numeric, desc: "Maximum cost in USD (default: 5.0)"
     option :verbose, type: :boolean, default: false, desc: "Show detailed output"
     option :path, type: :string, desc: "Project directory path (defaults to current directory)"
     def agent(message = nil)
@@ -77,6 +77,12 @@ module Clacky
       unless config.api_key
         say "Error: API key not found. Please run 'clacky config set' first.", :red
         exit 1
+      end
+
+      # Handle Ctrl+C gracefully
+      Signal.trap("INT") do
+        puts "\n\n⚠️  Interrupted by user (Ctrl+C)"
+        exit 130 # Standard exit code for SIGINT
       end
 
       # Validate and get working directory
