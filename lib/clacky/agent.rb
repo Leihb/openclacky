@@ -529,11 +529,12 @@ module Clacky
 
         case call[:name]
         when "edit"
-          filename = File.basename(args[:file_path] || "unknown")
+          path = args[:path] || args[:file_path]
+          filename = Utils::PathHelper.safe_basename(path)
           "Edit(#{filename})"
         when "write"
-          filename = File.basename(args[:path] || "unknown")
-          if File.exist?(args[:path])
+          filename = Utils::PathHelper.safe_basename(args[:path])
+          if args[:path] && File.exist?(args[:path])
             "Write(#{filename}) - overwrite existing"
           else
             "Write(#{filename}) - create new"
