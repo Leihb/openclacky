@@ -11,6 +11,9 @@ module Clacky
     end
 
     def get(name)
+      # Handle shell alias to safe_shell for backward compatibility
+      name = 'safe_shell' if name == 'shell' && @tools.key?('safe_shell') && !@tools.key?('shell')
+      
       @tools[name] || raise(Error, "Tool not found: #{name}")
     end
 

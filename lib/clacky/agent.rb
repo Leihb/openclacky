@@ -2,6 +2,7 @@
 
 require "securerandom"
 require "json"
+require_relative "utils/arguments_parser"
 
 module Clacky
   class Agent
@@ -310,7 +311,9 @@ module Clacky
         # Execute tool
         begin
           tool = @tool_registry.get(call[:name])
-          args = JSON.parse(call[:arguments], symbolize_names: true)
+
+          # Parse and validate arguments with JSON repair capability
+          args = Utils::ArgumentsParser.parse_and_validate(call, @tool_registry)
 
           # Special handling for TodoManager: inject todos array
           if call[:name] == "todo_manager"
@@ -680,7 +683,7 @@ module Clacky
 
     def register_builtin_tools
       @tool_registry.register(Tools::Calculator.new)
-      @tool_registry.register(Tools::Shell.new)
+      @tool_registry.register(Tools::SafeShell.new)
       @tool_registry.register(Tools::FileReader.new)
       @tool_registry.register(Tools::Write.new)
       @tool_registry.register(Tools::Edit.new)
