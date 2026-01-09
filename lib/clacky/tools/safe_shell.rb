@@ -58,9 +58,24 @@ module Clacky
         end
       end
 
+      # Safe read-only commands that don't modify system state
+      SAFE_READONLY_COMMANDS = %w[
+        ls pwd cat less more head tail
+        grep find which whereis whoami
+        ps top htop df du
+        git echo printf wc
+        date file stat
+        env printenv
+        curl wget
+      ].freeze
+
       # Class method to check if a command is safe to execute automatically
       def self.command_safe_for_auto_execution?(command)
         return false unless command
+        
+        # Check if it's a known safe read-only command
+        cmd_name = command.strip.split.first
+        return true if SAFE_READONLY_COMMANDS.include?(cmd_name)
         
         begin
           project_root = Dir.pwd
