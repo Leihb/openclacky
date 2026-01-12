@@ -28,11 +28,11 @@ module TestHelpers
   end
 
   # Mock API response for testing
-  def mock_api_response(content: "Test response", tool_calls: nil)
+  def mock_api_response(content: "Test response", tool_calls: nil, finish_reason: nil)
     {
       content: content,
       tool_calls: tool_calls,
-      finish_reason: tool_calls ? "tool_calls" : "stop",
+      finish_reason: finish_reason || (tool_calls ? "tool_calls" : "stop"),
       usage: {
         prompt_tokens: 10,
         completion_tokens: 20,

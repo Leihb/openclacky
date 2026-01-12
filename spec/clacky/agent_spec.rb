@@ -456,4 +456,135 @@ RSpec.describe Clacky::Agent do
       end
     end
   end
+
+  describe ".from_session" do
+    let(:session_data) do
+      {
+        session_id: "test-session-123",
+        created_at: "2024-01-01T00:00:00Z",
+        working_dir: "/test/dir",
+        messages: [
+          { role: "system", content: "System prompt" },
+          { role: "user", content: "First request" },
+          { role: "assistant", content: "First response" }
+        ],
+        todos: [
+          { id: 1, task: "Test task", status: "pending" }
+        ],
+        stats: {
+          total_iterations: 5,
+          total_cost_usd: 0.10,
+          total_tasks: 2,
+          last_status: "success"
+        }
+      }
+    end
+
+    it "restores session state correctly" do
+      restored_agent = described_class.from_session(client, config, session_data)
+
+      expect(restored_agent.session_id).to eq("test-session-123")
+      expect(restored_agent.iterations).to eq(5)
+      expect(restored_agent.total_cost).to eq(0.10)
+      expect(restored_agent.messages.size).to eq(3)
+      expect(restored_agent.todos.size).to eq(1)
+      expect(restored_agent.working_dir).to eq("/test/dir")
+    end
+
+    context "when session ended with error" do
+      let(:error_session_data) do
+        session_data.merge(
+          messages: session_data[:messages] + [
+            { role: "user", content: "This caused an error" }
+          ],
+          stats: session_data[:stats].merge(
+            last_status: "error",
+            last_error: "Something went wrong"
+          )
+        )
+      end
+
+      it "rolls back the last user message" do
+        restored_agent = described_class.from_session(client, config, error_session_data)
+
+        # Should have rolled back the error-causing message
+        expect(restored_agent.messages.size).to eq(3) # system + user + assistant, not the error-causing user message
+        expect(restored_agent.messages.last[:content]).to eq("First response")
+      end
+
+      it "triggers session_rollback hook" do
+        hook_data = nil
+        
+        # Create a new agent to add the hook
+        agent_with_hook = described_class.new(client, config)
+        agent_with_hook.add_hook(:session_rollback) do |data|
+          hook_data = data
+        end
+
+        # Manually restore session to trigger the hook
+        agent_with_hook.restore_session(error_session_data)
+
+        expect(hook_data).not_to be_nil
+        expect(hook_data[:reason]).to eq("Previous session ended with error")
+        expect(hook_data[:error_message]).to eq("Something went wrong")
+        expect(hook_data[:rolled_back_message_index]).to eq(3)
+      end
+    end
+  end
+
+  describe "truncated response handling" do
+    let(:truncated_response) do
+      mock_api_response(
+        content: "",
+        tool_calls: [
+          mock_tool_call(name: "write", args: '{"path": "test.md"}')  # Missing content parameter
+        ],
+        finish_reason: "length"  # Indicates truncation
+      )
+    end
+
+    let(:retry_response) do
+      mock_api_response(
+        content: "Let me create the file in smaller steps",
+        tool_calls: [
+          mock_tool_call(name: "write", args: '{"path": "test.md", "content": "# Title"}')
+        ],
+        finish_reason: "stop"
+      )
+    end
+
+    it "detects truncated responses and retries automatically" do
+      allow(client).to receive(:send_messages_with_tools)
+        .and_return(truncated_response, retry_response)
+
+      agent.run("Create a document")
+
+      # Should have added a system message about truncation
+      system_messages = agent.messages.select { |m| 
+        m[:role] == "user" && m[:content]&.include?("[SYSTEM] Your response was truncated")
+      }
+      expect(system_messages.size).to eq(1)
+
+      # Should have retried and gotten a valid response
+      expect(client).to have_received(:send_messages_with_tools).twice
+    end
+
+    it "gives up after multiple truncations" do
+      # Always return truncated responses
+      allow(client).to receive(:send_messages_with_tools)
+        .and_return(truncated_response)
+
+      result = agent.run("Create a very complex document")
+
+      # Should have given up and returned a helpful message
+      expect(result[:status]).to eq(:success)
+      
+      # Find the assistant message that gave up
+      assistant_messages = agent.messages.select { |m| 
+        m[:role] == "assistant" && m[:content]&.include?("too complex")
+      }
+      expect(assistant_messages.size).to be >= 1
+      expect(assistant_messages.last[:content]).to include("break it down into smaller steps")
+    end
+  end
 end
