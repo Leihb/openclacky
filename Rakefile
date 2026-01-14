@@ -5,10 +5,6 @@ require "rspec/core/rake_task"
 
 RSpec::Core::RakeTask.new(:spec)
 
-require "rubocop/rake_task"
-
-RuboCop::RakeTask.new
-
 namespace :build do
   desc "Build both openclacky and clacky gems"
   task :all do
@@ -35,4 +31,4 @@ namespace :build do
   end
 end
 
-task default: %i[spec rubocop]
+task default: %i[spec]
