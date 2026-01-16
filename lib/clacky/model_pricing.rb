@@ -220,12 +220,13 @@ module Clacky
         return model if PRICING_TABLE.key?(model)
         
         # Check for Claude model variations
+        # Support both dot and dash separators (e.g., "4.5" or "4-5")
         case model
-        when /claude.*opus.*4\.?5/i
+        when /claude.*opus.*4[.-]?5/i
           "claude-opus-4.5"
-        when /claude.*sonnet.*4\.?5/i
+        when /claude.*sonnet.*4[.-]?5/i
           "claude-sonnet-4.5"
-        when /claude.*haiku.*4\.?5/i
+        when /claude.*haiku.*4[.-]?5/i
           "claude-haiku-4.5"
         when /claude-3-5-sonnet-20241022/i
           "claude-3-5-sonnet-20241022"

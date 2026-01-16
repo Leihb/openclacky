@@ -209,6 +209,50 @@ RSpec.describe Clacky::ModelPricing do
         expect(result[:source]).to eq(:price)
       end
     end
+    
+    context "with AWS Bedrock model names" do
+      it "recognizes bedrock claude-sonnet-4-5 with dash separator" do
+        usage = {
+          prompt_tokens: 100_000,
+          completion_tokens: 50_000
+        }
+        
+        model = "bedrock/jp.anthropic.claude-sonnet-4-5-20250929-v1:0:region/ap-northeast-1"
+        result = described_class.calculate_cost(model: model, usage: usage)
+        # Should use claude-sonnet-4.5 pricing: $3/MTok input, $15/MTok output
+        # Input: (100,000 / 1,000,000) * $3 = $0.30
+        # Output: (50,000 / 1,000,000) * $15 = $0.75
+        # Total: $1.05
+        expect(result[:cost]).to be_within(0.001).of(1.05)
+        expect(result[:source]).to eq(:price)
+      end
+      
+      it "recognizes bedrock claude-opus-4-5 format" do
+        usage = {
+          prompt_tokens: 100_000,
+          completion_tokens: 50_000
+        }
+        
+        model = "bedrock/us.anthropic.claude-opus-4-5-20250101-v1:0"
+        result = described_class.calculate_cost(model: model, usage: usage)
+        # Should use claude-opus-4.5 pricing
+        expect(result[:cost]).to be_within(0.001).of(1.75)
+        expect(result[:source]).to eq(:price)
+      end
+      
+      it "recognizes bedrock claude-haiku-4-5 format" do
+        usage = {
+          prompt_tokens: 100_000,
+          completion_tokens: 50_000
+        }
+        
+        model = "bedrock/eu.anthropic.claude-haiku-4-5-20250101-v1:0"
+        result = described_class.calculate_cost(model: model, usage: usage)
+        # Should use claude-haiku-4.5 pricing
+        expect(result[:cost]).to be_within(0.001).of(0.35)
+        expect(result[:source]).to eq(:price)
+      end
+    end
   end
   
   describe ".get_pricing" do
