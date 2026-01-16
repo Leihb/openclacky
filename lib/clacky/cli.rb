@@ -416,6 +416,7 @@ module Clacky
               cost: result[:total_cost_usd].round(4),
               total_tasks: total_tasks,
               total_cost: total_cost.round(4),
+              cost_source: result[:cost_source],
               cache_stats: result[:cache_stats]
             )
           rescue Clacky::AgentInterrupted

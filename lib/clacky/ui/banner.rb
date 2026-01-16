@@ -9,10 +9,10 @@ module Clacky
       LOGO = <<~'LOGO'
          ██████╗ ██████╗ ███████╗███╗   ██╗ ██████╗██╗      █████╗  ██████╗██╗  ██╗██╗   ██╗
         ██╔═══██╗██╔══██╗██╔════╝████╗  ██║██╔════╝██║     ██╔══██╗██╔════╝██║ ██╔╝╚██╗ ██╔╝
-        ██║   ██║██████╔╝█████╗  ██╔██╗ ██║██║     ██║     ███████║██║     █████╔╝  ╚████╔╝ 
-        ██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║██║     ██║     ██╔══██║██║     ██╔═██╗   ╚██╔╝  
-        ╚██████╔╝██║     ███████╗██║ ╚████║╚██████╗███████╗██║  ██║╚██████╗██║  ██╗   ██║   
-         ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝   ╚═╝   
+        ██║   ██║██████╔╝█████╗  ██╔██╗ ██║██║     ██║     ███████║██║     █████╔╝  ╚████╔╝
+        ██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║██║     ██║     ██╔══██║██║     ██╔═██╗   ╚██╔╝
+        ╚██████╔╝██║     ███████╗██║ ╚████║╚██████╗███████╗██║  ██║╚██████╗██║  ██╗   ██║
+         ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝   ╚═╝
       LOGO
 
       TAGLINE = "[>] AI Coding Assistant & Technical Co-founder"
@@ -72,25 +72,32 @@ module Clacky
       end
 
       # Display task completion summary
-      def display_task_complete(iterations:, cost:, total_tasks:, total_cost:, cache_stats: {})
+      def display_task_complete(iterations:, cost:, total_tasks:, total_cost:, cost_source:, cache_stats: {})
         puts
         puts separator("-")
         puts @pastel.bright_green("[✓] TASK COMPLETED")
         puts info_line("Iterations", iterations)
-        puts info_line("Cost", "$#{cost}")
+
+        # Add cost source indicator
+        cost_suffix = case cost_source
+                      when :api
+                        " (by API)"
+                      else
+                        " (estimated)"
+                      end
+        puts info_line("Cost", "$#{cost}#{cost_suffix}")
         puts info_line("Session Total", "#{total_tasks} tasks, $#{total_cost}")
-        
+
         # Display cache statistics if available
         if cache_stats[:total_requests] && cache_stats[:total_requests] > 0
           puts
           puts @pastel.cyan("    [Prompt Caching]")
-          puts info_line("  Cache Writes", "#{cache_stats[:cache_creation_input_tokens]} tokens")
-          puts info_line("  Cache Reads", "#{cache_stats[:cache_read_input_tokens]} tokens")
-          
+          puts info_line("  Cache Reads/Writes", "#{cache_stats[:cache_read_input_tokens]}/#{cache_stats[:cache_creation_input_tokens]} tokens")
+
           hit_rate = (cache_stats[:cache_hit_requests].to_f / cache_stats[:total_requests] * 100).round(1)
           puts info_line("  Cache Hit Rate", "#{hit_rate}% (#{cache_stats[:cache_hit_requests]}/#{cache_stats[:total_requests]} requests)")
         end
-        
+
         puts separator("-")
         puts
       end

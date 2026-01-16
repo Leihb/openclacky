@@ -55,12 +55,28 @@ module Clacky
       # Add tools if provided
       # For Claude API with caching: mark the last tool definition with cache_control
       if tools&.any?
-        if enable_caching && supports_prompt_caching?(model)
+        caching_supported = supports_prompt_caching?(model)
+        caching_enabled = enable_caching && caching_supported
+        
+        # Debug logging for caching decisions
+        if verbose || ENV["CLACKY_DEBUG"]
+          puts "\n[DEBUG] Prompt Caching Analysis:"
+          puts "  Model: #{model}"
+          puts "  Caching Requested: #{enable_caching}"
+          puts "  Caching Supported: #{caching_supported}"
+          puts "  Caching Enabled: #{caching_enabled}"
+        end
+        
+        if caching_enabled
           # Deep clone tools to avoid modifying original
           cached_tools = tools.map { |tool| deep_clone(tool) }
           # Mark the last tool for caching (Claude caches from cache breakpoint to end)
           cached_tools.last[:cache_control] = { type: "ephemeral" }
           body[:tools] = cached_tools
+          
+          if verbose || ENV["CLACKY_DEBUG"]
+            puts "  Cache Control Added: Last tool marked for caching"
+          end
         else
           body[:tools] = tools
         end
@@ -91,14 +107,28 @@ module Clacky
     private
 
     # Check if the model supports prompt caching
-    # Currently only Claude 3.5 Sonnet and newer Claude models support this
+    # Currently only Claude 3.5+ models support this feature
     def supports_prompt_caching?(model)
       model_str = model.to_s.downcase
-      # Claude 3.5 Sonnet (20241022 and newer) supports prompt caching
-      # Also Claude 3.7 Sonnet and Opus models when they're released
-      model_str.include?("claude-3.5-sonnet") ||
-        model_str.include?("claude-3-7") ||
-        model_str.include?("claude-4")
+      
+      # Only Claude models support prompt caching
+      return false unless model_str.include?("claude")
+      
+      # Pattern matching for supported Claude versions:
+      # - claude-3.5-*, claude-3-5-*, claude-3.5.*
+      # - claude-3.7-*, claude-3-7-*, claude-3.7.*  
+      # - claude-4*, claude-sonnet-4*
+      # - anthropic/claude-sonnet-4* (OpenRouter format)
+      cache_pattern = /
+        claude                        # Must contain "claude"
+        (?:                          # Non-capturing group for version patterns
+          (?:-3[-.]?[5-9])|          # 3.5, 3.6, 3.7, 3.8, 3.9 or 3-5, 3-6, etc
+          (?:-[4-9])|                # 4, 5, 6, 7, 8, 9 (future versions)
+          (?:-sonnet-[34])           # OpenRouter: claude-sonnet-3, claude-sonnet-4
+        )
+      /x
+      
+      model_str.match?(cache_pattern)
     end
 
     # Deep clone a hash/array structure (for tool definitions)
@@ -162,12 +192,28 @@ module Clacky
           total_tokens: usage["total_tokens"]
         }
         
+        # Add OpenRouter cost information if present
+        if usage["cost"]
+          usage_data[:api_cost] = usage["cost"]
+        end
+        
         # Add cache metrics if present (Claude API with prompt caching)
         if usage["cache_creation_input_tokens"]
           usage_data[:cache_creation_input_tokens] = usage["cache_creation_input_tokens"]
         end
         if usage["cache_read_input_tokens"]
           usage_data[:cache_read_input_tokens] = usage["cache_read_input_tokens"]
+        end
+        
+        # Add OpenRouter cache information from prompt_tokens_details
+        if usage["prompt_tokens_details"]
+          details = usage["prompt_tokens_details"]
+          if details["cached_tokens"] && details["cached_tokens"] > 0
+            usage_data[:cache_read_input_tokens] = details["cached_tokens"]
+          end
+          if details["cache_write_tokens"] && details["cache_write_tokens"] > 0
+            usage_data[:cache_creation_input_tokens] = details["cache_write_tokens"]
+          end
         end
         
         {

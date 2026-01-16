@@ -9,7 +9,7 @@ require_relative "utils/arguments_parser"
 module Clacky
   class Agent
     attr_reader :session_id, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
-                :cache_stats
+                :cache_stats, :cost_source
 
     # Pricing per 1M tokens (approximate - adjust based on actual model)
     PRICING = {
@@ -76,6 +76,8 @@ module Clacky
       @working_dir = working_dir || Dir.pwd
       @created_at = Time.now.iso8601
       @total_tasks = 0
+      @cost_source = :estimated  # Track whether cost is from API or estimated
+      @task_cost_source = :estimated  # Track cost source for current task
 
       # Register built-in tools
       register_builtin_tools
@@ -133,6 +135,7 @@ module Clacky
 
     def run(user_input, &block)
       @start_time = Time.now
+      @task_cost_source = :estimated  # Reset for new task
 
       # Add system prompt as the first message if this is the first run
       if @messages.empty?
@@ -613,9 +616,24 @@ module Clacky
     end
 
     def track_cost(usage)
-      input_cost = (usage[:prompt_tokens] / 1_000_000.0) * PRICING[:input]
-      output_cost = (usage[:completion_tokens] / 1_000_000.0) * PRICING[:output]
-      @total_cost += input_cost + output_cost
+      # Priority 1: Use API-provided cost if available (OpenRouter, LiteLLM, etc.)
+      if usage[:api_cost]
+        @total_cost += usage[:api_cost]
+        @cost_source = :api
+        @task_cost_source = :api
+        puts "[DEBUG] Using API-provided cost: $#{usage[:api_cost]}" if @config.verbose
+      else
+        # Priority 2: Calculate from tokens
+        input_cost = (usage[:prompt_tokens] / 1_000_000.0) * PRICING[:input]
+        output_cost = (usage[:completion_tokens] / 1_000_000.0) * PRICING[:output]
+        @total_cost += input_cost + output_cost
+        @cost_source = :estimated
+        @task_cost_source = :estimated
+        
+        if @config.verbose
+          puts "[DEBUG] Calculated cost from tokens: input=$#{input_cost.round(4)}, output=$#{output_cost.round(4)}"
+        end
+      end
 
       # Track cache usage statistics
       @cache_stats[:total_requests] += 1
@@ -1081,6 +1099,7 @@ module Clacky
         iterations: @iterations,
         duration_seconds: Time.now - @start_time,
         total_cost_usd: @total_cost.round(4),
+        cost_source: @task_cost_source,  # Add cost source for this task
         cache_stats: @cache_stats,
         messages: @messages,
         error: error
