@@ -196,6 +196,54 @@ module Clacky
           when "\e[D" # Left arrow
             cursor_pos = [cursor_pos - 1, 0].max
 
+          when "\u0001" # Ctrl+A - Move to beginning of line
+            cursor_pos = 0
+
+          when "\u0005" # Ctrl+E - Move to end of line
+            current_line = lines[line_index] || ""
+            cursor_pos = current_line.chars.length
+
+          when "\u0006" # Ctrl+F - Move forward one character
+            current_line = lines[line_index] || ""
+            cursor_pos = [cursor_pos + 1, current_line.chars.length].min
+
+          when "\u0002" # Ctrl+B - Move backward one character
+            cursor_pos = [cursor_pos - 1, 0].max
+
+          when "\u000B" # Ctrl+K - Delete from cursor to end of line
+            current_line = lines[line_index] || ""
+            chars = current_line.chars
+            lines[line_index] = chars[0...cursor_pos].join
+
+          when "\u0015" # Ctrl+U - Delete from beginning of line to cursor
+            current_line = lines[line_index] || ""
+            chars = current_line.chars
+            lines[line_index] = chars[cursor_pos..-1].join || ""
+            cursor_pos = 0
+
+          when "\u0017" # Ctrl+W - Delete previous word
+            current_line = lines[line_index] || ""
+            chars = current_line.chars
+            
+            # Find the start of the previous word
+            pos = cursor_pos - 1
+            
+            # Skip trailing whitespace
+            while pos >= 0 && chars[pos] =~ /\s/
+              pos -= 1
+            end
+            
+            # Delete word characters
+            while pos >= 0 && chars[pos] =~ /\S/
+              pos -= 1
+            end
+            
+            # Delete from pos+1 to cursor_pos
+            delete_start = pos + 1
+            chars.slice!(delete_start...cursor_pos)
+            lines[line_index] = chars.join
+            cursor_pos = delete_start
+
           when "\u0004" # Ctrl+D - Delete image by number
             if @images.any?
               print "\nEnter image number to delete (1-#{@images.size}): "
