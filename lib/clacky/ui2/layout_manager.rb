@@ -27,10 +27,11 @@ module Clacky
       # Calculate layout dimensions based on screen size
       def calculate_layout
         todo_height = @todo_area&.height || 0
+        # Layout: output -> todo -> separator -> input -> status
         @output_height = screen.height - INPUT_HEIGHT - SEPARATOR_HEIGHT - STATUS_HEIGHT - todo_height
-        @separator_row = @output_height
-        @todo_row = @separator_row + SEPARATOR_HEIGHT
-        @input_row = @todo_row + todo_height
+        @todo_row = @output_height  # Todo area right after output
+        @separator_row = @todo_row + todo_height  # Separator after todo
+        @input_row = @separator_row + SEPARATOR_HEIGHT
         @status_row = screen.height - STATUS_HEIGHT
 
         # Update component dimensions
@@ -43,8 +44,8 @@ module Clacky
       def render_all
         @render_mutex.synchronize do
           output_area.render(start_row: 0)
-          render_separator_internal
           render_todo_internal
+          render_separator_internal
           input_area.render(start_row: @input_row)
           screen.show_cursor  # Show cursor in input area
         end
@@ -115,8 +116,8 @@ module Clacky
 
           # Render all areas
           output_area.render(start_row: 0)
-          render_separator_internal
           render_todo_internal
+          render_separator_internal
           input_area.render(start_row: @input_row)
           restore_cursor_to_input_internal
           screen.flush

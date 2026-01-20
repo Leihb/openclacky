@@ -5,10 +5,12 @@ require "pastel"
 module Clacky
   module UI2
     module Components
-      # TodoArea displays active todos above the input area
+      # TodoArea displays active todos above the separator line
       class TodoArea
         attr_accessor :height
         attr_reader :todos
+
+        MAX_DISPLAY_TASKS = 2  # Show at most 2 tasks (Next + After)
 
         def initialize
           @todos = []
@@ -21,10 +23,17 @@ module Clacky
         # @param todos [Array<Hash>] Array of todo items
         def update(todos)
           @todos = todos || []
-          # Filter to only show pending todos
           @pending_todos = @todos.select { |t| t[:status] == "pending" }
-          # Calculate height: 1 line for header + 1 line per pending todo
-          @height = @pending_todos.empty? ? 0 : @pending_todos.size + 1
+          @completed_count = @todos.count { |t| t[:status] == "completed" }
+          @total_count = @todos.size
+
+          # Height: 1 line for header + min(pending_count, MAX_DISPLAY_TASKS) lines for tasks
+          if @pending_todos.empty? && @completed_count == 0
+            @height = 0
+          else
+            display_count = [@pending_todos.size, MAX_DISPLAY_TASKS].min
+            @height = 1 + display_count
+          end
         end
 
         # Check if there are todos to display
@@ -39,20 +48,21 @@ module Clacky
 
           update_width
 
-          # Render header
+          # Render header: [##] Tasks [0/4]: ████
           move_cursor(start_row, 0)
           clear_line
-          header = @pastel.cyan("Tasks:")
+          header = render_header
           print header
 
-          # Render each pending todo
-          @pending_todos.each_with_index do |todo, i|
+          # Render tasks (Next and After)
+          @pending_todos.take(MAX_DISPLAY_TASKS).each_with_index do |todo, i|
             move_cursor(start_row + i + 1, 0)
             clear_line
 
-            status_icon = @pastel.yellow("[ ]")
-            task_text = truncate_text(todo[:task], @width - 6)
-            print "  #{status_icon} #{task_text}"
+            label = i == 0 ? "Next" : "After"
+            task_text = truncate_text("##{todo[:id]} - #{todo[:task]}", @width - 12)
+            line = "  #{@pastel.dim("->")} #{@pastel.yellow(label)}: #{task_text}"
+            print line
           end
 
           flush
@@ -62,10 +72,34 @@ module Clacky
         def clear
           @todos = []
           @pending_todos = []
+          @completed_count = 0
+          @total_count = 0
           @height = 0
         end
 
         private
+
+        # Render header line with progress bar
+        def render_header
+          progress = "#{@completed_count}/#{@total_count}"
+          progress_bar = render_progress_bar(@completed_count, @total_count)
+
+          "#{@pastel.cyan("[##]")} Tasks [#{progress}]: #{progress_bar}"
+        end
+
+        # Render a simple progress bar
+        def render_progress_bar(completed, total)
+          return "" if total == 0
+
+          bar_width = 10
+          filled = total > 0 ? (completed.to_f / total * bar_width).round : 0
+          empty = bar_width - filled
+
+          filled_bar = @pastel.green("█" * filled)
+          empty_bar = @pastel.dim("░" * empty)
+
+          "#{filled_bar}#{empty_bar}"
+        end
 
         # Truncate text to fit width
         def truncate_text(text, max_width)
