@@ -46,10 +46,39 @@ module Clacky
     # Options:
     #   - enable_caching: Enable prompt caching for system prompt and tools (default: false)
     def send_messages_with_tools(messages, model:, tools:, max_tokens:, verbose: false, enable_caching: false)
+      # Apply caching to messages if enabled
+      caching_supported = supports_prompt_caching?(model)
+      caching_enabled = enable_caching && caching_supported
+      
+      # Deep clone messages to avoid modifying the original array
+      processed_messages = messages.map { |msg| deep_clone(msg) }
+      
+      # Add cache control to the second-to-last message (not the very last one, which is the new user input)
+      # This caches all conversation history up to (but not including) the current turn
+      if caching_enabled && processed_messages.size >= 3
+        # Find the last non-system message before the final message
+        # Skip system messages and the last message (which is the new user input)
+        cache_index = processed_messages.size - 2
+        
+        # Make sure we're not caching a system message
+        while cache_index > 0 && processed_messages[cache_index][:role] == "system"
+          cache_index -= 1
+        end
+        
+        if cache_index > 0
+          # Add cache_control to this message
+          processed_messages[cache_index][:cache_control] = { type: "ephemeral" }
+          
+          if verbose || ENV["CLACKY_DEBUG"]
+            puts "  Cache Control Added: Message at index #{cache_index} (role: #{processed_messages[cache_index][:role]})"
+          end
+        end
+      end
+      
       body = {
         model: model,
         max_tokens: max_tokens,
-        messages: messages
+        messages: processed_messages
       }
 
       # Add tools if provided

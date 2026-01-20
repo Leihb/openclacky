@@ -148,11 +148,15 @@ module Clacky
         cache_read_tokens = usage[:cache_read_input_tokens] || 0
         
         # Determine if we're in the over_200k tier
-        total_input_tokens = prompt_tokens + cache_write_tokens + cache_read_tokens
+        # Note: prompt_tokens includes cache_read_tokens but NOT cache_write_tokens
+        # cache_write_tokens are additional tokens that were written to cache
+        total_input_tokens = prompt_tokens + cache_write_tokens
         over_threshold = total_input_tokens > TIERED_PRICING_THRESHOLD
         
         # Calculate regular input cost (non-cached tokens)
-        regular_input_tokens = prompt_tokens - cache_write_tokens - cache_read_tokens
+        # prompt_tokens already includes cache_read_tokens, so we need to subtract them
+        # cache_write_tokens are not part of prompt_tokens, so they're handled separately in cache_cost
+        regular_input_tokens = prompt_tokens - cache_read_tokens
         input_rate = over_threshold ? pricing[:input][:over_200k] : pricing[:input][:default]
         input_cost = (regular_input_tokens / 1_000_000.0) * input_rate
         

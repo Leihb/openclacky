@@ -29,13 +29,13 @@ RSpec.describe Clacky::ModelPricing do
           cache_read_input_tokens: 30_000       # Cache read
         }
         
-        # Regular input: (50,000 / 1,000,000) * $5 = $0.25
+        # Regular input (non-cached): (70,000 / 1,000,000) * $5 = $0.35
         # Output: (50,000 / 1,000,000) * $25 = $1.25
         # Cache write: (20,000 / 1,000,000) * $6.25 = $0.125
         # Cache read: (30,000 / 1,000,000) * $0.50 = $0.015
-        # Total: $1.64
+        # Total: $1.74
         result = described_class.calculate_cost(model: model, usage: usage)
-        expect(result[:cost]).to be_within(0.001).of(1.64)
+        expect(result[:cost]).to be_within(0.001).of(1.74)
         expect(result[:source]).to eq(:price)
       end
     end
@@ -79,13 +79,13 @@ RSpec.describe Clacky::ModelPricing do
           cache_read_input_tokens: 30_000
         }
         
-        # Regular input: (50,000 / 1,000,000) * $3 = $0.15
+        # Regular input (non-cached): (70,000 / 1,000,000) * $3 = $0.21
         # Output: (50,000 / 1,000,000) * $15 = $0.75
         # Cache write (default): (20,000 / 1,000,000) * $3.75 = $0.075
         # Cache read (default): (30,000 / 1,000,000) * $0.30 = $0.009
-        # Total: $0.984
+        # Total: $1.044
         result = described_class.calculate_cost(model: model, usage: usage)
-        expect(result[:cost]).to be_within(0.001).of(0.984)
+        expect(result[:cost]).to be_within(0.001).of(1.044)
         expect(result[:source]).to eq(:price)
       end
       
@@ -97,14 +97,14 @@ RSpec.describe Clacky::ModelPricing do
           cache_read_input_tokens: 30_000
         }
         
-        # Total input tokens: 250,000 + 20,000 + 30,000 = 300,000 (over threshold)
-        # Regular input: (200,000 / 1,000,000) * $6 = $1.20
+        # Total input tokens: 250,000 + 20,000 = 270,000 (over threshold)
+        # Regular input (non-cached): (220,000 / 1,000,000) * $6 = $1.32
         # Output: (50,000 / 1,000,000) * $22.50 = $1.125
         # Cache write (over 200k): (20,000 / 1,000,000) * $7.50 = $0.15
         # Cache read (over 200k): (30,000 / 1,000,000) * $0.60 = $0.018
-        # Total: $2.493
+        # Total: $2.613
         result = described_class.calculate_cost(model: model, usage: usage)
-        expect(result[:cost]).to be_within(0.001).of(2.493)
+        expect(result[:cost]).to be_within(0.001).of(2.613)
         expect(result[:source]).to eq(:price)
       end
     end
@@ -134,13 +134,13 @@ RSpec.describe Clacky::ModelPricing do
           cache_read_input_tokens: 30_000
         }
         
-        # Regular input: (50,000 / 1,000,000) * $1 = $0.05
+        # Regular input (non-cached): (70,000 / 1,000,000) * $1 = $0.07
         # Output: (50,000 / 1,000,000) * $5 = $0.25
         # Cache write: (20,000 / 1,000,000) * $1.25 = $0.025
         # Cache read: (30,000 / 1,000,000) * $0.10 = $0.003
-        # Total: $0.328
+        # Total: $0.348
         result = described_class.calculate_cost(model: model, usage: usage)
-        expect(result[:cost]).to be_within(0.001).of(0.328)
+        expect(result[:cost]).to be_within(0.001).of(0.348)
         expect(result[:source]).to eq(:price)
       end
     end
