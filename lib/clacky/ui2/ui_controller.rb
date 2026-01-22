@@ -133,6 +133,106 @@ module Clacky
         @layout.update_todos(todos)
       end
 
+      # Display token usage statistics
+      # @param token_data [Hash] Token usage data containing:
+      #   - delta_tokens: token delta from previous iteration
+      #   - prompt_tokens: input tokens
+      #   - completion_tokens: output tokens
+      #   - total_tokens: total tokens
+      #   - cache_write: cache write tokens
+      #   - cache_read: cache read tokens
+      #   - cost: cost for this iteration
+      def show_token_usage(token_data)
+        theme = ThemeManager.current_theme
+
+        token_info = []
+
+        # Delta tokens with color coding
+        delta_tokens = token_data[:delta_tokens]
+        delta_str = "+#{delta_tokens}"
+        colored_delta = if delta_tokens > 10000
+          theme.format_text(delta_str, :error)
+        elsif delta_tokens > 5000
+          theme.format_text(delta_str, :warning)
+        else
+          theme.format_text(delta_str, :success)
+        end
+        token_info << colored_delta
+
+        # Cache status indicator (using theme)
+        cache_write = token_data[:cache_write]
+        cache_read = token_data[:cache_read]
+        cache_used = cache_read > 0 || cache_write > 0
+        if cache_used
+          token_info << theme.format_symbol(:cached)
+        end
+
+        # Input tokens (with cache breakdown if available)
+        prompt_tokens = token_data[:prompt_tokens]
+        if cache_write > 0 || cache_read > 0
+          input_detail = "#{prompt_tokens} (cache: #{cache_read} read, #{cache_write} write)"
+          token_info << "Input: #{input_detail}"
+        else
+          token_info << "Input: #{prompt_tokens}"
+        end
+
+        # Output tokens
+        token_info << "Output: #{token_data[:completion_tokens]}"
+
+        # Total
+        token_info << "Total: #{token_data[:total_tokens]}"
+
+        # Cost for this iteration
+        if token_data[:cost]
+          token_info << "Cost: $#{token_data[:cost].round(6)}"
+        end
+
+        # Display through output system
+        token_display = theme.format_text("    [Tokens] #{token_info.join(' | ')}", :thinking)
+        append_output(token_display)
+      end
+
+      # Show tool call arguments
+      # @param formatted_args [String] Formatted arguments string
+      def show_tool_args(formatted_args)
+        theme = ThemeManager.current_theme
+        append_output("\n#{theme.format_text("Args: #{formatted_args}", :thinking)}")
+      end
+
+      # Show file operation preview (Write tool)
+      # @param path [String] File path
+      # @param is_new_file [Boolean] Whether this is a new file
+      def show_file_write_preview(path, is_new_file:)
+        theme = ThemeManager.current_theme
+        file_label = theme.format_symbol(:file)
+        status = is_new_file ? theme.format_text("Creating new file", :success) : theme.format_text("Modifying existing file", :warning)
+        append_output("\n#{file_label} #{path || '(unknown)'}")
+        append_output(status)
+      end
+
+      # Show file operation preview (Edit tool)
+      # @param path [String] File path
+      def show_file_edit_preview(path)
+        theme = ThemeManager.current_theme
+        file_label = theme.format_symbol(:file)
+        append_output("\n#{file_label} #{path || '(unknown)'}")
+      end
+
+      # Show file operation error
+      # @param error_message [String] Error message
+      def show_file_error(error_message)
+        theme = ThemeManager.current_theme
+        append_output("   #{theme.format_text("Warning:", :error)} #{error_message}")
+      end
+
+      # Show shell command preview
+      # @param command [String] Shell command
+      def show_shell_preview(command)
+        theme = ThemeManager.current_theme
+        cmd_label = theme.format_symbol(:command)
+        append_output("\n#{cmd_label} #{command}")
+      end
+
       # === Semantic UI Methods (for Agent to call directly) ===
 
       # Show user message
@@ -275,16 +375,18 @@ module Clacky
       # @param default [Boolean] Default value if user presses Enter
       # @return [Boolean, String, nil] true/false for yes/no, String for feedback, nil for cancelled
       def request_confirmation(message, default: true)
-        # Show question in output
-        append_output("? #{message}")
+        # Show question in output with theme styling
+        theme = ThemeManager.current_theme
+        question_symbol = theme.format_symbol(:info)
+        append_output("\n#{question_symbol} #{message}")
 
         # Pause InputArea
         @input_area.pause
         @layout.recalculate_layout
 
-        # Create InlineInput
+        # Create InlineInput with styled prompt
         inline_input = Components::InlineInput.new(
-          prompt: "  (y/n, or provide feedback): ",
+          prompt: theme.format_text("  (y/n, or provide feedback): ", :thinking),
           default: nil
         )
         @inline_input = inline_input
@@ -302,10 +404,10 @@ module Clacky
 
         # Append the final response to output
         if result_text.nil?
-          append_output("  [Cancelled]")
+          append_output(theme.format_text("  [Cancelled]", :error))
         else
           display_text = result_text.empty? ? (default ? "y" : "n") : result_text
-          append_output("  #{display_text}")
+          append_output(theme.format_text("  #{display_text}", :success))
         end
 
         # Deactivate and clean up

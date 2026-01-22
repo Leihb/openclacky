@@ -81,8 +81,8 @@ module Clacky
       # Render just the input area
       def render_input
         @render_mutex.synchronize do
-          input_row = fixed_area_start_row + 1 + (@todo_area&.height || 0)
-          input_area.render(start_row: input_row, width: screen.width)
+          # Clear and re-render entire fixed area to ensure consistency
+          render_fixed_areas
           screen.flush
         end
       end

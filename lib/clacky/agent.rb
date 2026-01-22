@@ -676,52 +676,19 @@ module Clacky
       delta_tokens = total_tokens - @previous_total_tokens
       @previous_total_tokens = total_tokens  # Update for next iteration
 
-      # Build token summary string
-      token_info = []
+      # Prepare data for UI to format and display
+      token_data = {
+        delta_tokens: delta_tokens,
+        prompt_tokens: prompt_tokens,
+        completion_tokens: completion_tokens,
+        total_tokens: total_tokens,
+        cache_write: cache_write,
+        cache_read: cache_read,
+        cost: cost
+      }
 
-      # Delta tokens with color coding at the beginning
-      require 'pastel'
-      pastel = Pastel.new
-
-      delta_str = "+#{delta_tokens}"
-      colored_delta = if delta_tokens > 10000
-        pastel.red.bold(delta_str)  # Error level: red for > 10k
-      elsif delta_tokens > 5000
-        pastel.yellow.bold(delta_str)  # Warn level: yellow for > 5k
-      else
-        pastel.green(delta_str)  # Normal: green for <= 5k
-      end
-
-      token_info << colored_delta
-
-      # Cache status indicator
-      cache_used = cache_read > 0 || cache_write > 0
-      if cache_used
-        cache_indicator = "✓ Cached"
-        token_info << pastel.cyan(cache_indicator)
-      end
-
-      # Input tokens (with cache breakdown if available)
-      if cache_write > 0 || cache_read > 0
-        input_detail = "#{prompt_tokens} (cache: #{cache_read} read, #{cache_write} write)"
-        token_info << "Input: #{input_detail}"
-      else
-        token_info << "Input: #{prompt_tokens}"
-      end
-
-      # Output tokens
-      token_info << "Output: #{completion_tokens}"
-
-      # Total
-      token_info << "Total: #{total_tokens}"
-
-      # Cost for this iteration
-      if cost
-        token_info << "Cost: $#{cost.round(6)}"
-      end
-
-      # Display with color
-      puts pastel.dim("    [Tokens] #{token_info.join(' | ')}")
+      # Let UI handle formatting and display
+      @ui&.show_token_usage(token_data)
     end
 
     def compress_messages_if_needed
@@ -990,15 +957,15 @@ module Clacky
           tool = @tool_registry.get(call[:name]) rescue nil
           if tool
             formatted = tool.format_call(args) rescue "#{call[:name]}(...)"
-            @ui.append_output("\nArgs: #{formatted}")
+            @ui&.show_tool_args(formatted)
           else
-            @ui.append_output("\nArgs: #{call[:arguments]}")
+            @ui&.show_tool_args(call[:arguments])
           end
         end
 
         preview_error
       rescue JSON::ParserError
-        @ui.append_output("   Args: #{call[:arguments]}")
+        @ui&.show_tool_args(call[:arguments])
         nil
       end
     end
@@ -1007,15 +974,14 @@ module Clacky
       path = args[:path] || args['path']
       new_content = args[:content] || args['content'] || ""
 
-      @ui.append_output("\n📝 File: #{path || '(unknown)'}")
+      is_new_file = !(path && File.exist?(path))
+      @ui&.show_file_write_preview(path, is_new_file: is_new_file)
 
-      if path && File.exist?(path)
-        old_content = File.read(path)
-        @ui.append_output("Modifying existing file")
-        @ui.show_diff(old_content, new_content, max_lines: 50)
+      if is_new_file
+        @ui&.show_diff("", new_content, max_lines: 50)
       else
-        @ui.append_output("Creating new file")
-        @ui.show_diff("", new_content, max_lines: 50)
+        old_content = File.read(path)
+        @ui&.show_diff(old_content, new_content, max_lines: 50)
       end
       nil
     end
@@ -1025,20 +991,20 @@ module Clacky
       old_string = args[:old_string] || args['old_string'] || ""
       new_string = args[:new_string] || args['new_string'] || ""
 
-      @ui.append_output("\n📝 File: #{path || '(unknown)'}")
+      @ui&.show_file_edit_preview(path)
 
       if !path || path.empty?
-        @ui.append_output("   ⚠️  No file path provided")
+        @ui&.show_file_error("No file path provided")
         return { error: "No file path provided for edit operation" }
       end
 
       unless File.exist?(path)
-        @ui.append_output("   ⚠️  File not found: #{path}")
+        @ui&.show_file_error("File not found: #{path}")
         return { error: "File not found: #{path}", path: path }
       end
 
       if old_string.empty?
-        @ui.append_output("   ⚠️  No old_string provided (nothing to replace)")
+        @ui&.show_file_error("No old_string provided (nothing to replace)")
         return { error: "No old_string provided (nothing to replace)" }
       end
 
@@ -1046,9 +1012,9 @@ module Clacky
 
       # Check if old_string exists in file
       unless file_content.include?(old_string)
-        @ui.append_output("   ⚠️  String to replace not found in file")
-        @ui.append_output("   Looking for (first 100 chars):")
-        @ui.append_output("   #{old_string[0..100].inspect}")
+        @ui&.show_file_error("String to replace not found in file")
+        @ui&.show_file_error("Looking for (first 100 chars):")
+        @ui&.show_file_error(old_string[0..100].inspect)
         return {
           error: "String to replace not found in file",
           path: path,
@@ -1057,13 +1023,13 @@ module Clacky
       end
 
       new_content = file_content.sub(old_string, new_string)
-      @ui.show_diff(file_content, new_content, max_lines: 50)
+      @ui&.show_diff(file_content, new_content, max_lines: 50)
       nil  # No error
     end
 
     def show_shell_preview(args)
       command = args[:command] || ""
-      @ui.append_output("\n💻 Command: #{command}")
+      @ui&.show_shell_preview(command)
       nil
     end
 

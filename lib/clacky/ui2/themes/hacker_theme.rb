@@ -21,7 +21,10 @@ module Clacky
           warning: "[!!]",
           info: "[--]",
           task: "[##]",
-          progress: "[>>]"
+          progress: "[>>]",
+          file: "[F]",
+          command: "[C]",
+          cached: "[*]"
         }.freeze
 
         COLORS = {
@@ -38,7 +41,10 @@ module Clacky
           warning: [:bright_yellow, :yellow],
           info: [:bright_white, :white],
           task: [:bright_yellow, :white],
-          progress: [:bright_cyan, :cyan]
+          progress: [:bright_cyan, :cyan],
+          file: [:cyan, :white],
+          command: [:cyan, :white],
+          cached: [:cyan, :cyan]
         }.freeze
 
         def name

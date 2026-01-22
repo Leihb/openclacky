@@ -397,9 +397,8 @@ module Clacky
             unless cursor_up
               history_prev
             end
-          elsif empty?
-            return { action: :scroll_up }
           else
+            # Navigate history when single line (empty or not)
             history_prev
           end
           { action: nil }
@@ -410,9 +409,8 @@ module Clacky
             unless cursor_down
               history_next
             end
-          elsif empty?
-            return { action: :scroll_down }
           else
+            # Navigate history when single line (empty or not)
             history_next
           end
           { action: nil }
