@@ -43,14 +43,18 @@ module Clacky
       def recalculate_layout
         @render_mutex.synchronize do
           old_input_row = @input_row
-          old_fixed_start = fixed_area_start_row
+          # Calculate old_fixed_start from saved @input_row, not from fixed_area_start_row
+          # (because @input_area.required_height may have changed due to pause)
+          todo_height = @todo_area&.height || 0
+          old_fixed_start = old_input_row - todo_height - 1  # input_row - todo - gap
+
           calculate_layout
           new_fixed_start = fixed_area_start_row
 
           # If layout changed, clear old fixed area and re-render at new position
           if @input_row != old_input_row
-            # Clear old fixed area lines
-            (old_fixed_start...screen.height).each do |row|
+            # Clear old fixed area lines (from old position to screen bottom)
+            ([old_fixed_start, 0].max...screen.height).each do |row|
               screen.move_cursor(row, 0)
               screen.clear_line
             end
@@ -92,15 +96,10 @@ module Clacky
       def position_inline_input_cursor(inline_input)
         return unless inline_input
 
-        # Cursor is at the last line of output area
-        # Calculate which row that is based on visible lines
-        visible_range = output_area.visible_range
-        last_visible_row = [visible_range[:end] - 1, 0].max
-        cursor_row = [last_visible_row, @output_height - 1].min
-        cursor_col = inline_input.cursor_col
-
-        screen.move_cursor(cursor_row, cursor_col)
-        screen.show_cursor
+        # InlineInput renders its own visual cursor via render_line_with_cursor
+        # (white background on cursor character), so we don't need terminal cursor.
+        # Just hide the terminal cursor to avoid showing two cursors.
+        screen.hide_cursor
         screen.flush
       end
 
@@ -237,6 +236,10 @@ module Clacky
 
       # Render fixed areas (gap, todo, input) at screen bottom
       def render_fixed_areas
+        # When input is paused (InlineInput active), don't render fixed areas
+        # The InlineInput is rendered inline with output
+        return if input_area.paused?
+
         start_row = fixed_area_start_row
         gap_row = start_row
         todo_row = gap_row + 1
@@ -251,11 +254,8 @@ module Clacky
           @todo_area.render(start_row: todo_row)
         end
 
-        # Render input
+        # Render input (InputArea renders its own visual cursor via render_line_with_cursor)
         input_area.render(start_row: input_row, width: screen.width)
-        unless input_area.paused?
-          screen.show_cursor
-        end
       end
 
       # Internal render all (without mutex)

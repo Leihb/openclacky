@@ -58,8 +58,8 @@ module Clacky
         end
 
         def required_height
-          # When paused (InlineInput active), only show session bar
-          return 1 if @paused
+          # When paused (InlineInput active), don't take up any space
+          return 0 if @paused
 
           height = 1  # Session bar (top)
           height += 1  # Separator after session bar
@@ -137,12 +137,8 @@ module Clacky
         def render(start_row:, width: nil)
           @width = width || TTY::Screen.width
 
-          # When paused, only render session bar (don't manage cursor)
-          if @paused
-            render_sessionbar(start_row)
-            flush
-            return
-          end
+          # When paused, don't render anything (InlineInput is active)
+          return if @paused
 
           current_row = start_row
 

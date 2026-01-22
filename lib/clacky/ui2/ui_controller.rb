@@ -391,16 +391,15 @@ module Clacky
         )
         @inline_input = inline_input
 
-        # Add inline input line to output
-        @output_area.append(inline_input.render)
-        @layout.render_output
+        # Add inline input line to output (use layout to track position)
+        @layout.append_output(inline_input.render)
         @layout.position_inline_input_cursor(inline_input)
 
         # Collect input (blocks until user presses Enter)
         result_text = inline_input.collect
 
-        # Clean up - remove the inline input line
-        @output_area.remove_last_line
+        # Clean up - remove the inline input line (use layout to track position)
+        @layout.remove_last_line
 
         # Append the final response to output
         if result_text.nil?
@@ -573,9 +572,8 @@ module Clacky
 
         case result[:action]
         when :update
-          # Update the last line of output with current input
-          @output_area.update_last_line(@inline_input.render)
-          @layout.render_output
+          # Update the last line of output with current input (use layout to track position)
+          @layout.update_last_line(@inline_input.render)
           # Position cursor for inline input
           @layout.position_inline_input_cursor(@inline_input)
         when :submit, :cancel
