@@ -304,6 +304,11 @@ module Clacky
         # Track agent thread state
         agent_thread = nil
 
+        # Set up mode toggle handler
+        ui_controller.on_mode_toggle do |new_mode|
+          agent_config.permission_mode = new_mode.to_sym
+        end
+
         # Set up interrupt handler
         ui_controller.on_interrupt do |input_was_empty:|
           if (not agent_thread&.alive?) && input_was_empty

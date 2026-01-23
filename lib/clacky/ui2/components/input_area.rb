@@ -119,6 +119,7 @@ module Clacky
           when :ctrl_c then handle_ctrl_c
           when :ctrl_d then handle_ctrl_d
           when :ctrl_v then handle_paste
+          when :shift_tab then { action: :toggle_mode }
           when :escape then { action: nil }
           else
             if key.is_a?(String) && key.length >= 1 && key.ord >= 32
@@ -715,7 +716,7 @@ module Clacky
         def mode_color_for(mode)
           case mode.to_s
           when /auto_approve/
-            :bright_red
+            :bright_magenta
           when /confirm_safes/
             :bright_yellow
           when /confirm_edits/

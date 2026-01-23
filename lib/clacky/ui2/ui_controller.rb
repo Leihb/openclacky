@@ -92,6 +92,26 @@ module Clacky
         @layout.render_input
       end
 
+      # Toggle permission mode between confirm_safes and auto_approve
+      def toggle_mode
+        current_mode = @config[:mode]
+        new_mode = case current_mode.to_s
+        when /confirm_safes/
+          "auto_approve"
+        when /auto_approve/
+          "confirm_safes"
+        else
+          "auto_approve"  # Default to auto_approve if unknown mode
+        end
+
+        @config[:mode] = new_mode
+
+        # Notify CLI to update agent_config
+        @mode_toggle_callback&.call(new_mode)
+
+        update_sessionbar
+      end
+
       # Stop the UI controller
       def stop
         @running = false
@@ -108,6 +128,12 @@ module Clacky
       # @param block [Proc] Callback to execute on interrupt
       def on_interrupt(&block)
         @interrupt_callback = block
+      end
+
+      # Set callback for mode toggle (Shift+Tab)
+      # @param block [Proc] Callback to execute on mode toggle
+      def on_mode_toggle(&block)
+        @mode_toggle_callback = block
       end
 
       # Append output to the output area
@@ -574,6 +600,8 @@ module Clacky
         when :help
           show_help
           @input_area.clear
+        when :toggle_mode
+          toggle_mode
         end
 
         # Always re-render input area after key handling
@@ -593,6 +621,29 @@ module Clacky
         when :submit, :cancel
           # InlineInput is done, will be cleaned up by request_confirmation
           nil
+        when :toggle_mode
+          # Update mode and session bar info, but don't render yet
+          current_mode = @config[:mode]
+          new_mode = case current_mode.to_s
+          when /confirm_safes/
+            "auto_approve"
+          when /auto_approve/
+            "confirm_safes"
+          else
+            "auto_approve"
+          end
+
+          @config[:mode] = new_mode
+          @mode_toggle_callback&.call(new_mode)
+
+          # Update session bar data (will be rendered by request_confirmation's render_all)
+          @input_area.update_sessionbar(
+            working_dir: @config[:working_dir],
+            mode: @config[:mode],
+            model: @config[:model],
+            tasks: @tasks_count,
+            cost: @total_cost
+          )
         end
       end
 

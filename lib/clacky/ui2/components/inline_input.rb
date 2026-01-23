@@ -90,6 +90,8 @@ module Clacky
           when :ctrl_w
             kill_word
             { action: :update }
+          when :shift_tab
+            handle_shift_tab
           when :ctrl_c
             handle_cancel
           when :escape
@@ -146,6 +148,21 @@ module Clacky
           queue&.push(nil)
 
           { action: :cancel }
+        end
+
+        def handle_shift_tab
+          # Auto-confirm as yes (or use default if it's true)
+          result = if @default_value == true || @default_value.to_s.downcase == "yes"
+            @default_value.to_s
+          else
+            "yes"
+          end
+
+          queue = @result_queue
+          deactivate
+          queue&.push(result)
+
+          { action: :toggle_mode }
         end
       end
     end

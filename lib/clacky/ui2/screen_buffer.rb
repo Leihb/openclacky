@@ -154,6 +154,7 @@ module Clacky
             when "D" then return :left_arrow
             when "H" then return :home
             when "F" then return :end
+            when "Z" then return :shift_tab
             when "3"
               char4 = read_char(timeout: 0.01)
               return :delete if char4 == "~"
