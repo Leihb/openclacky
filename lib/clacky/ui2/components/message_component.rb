@@ -12,15 +12,17 @@ module Clacky
         #   - :role [String] "user" or "assistant"
         #   - :content [String] Message content
         #   - :timestamp [Time, nil] Optional timestamp
+        #   - :images [Array<String>] Optional image paths (for user messages)
         # @return [String] Rendered message
         def render(data)
           role = data[:role]
           content = data[:content]
           timestamp = data[:timestamp]
+          images = data[:images] || []
           
           case role
           when "user"
-            render_user_message(content, timestamp)
+            render_user_message(content, timestamp, images)
           when "assistant"
             render_assistant_message(content, timestamp)
           else

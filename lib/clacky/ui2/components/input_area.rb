@@ -351,13 +351,26 @@ module Clacky
 
         def current_content
           text = expand_placeholders(@lines.join("\n"))
-          return "" if text.empty?
+          
+          # If both text and images are empty, return empty string
+          return "" if text.empty? && @images.empty?
 
           # Format user input with color and spacing from theme
           symbol = theme.format_symbol(:user)
           content = theme.format_text(text, :user)
 
-          "\n#{symbol} #{content}\n"
+          result = "\n#{symbol} #{content}\n"
+          
+          # Append image information if present
+          if @images && @images.any?
+            @images.each_with_index do |img_path, idx|
+              filename = File.basename(img_path)
+              filesize = File.exist?(img_path) ? format_filesize(File.size(img_path)) : "N/A"
+              result += @pastel.dim("    [Image #{idx + 1}] #{filename} (#{filesize})") + "\n"
+            end
+          end
+          
+          result
         end
 
         def current_value
