@@ -28,12 +28,11 @@ RSpec.describe Clacky::UI2::Components::OutputArea do
       # Should not raise and should not print
     end
 
-    it "truncates long lines" do
+    it "wraps long lines automatically" do
       allow(TTY::Screen).to receive(:width).and_return(20)
-      # Expect truncated output with "..."
+      # Expect full content without truncation (terminal handles wrapping)
       expect(output_area).to receive(:print) do |arg|
-        expect(arg).to include("...")
-        expect(arg.gsub(/\e\[[0-9;]*m/, "").length).to be <= 20
+        expect(arg).to eq("This is a very long line that exceeds the width")
       end
       output_area.append("This is a very long line that exceeds the width")
     end

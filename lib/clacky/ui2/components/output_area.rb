@@ -24,7 +24,7 @@ module Clacky
           return if content.nil? || content.empty?
 
           update_width
-          print truncate_line(content)
+          print wrap_line(content)
           flush
         end
 
@@ -69,6 +69,13 @@ module Clacky
         end
 
         private
+
+        # Wrap line to fit screen width (auto line wrap)
+        def wrap_line(line)
+          return "" if line.nil?
+          # Let terminal handle line wrapping naturally
+          line
+        end
 
         # Truncate line to fit screen width
         def truncate_line(line)
