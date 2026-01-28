@@ -65,8 +65,6 @@ module Clacky
         stdout_buffer = StringIO.new
         stderr_buffer = StringIO.new
         soft_timeout_triggered = false
-        check_time = nil
-        last_size = nil
 
         begin
           Open3.popen3(command) do |stdin, stdout, stderr, wait_thr|
@@ -97,7 +95,7 @@ module Clacky
               if elapsed > soft_timeout && !soft_timeout_triggered
                 soft_timeout_triggered = true
 
-                # L1: Check for interaction patterns first
+                # L1: Check for interaction patterns
                 interaction = detect_interaction(stdout_buffer.string)
                 if interaction
                   Process.kill('TERM', wait_thr.pid) rescue nil
@@ -106,31 +104,6 @@ module Clacky
                     stdout_buffer.string,
                     stderr_buffer.string,
                     interaction,
-                    max_output_lines
-                  )
-                end
-
-                # L2: Send newline and schedule check for 2 seconds later
-                last_size = stdout_buffer.size
-                stdin.puts("\n") rescue nil
-                check_time = Time.now + 2  # Check after 2 seconds
-              end
-
-              # If soft timeout was triggered, check if it's time to verify output
-              if soft_timeout_triggered && check_time && Time.now >= check_time
-                current_size = stdout_buffer.size
-                if current_size > last_size
-                  # Output increased, program is responding - stop checking, let it continue
-                  check_time = nil
-                  last_size = nil
-                else
-                  # No new output, program is stuck
-                  Process.kill('TERM', wait_thr.pid) rescue nil
-                  return format_stuck_result(
-                    command,
-                    stdout_buffer.string,
-                    stderr_buffer.string,
-                    elapsed,
                     max_output_lines
                   )
                 end
@@ -261,36 +234,6 @@ module Clacky
           Suggested actions:
           • Provide answer: run shell with your response
           • Cancel: send Ctrl+C (\\x03)
-        MSG
-      end
-
-      def format_stuck_result(command, stdout, stderr, elapsed, max_output_lines)
-        {
-          command: command,
-          stdout: truncate_output(stdout, max_output_lines),
-          stderr: truncate_output(stderr, max_output_lines),
-          exit_code: -3,
-          success: false,
-          state: 'STUCK',
-          elapsed: elapsed,
-          message: format_stuck_message(truncate_output(stdout, max_output_lines), elapsed),
-          output_truncated: output_truncated?(stdout, stderr, max_output_lines)
-        }
-      end
-
-      def format_stuck_message(output, elapsed)
-        <<~MSG
-          #{output}
-
-          #{'=' * 60}
-          [Terminal State: STUCK]
-          #{'=' * 60}
-
-          The terminal is not responding after #{elapsed.round(1)}s.
-
-          Suggested actions:
-          • Try interrupting with Ctrl+C
-          • Check if command is frozen
         MSG
       end
 
