@@ -27,7 +27,6 @@ RSpec.describe "Prompt Caching Feature" do
       Clacky::AgentConfig.new(
         model: "claude-3.5-sonnet-20241022",
         permission_mode: :auto_approve,
-        max_iterations: 5,
         enable_prompt_caching: true
       )
     end
@@ -52,7 +51,6 @@ RSpec.describe "Prompt Caching Feature" do
       Clacky::AgentConfig.new(
         model: "gpt-4",
         permission_mode: :auto_approve,
-        max_iterations: 5,
         enable_prompt_caching: false
       )
     end

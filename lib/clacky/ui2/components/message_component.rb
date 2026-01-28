@@ -35,8 +35,9 @@ module Clacky
         # Render user message
         # @param content [String] Message content
         # @param timestamp [Time, nil] Optional timestamp
+        # @param images [Array<String>] Optional image paths
         # @return [String] Rendered message
-        def render_user_message(content, timestamp = nil)
+        def render_user_message(content, timestamp = nil, images = [])
           symbol = format_symbol(:user)
           text = format_text(content, :user)
           time_str = timestamp ? @pastel.dim("[#{format_timestamp(timestamp)}]") : ""

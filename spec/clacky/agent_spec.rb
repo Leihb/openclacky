@@ -5,8 +5,7 @@ RSpec.describe Clacky::Agent do
   let(:config) do
     Clacky::AgentConfig.new(
       model: "gpt-3.5-turbo",
-      permission_mode: :auto_approve,
-      max_iterations: 5
+      permission_mode: :auto_approve
     )
   end
   let(:agent) { described_class.new(client, config) }
@@ -54,21 +53,7 @@ RSpec.describe Clacky::Agent do
       expect(agent.total_cost).to be > 0
     end
 
-    it "stops at maximum iterations" do
-      # Make LLM always return tool calls
-      allow(client).to receive(:send_messages_with_tools)
-        .and_return(tool_call_response)
 
-      short_config = Clacky::AgentConfig.new(
-        permission_mode: :auto_approve,
-        max_iterations: 2
-      )
-      short_agent = described_class.new(client, short_config)
-
-      result = short_agent.run("test")
-
-      expect(short_agent.iterations).to eq(2)
-    end
   end
 
   describe "#add_hook" do
@@ -332,7 +317,6 @@ RSpec.describe Clacky::Agent do
       Clacky::AgentConfig.new(
         model: "gpt-3.5-turbo",
         permission_mode: :auto_approve,
-        max_iterations: 50,
         enable_compression: true,
         keep_recent_messages: 5
       )
