@@ -221,8 +221,8 @@ module Clacky
         # Let CLI handle the interrupt message
         raise
       rescue StandardError => e
+        # Build error result for session data, but let CLI handle error display
         result = build_result(:error, error: e.message)
-        @ui&.show_error("Error: #{e.message}")
         raise
       end
     end
