@@ -21,7 +21,7 @@ module Clacky
         # Multi-line handling is done by LayoutManager
         # @param content [String] Single line content to append
         def append(content)
-          return if content.nil? || content.empty?
+          return if content.nil?
 
           update_width
           print wrap_line(content)

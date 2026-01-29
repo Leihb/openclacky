@@ -82,11 +82,14 @@ module Clacky
       # Handle session loading/continuation
       session_manager = Clacky::SessionManager.new
       agent = nil
+      is_session_load = false
 
       if options[:continue]
         agent = load_latest_session(client, agent_config, session_manager, working_dir)
+        is_session_load = !agent.nil?
       elsif options[:attach]
         agent = load_session_by_number(client, agent_config, session_manager, working_dir, options[:attach])
+        is_session_load = !agent.nil?
       end
 
       # Create new agent if no session loaded
@@ -98,7 +101,7 @@ module Clacky
       Dir.chdir(working_dir) if should_chdir
 
       begin
-        run_agent_with_ui2(agent, working_dir, agent_config, message, session_manager, client)
+        run_agent_with_ui2(agent, working_dir, agent_config, message, session_manager, client, is_session_load: is_session_load)
       rescue StandardError => e
         # Save session on error
         if session_manager
@@ -231,7 +234,7 @@ module Clacky
           return nil
         end
 
-        say "Loading latest session: #{session_data[:session_id][0..7]}", :green
+        # Don't print message here - will be shown by UI after banner
         Clacky::Agent.from_session(client, agent_config, session_data)
       end
 
@@ -276,7 +279,7 @@ module Clacky
           end
         end
 
-        say "Loading session: #{session_data[:session_id][0..7]}", :green
+        # Don't print message here - will be shown by UI after banner
         Clacky::Agent.from_session(client, agent_config, session_data)
       end
 
@@ -296,7 +299,7 @@ module Clacky
       end
 
       # Run agent with UI2 split-screen interface
-      def run_agent_with_ui2(agent, working_dir, agent_config, initial_message = nil, session_manager = nil, client = nil)
+      def run_agent_with_ui2(agent, working_dir, agent_config, initial_message = nil, session_manager = nil, client = nil, is_session_load: false)
         # Create UI2 controller with configuration
         ui_controller = UI2::UIController.new(
           working_dir: working_dir,
@@ -402,7 +405,12 @@ module Clacky
         end
 
         # Initialize UI screen first
-        ui_controller.initialize_and_show_banner
+        if is_session_load
+          recent_user_messages = agent.get_recent_user_messages(limit: 5)
+          ui_controller.initialize_and_show_banner(recent_user_messages: recent_user_messages)
+        else
+          ui_controller.initialize_and_show_banner
+        end
 
         # If there's an initial message, process it
         if initial_message && !initial_message.strip.empty?

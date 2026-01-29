@@ -59,7 +59,8 @@ module Clacky
       end
 
       # Initialize screen and show banner (separate from input loop)
-      def initialize_and_show_banner
+      # @param recent_user_messages [Array<String>, nil] Recent user messages when loading session
+      def initialize_and_show_banner(recent_user_messages: nil)
         @running = true
 
         # Set session bar data before initializing screen
@@ -73,8 +74,12 @@ module Clacky
 
         @layout.initialize_screen
 
-        # Display welcome banner
-        display_welcome_banner
+        # Display welcome banner or session history
+        if recent_user_messages && !recent_user_messages.empty?
+          display_session_history(recent_user_messages)
+        else
+          display_welcome_banner
+        end
       end
 
       # Start input loop (separate from initialization)
@@ -597,6 +602,35 @@ module Clacky
           mode: @config[:mode]
         )
         append_output(content)
+      end
+
+      # Display recent user messages when loading session
+      # @param user_messages [Array<String>] Array of recent user message texts
+      def display_session_history(user_messages)
+        theme = ThemeManager.current_theme
+
+        # Show logo banner only
+        append_output(@welcome_banner.render_logo)
+
+        # Show simple header
+        append_output(theme.format_text("Recent conversation:", :info))
+
+        # Display each user message with numbering
+        user_messages.each_with_index do |msg, index|
+          # Truncate long messages
+          display_msg = if msg.length > 140
+            "#{msg[0..137]}..."
+          else
+            msg
+          end
+
+          # Show with number and indentation
+          append_output("  #{index + 1}. #{display_msg}")
+        end
+
+        # Bottom spacing and continuation prompt
+        append_output("")
+        append_output(theme.format_text("Session restored. Feel free to continue with your next task.", :success))
       end
 
       # Main input loop

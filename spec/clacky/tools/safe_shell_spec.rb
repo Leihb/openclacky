@@ -185,4 +185,34 @@ RSpec.describe Clacky::Tools::SafeShell do
       # We can't directly test which timeout was used, but we verify it executes
     end
   end
+
+    it "extracts timeout from 'cd xxx && timeout N command' format" do
+      result = tool.execute(command: "cd /tmp && timeout 30 echo 'test'")
+      
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:success]).to be true
+      expect(result[:stdout]).to include("test")
+    end
+
+    it "extracts timeout from 'export VAR=val && timeout N command' format" do
+      result = tool.execute(command: "export TEST=value && timeout 45 echo 'hello'")
+      
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:stdout]).to include("hello")
+    end
+
+    it "extracts timeout from 'prefix; timeout N command' format with semicolon" do
+      result = tool.execute(command: "cd /tmp; timeout 60 echo 'world'")
+      
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:stdout]).to include("world")
+    end
+
+    it "handles complex compound commands with timeout" do
+      result = tool.execute(command: "cd spec && timeout 30s ls -la")
+      
+      expect(result[:exit_code]).to eq(0)
+      # Should execute in spec directory
+    end
 end
+

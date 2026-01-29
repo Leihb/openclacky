@@ -129,6 +129,33 @@ module Clacky
       end
     end
 
+    # Get recent user messages from conversation history
+    # @param limit [Integer] Number of recent user messages to retrieve (default: 5)
+    # @return [Array<String>] Array of recent user message contents
+    def get_recent_user_messages(limit: 5)
+      # Filter messages to only include real user messages (exclude system-injected ones)
+      user_messages = @messages.select do |m|
+        m[:role] == "user" && !m[:system_injected]
+      end
+      
+      # Extract text content from the last N user messages
+      user_messages.last(limit).map do |msg|
+        extract_text_from_content(msg[:content])
+      end
+    end
+
+    private def extract_text_from_content(content)
+      if content.is_a?(String)
+        content
+      elsif content.is_a?(Array)
+        # Extract text from content array (may contain text and images)
+        text_parts = content.select { |c| c.is_a?(Hash) && c[:type] == "text" }
+        text_parts.map { |c| c[:text] }.join("\n")
+      else
+        content.to_s
+      end
+    end
+
     def add_hook(event, &block)
       @hooks.add(event, &block)
     end
@@ -203,10 +230,11 @@ module Clacky
           if action_result[:denied]
             # If user provided feedback, treat it as a user question/instruction
             if action_result[:feedback] && !action_result[:feedback].empty?
-              # Add user feedback as a new user message
+              # Add user feedback as a new user message with system_injected marker
               @messages << {
                 role: "user",
-                content: "STOP. The user has a question/feedback for you: #{action_result[:feedback]}\n\nPlease respond to the user's question/feedback before continuing with any actions."
+                content: "STOP. The user has a question/feedback for you: #{action_result[:feedback]}\n\nPlease respond to the user's question/feedback before continuing with any actions.",
+                system_injected: true  # Mark as system-injected message for filtering
               }
               # Continue loop to let agent respond to feedback
               next

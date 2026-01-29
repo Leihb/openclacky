@@ -23,9 +23,9 @@ RSpec.describe Clacky::UI2::Components::OutputArea do
       # Should not raise and should not print
     end
 
-    it "ignores empty content" do
+    it "prints empty content as blank line" do
+      expect(output_area).to receive(:print).with("")
       output_area.append("")
-      # Should not raise and should not print
     end
 
     it "wraps long lines automatically" do

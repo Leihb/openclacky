@@ -29,6 +29,16 @@ module Clacky
           @pastel = Pastel.new
         end
 
+        # Render only the logo (ASCII art)
+        # @return [String] Formatted logo only
+        def render_logo
+          lines = []
+          lines << ""
+          lines << @pastel.bright_green(LOGO)
+          lines << ""
+          lines.join("\n")
+        end
+
         # Render startup banner
         # @return [String] Formatted startup banner
         def render_startup

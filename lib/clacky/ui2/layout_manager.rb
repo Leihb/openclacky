@@ -177,10 +177,19 @@ module Clacky
       # Track current row, scroll when reaching fixed area
       # @param content [String] Content to append
       def append_output(content)
-        return if content.nil? || content.empty?
+        return if content.nil?
 
         @render_mutex.synchronize do
           max_output_row = fixed_area_start_row - 1
+
+          # Special handling for empty string - just add a blank line
+          if content.empty?
+            print "\n"
+            @output_row += 1
+            render_fixed_areas
+            screen.flush
+            return
+          end
 
           content.split("\n").each do |line|
             # Wrap long lines to prevent display issues

@@ -10,7 +10,7 @@ module Clacky
         attr_accessor :height
         attr_reader :todos
 
-        MAX_DISPLAY_TASKS = 2  # Show current + next task
+        MAX_DISPLAY_TASKS = 3  # Show current + next 2 tasks
 
         def initialize
           @todos = []
@@ -27,9 +27,12 @@ module Clacky
           @completed_count = @todos.count { |t| t[:status] == "completed" }
           @total_count = @todos.size
 
-          # Hide TODO area when there are no pending tasks
-          # Show single line for current task + next task
-          @height = @pending_todos.empty? ? 0 : 1
+          # Calculate height: 0 if no pending, otherwise 1 line per task (up to MAX_DISPLAY_TASKS)
+          if @pending_todos.empty?
+            @height = 0
+          else
+            @height = [@pending_todos.size, MAX_DISPLAY_TASKS].min
+          end
         end
 
         # Check if there are todos to display
@@ -44,46 +47,33 @@ module Clacky
 
           update_width
 
-          move_cursor(start_row, 0)
-          clear_line
-
-          # Build single line: [##] Task [2/4]: #3 - Current task (Next: #4 - Next task)
-          progress = "#{@completed_count}/#{@total_count}"
-          current_task = @pending_todos[0]
-          next_task = @pending_todos[1]
-
-          # Calculate available width for task text
-          prefix = "[##] Task [#{progress}]: "
-          prefix_length = prefix.length
-          available_width = @width - prefix_length - 2
-
-          # Build current task text
-          current_text = "##{current_task[:id]} - #{current_task[:task]}"
+          # Render each task on separate line
+          tasks_to_show = @pending_todos.take(MAX_DISPLAY_TASKS)
           
-          # Build next task text if exists
-          next_text = next_task ? " (Next: ##{next_task[:id]} - #{next_task[:task]})" : ""
-          
-          # Combine and truncate
-          combined_text = current_text + next_text
-          if combined_text.length > available_width
-            # Truncate, prioritize current task
-            if current_text.length > available_width - 3
-              combined_text = truncate_text(current_text, available_width)
+          tasks_to_show.each_with_index do |task, index|
+            move_cursor(start_row + index, 0)
+            clear_line
+
+            if index == 0
+              # First line: Task [2/4]: #3 - Current task description
+              progress = "#{@completed_count}/#{@total_count}"
+              prefix = "Task [#{progress}]: "
+              task_text = "##{task[:id]} - #{task[:task]}"
+              available_width = @width - prefix.length - 2
+              truncated_task = truncate_text(task_text, available_width)
+              
+              print "#{@pastel.cyan(prefix)}#{truncated_task}"
             else
-              # Show current task + truncated next
-              remaining = available_width - current_text.length
-              if remaining > 10  # Only show next if we have space
-                next_text = truncate_text(next_text, remaining)
-                combined_text = current_text + next_text
-              else
-                combined_text = current_text
-              end
+              # Subsequent lines: -> Next: #4 - Next task description
+              label = index == 1 ? "Next" : "After"
+              prefix = "-> #{label}: "
+              task_text = "##{task[:id]} - #{task[:task]}"
+              available_width = @width - prefix.length - 2
+              truncated_task = truncate_text(task_text, available_width)
+              
+              print "#{@pastel.dim(prefix)}#{@pastel.dim(truncated_task)}"
             end
           end
-
-          # Build final line with colors
-          line = "#{@pastel.cyan("[##]")} Task [#{progress}]: #{combined_text}"
-          print line
 
           flush
         end

@@ -72,7 +72,10 @@ module Clacky
 
       private def extract_timeout_from_command(command)
         # Match patterns: "timeout 30 ...", "timeout 30s ...", etc.
+        # Also supports: "cd xxx && timeout 30 command", "export X=Y && timeout 30 command"
         # Supports: timeout N command, timeout Ns command, timeout -s SIGNAL N command
+        
+        # Try to match timeout at the beginning of command
         match = command.match(/^timeout\s+(?:-s\s+\w+\s+)?(\d+)s?\s+(.+)$/i)
         
         if match
@@ -81,7 +84,22 @@ module Clacky
           return [actual_command, timeout_value]
         end
         
-        # No timeout prefix found, return original command
+        # Try to match timeout after && or ;
+        # Pattern: "prefix && timeout 30 command" or "prefix; timeout 30 command"
+        match = command.match(/^(.+?)\s*(&&|;)\s*timeout\s+(?:-s\s+\w+\s+)?(\d+)s?\s+(.+)$/i)
+        
+        if match
+          prefix = match[1]          # e.g., "cd /tmp"
+          separator = match[2]        # && or ;
+          timeout_value = match[3].to_i
+          main_command = match[4]     # e.g., "bundle exec rspec"
+          
+          # Reconstruct command without timeout prefix
+          actual_command = "#{prefix} #{separator} #{main_command}"
+          return [actual_command, timeout_value]
+        end
+        
+        # No timeout found, return original command
         [command, nil]
       end
 
