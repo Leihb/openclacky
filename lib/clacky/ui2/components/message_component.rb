@@ -13,12 +13,14 @@ module Clacky
         #   - :content [String] Message content
         #   - :timestamp [Time, nil] Optional timestamp
         #   - :images [Array<String>] Optional image paths (for user messages)
+        #   - :prefix_newline [Boolean] Whether to add newline before message (for system messages)
         # @return [String] Rendered message
         def render(data)
           role = data[:role]
           content = data[:content]
           timestamp = data[:timestamp]
           images = data[:images] || []
+          prefix_newline = data.fetch(:prefix_newline, true)
           
           case role
           when "user"
@@ -26,7 +28,7 @@ module Clacky
           when "assistant"
             render_assistant_message(content, timestamp)
           else
-            render_system_message(content, timestamp)
+            render_system_message(content, timestamp, prefix_newline)
           end
         end
 
@@ -62,13 +64,15 @@ module Clacky
         # Render system message
         # @param content [String] Message content
         # @param timestamp [Time, nil] Optional timestamp
+        # @param prefix_newline [Boolean] Whether to add newline before message
         # @return [String] Rendered message
-        def render_system_message(content, timestamp = nil)
+        private def render_system_message(content, timestamp = nil, prefix_newline = true)
           symbol = format_symbol(:info)
           text = format_text(content, :info)
           time_str = timestamp ? @pastel.dim("[#{format_timestamp(timestamp)}]") : ""
 
-          "\n#{symbol} #{text} #{time_str}".rstrip
+          prefix = prefix_newline ? "\n" : ""
+          "#{prefix}#{symbol} #{text} #{time_str}".rstrip
         end
       end
     end

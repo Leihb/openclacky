@@ -443,8 +443,8 @@ module Clacky
         end
       end
 
-      # Stop progress thread (but keep progress line visible)
-      @ui&.stop_progress_thread
+      # Clear progress indicator (change to gray and show final time)
+      @ui&.clear_progress
 
       track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
 
@@ -532,7 +532,13 @@ module Clacky
 
           confirmation = confirm_tool_use?(call)
           unless confirmation[:approved]
-            @ui&.show_warning("Tool #{call[:name]} denied")
+            # Show denial warning with user feedback if provided
+            denial_message = "Tool #{call[:name]} denied"
+            if confirmation[:feedback] && !confirmation[:feedback].empty?
+              denial_message += ": #{confirmation[:feedback]}"
+            end
+            @ui&.show_warning(denial_message)
+            
             denied = true
             user_feedback = confirmation[:feedback]
             feedback = user_feedback if user_feedback
@@ -919,9 +925,14 @@ module Clacky
         when true
           { approved: true, feedback: nil }
         when false, nil
+          # User denied - add visual marker based on tool type
+          tool_name_capitalized = call[:name].capitalize
+          @ui&.show_info("  ↳ #{tool_name_capitalized} cancelled", prefix_newline: false)
           { approved: false, feedback: nil }
         else
-          # String feedback
+          # String feedback - also add visual marker
+          tool_name_capitalized = call[:name].capitalize
+          @ui&.show_info("  ↳ #{tool_name_capitalized} cancelled", prefix_newline: false)
           { approved: false, feedback: result.to_s }
         end
       else

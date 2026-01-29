@@ -204,19 +204,7 @@ module Clacky
           if buffer.length > 1 || buffer.include?("\n") || buffer.include?("\r")
             # Remove any trailing \r or \n from rapid input buffer
             cleaned_buffer = buffer.gsub(/[\r\n]+\z/, '')
-            if cleaned_buffer.length > 0
-              # Debug logging to file
-              File.open('/tmp/clacky_paste_debug.log', 'a') do |f|
-                f.puts "[#{Time.now}] rapid_input detected:"
-                f.puts "  - bytes: #{cleaned_buffer.bytesize}, chars: #{cleaned_buffer.length}, lines: #{cleaned_buffer.lines.count}"
-                f.puts "  - loop_count: #{loop_count}"
-                f.puts "  - is_rapid_input: #{is_rapid_input}, has_more_input: #{!!has_more_input}"
-                f.puts "  - first 200 chars: #{cleaned_buffer[0...200].inspect}"
-                f.puts "  - last 100 chars: #{cleaned_buffer[-100..-1].inspect}" if cleaned_buffer.length > 100
-                f.puts ""
-              end
-              return { type: :rapid_input, text: cleaned_buffer }
-            end
+            return { type: :rapid_input, text: cleaned_buffer } if cleaned_buffer.length > 0
           end
 
           # Single character, continue to normal handling

@@ -49,12 +49,14 @@ module Clacky
       # Render a system message
       # @param content [String] Message content
       # @param timestamp [Time, nil] Optional timestamp
+      # @param prefix_newline [Boolean] Whether to add newline before message
       # @return [String] Rendered message
-      def render_system_message(content, timestamp: nil)
+      def render_system_message(content, timestamp: nil, prefix_newline: true)
         @message_component.render(
           role: "system",
           content: content,
-          timestamp: timestamp
+          timestamp: timestamp,
+          prefix_newline: prefix_newline
         )
       end
 
@@ -116,11 +118,18 @@ module Clacky
         @common_component.render_thinking
       end
 
-      # Render progress message
+      # Render progress message (stopped state, gray)
       # @param message [String] Progress message
       # @return [String] Progress indicator
       def render_progress(message)
         @common_component.render_progress(message)
+      end
+
+      # Render working message (active state, yellow)
+      # @param message [String] Progress message
+      # @return [String] Working indicator
+      def render_working(message)
+        @common_component.render_working(message)
       end
 
       # Render success message

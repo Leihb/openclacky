@@ -15,12 +15,21 @@ module Clacky
           "#{symbol} #{text}"
         end
 
-        # Render progress indicator
+        # Render progress indicator (stopped state, gray)
         # @param message [String] Progress message
         # @return [String] Progress indicator
         def render_progress(message)
           symbol = format_symbol(:thinking)
           text = format_text(message, :thinking)
+          "#{symbol} #{text}"
+        end
+
+        # Render working indicator (active state, yellow)
+        # @param message [String] Progress message
+        # @return [String] Working indicator
+        def render_working(message)
+          symbol = format_symbol(:working)
+          text = format_text(message, :working)
           "#{symbol} #{text}"
         end
 

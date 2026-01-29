@@ -5,71 +5,43 @@ require "pastel"
 module Clacky
   module UI2
     module Themes
-      # BaseTheme defines the interface for all themes
-      # Subclasses should override SYMBOLS and color methods
+      # BaseTheme defines the abstract interface for all themes
+      # Subclasses MUST define SYMBOLS and COLORS constants
       class BaseTheme
-        SYMBOLS = {
-          user: "[>>]",
-          assistant: "[<<]",
-          tool_call: "[=>]",
-          tool_result: "[<=]",
-          tool_denied: "[!!]",
-          tool_planned: "[??]",
-          tool_error: "[XX]",
-          thinking: "[..]",
-          success: "[OK]",
-          error: "[ER]",
-          warning: "[!!]",
-          info: "[--]",
-          task: "[##]",
-          progress: "[>>]",
-          file: "[F]",
-          command: "[C]",
-          cached: "[*]"
-        }.freeze
-
-        # Color schemes for different elements
-        # Each returns [symbol_color, text_color]
-        COLORS = {
-          user: [:bright_blue, :blue],
-          assistant: [:bright_green, :white],
-          tool_call: [:bright_cyan, :cyan],
-          tool_result: [:cyan, :white],
-          tool_denied: [:bright_yellow, :yellow],
-          tool_planned: [:bright_blue, :blue],
-          tool_error: [:bright_red, :red],
-          thinking: [:dim, :dim],
-          success: [:bright_green, :green],
-          error: [:bright_red, :red],
-          warning: [:bright_yellow, :yellow],
-          info: [:bright_white, :white],
-          task: [:bright_yellow, :white],
-          progress: [:bright_cyan, :cyan],
-          file: [:cyan, :white],
-          command: [:cyan, :white],
-          cached: [:cyan, :cyan]
-        }.freeze
-
         def initialize
           @pastel = Pastel.new
+          validate_theme_definition!
         end
 
+        # Get all symbols defined by this theme
+        # @return [Hash] Symbol definitions
         def symbols
           self.class::SYMBOLS
         end
 
+        # Get all colors defined by this theme
+        # @return [Hash] Color definitions
         def colors
           self.class::COLORS
         end
 
+        # Get symbol for a specific key
+        # @param key [Symbol] Symbol key
+        # @return [String] Symbol string
         def symbol(key)
           symbols[key] || "[??]"
         end
 
+        # Get symbol color for a specific key
+        # @param key [Symbol] Color key
+        # @return [Symbol] Pastel color method name
         def symbol_color(key)
           colors.dig(key, 0) || :white
         end
 
+        # Get text color for a specific key
+        # @param key [Symbol] Color key
+        # @return [Symbol] Pastel color method name
         def text_color(key)
           colors.dig(key, 1) || :white
         end
@@ -89,9 +61,23 @@ module Clacky
           @pastel.public_send(text_color(key), text)
         end
 
-        # Theme name for display
+        # Theme name for display (subclasses should override)
+        # @return [String] Theme name
         def name
-          "base"
+          raise NotImplementedError, "Subclass must implement #name method"
+        end
+
+        private
+
+        # Validate that subclass has defined required constants
+        def validate_theme_definition!
+          unless self.class.const_defined?(:SYMBOLS)
+            raise NotImplementedError, "Theme #{self.class.name} must define SYMBOLS constant"
+          end
+
+          unless self.class.const_defined?(:COLORS)
+            raise NotImplementedError, "Theme #{self.class.name} must define COLORS constant"
+          end
         end
       end
     end

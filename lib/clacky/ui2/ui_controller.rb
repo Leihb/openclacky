@@ -380,8 +380,9 @@ module Clacky
         @progress_message = message || Clacky::THINKING_VERBS.sample
         @progress_start_time = Time.now
 
-        # Show initial progress
-        output = @renderer.render_progress("#{@progress_message}… (ctrl+c to interrupt)")
+        # Show initial progress (yellow, active)
+        append_output("")
+        output = @renderer.render_working("#{@progress_message}… (ctrl+c to interrupt)")
         append_output(output)
 
         # Start background thread to update elapsed time
@@ -391,7 +392,7 @@ module Clacky
             next unless @progress_start_time
 
             elapsed = (Time.now - @progress_start_time).to_i
-            update_progress_line(@renderer.render_progress("#{@progress_message}… (ctrl+c to interrupt · #{elapsed}s)"))
+            update_progress_line(@renderer.render_working("#{@progress_message}… (ctrl+c to interrupt · #{elapsed}s)"))
           end
         rescue => e
           # Silently handle thread errors
@@ -400,8 +401,19 @@ module Clacky
 
       # Clear progress indicator
       def clear_progress
+        # Calculate elapsed time before stopping
+        elapsed_time = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
+        
+        # Stop the progress thread
         stop_progress_thread
-        clear_progress_line
+        
+        # Update the final progress line to gray (stopped state)
+        if @progress_message && elapsed_time > 0
+          final_output = @renderer.render_progress("#{@progress_message}… (#{elapsed_time}s)")
+          update_progress_line(final_output)
+        else
+          clear_progress_line
+        end
       end
 
       # Stop the progress update thread
@@ -415,8 +427,9 @@ module Clacky
 
       # Show info message
       # @param message [String] Info message
-      def show_info(message)
-        output = @renderer.render_system_message(message)
+      # @param prefix_newline [Boolean] Whether to add newline before message (default: true)
+      def show_info(message, prefix_newline: true)
+        output = @renderer.render_system_message(message, prefix_newline: prefix_newline)
         append_output(output)
       end
 
