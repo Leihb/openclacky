@@ -183,20 +183,25 @@ module Clacky
           max_output_row = fixed_area_start_row - 1
 
           content.split("\n").each do |line|
-            # If at max row, need to scroll before outputting
-            if @output_row > max_output_row
-              # Move to bottom of screen and print newline to trigger scroll
-              screen.move_cursor(screen.height - 1, 0)
-              print "\n"
-              # Stay at max_output_row for next output
-              @output_row = max_output_row
-            end
+            # Wrap long lines to prevent display issues
+            wrapped_lines = wrap_long_line(line)
+            
+            wrapped_lines.each do |wrapped_line|
+              # If at max row, need to scroll before outputting
+              if @output_row > max_output_row
+                # Move to bottom of screen and print newline to trigger scroll
+                screen.move_cursor(screen.height - 1, 0)
+                print "\n"
+                # Stay at max_output_row for next output
+                @output_row = max_output_row
+              end
 
-            # Output line at current position
-            screen.move_cursor(@output_row, 0)
-            screen.clear_line
-            output_area.append(line)
-            @output_row += 1
+              # Output line at current position
+              screen.move_cursor(@output_row, 0)
+              screen.clear_line
+              output_area.append(wrapped_line)
+              @output_row += 1
+            end
           end
 
           # Re-render fixed areas at screen bottom
@@ -267,6 +272,98 @@ module Clacky
       end
 
       private
+
+      # Wrap a long line into multiple lines based on terminal width
+      # Considers display width of multi-byte characters (e.g., Chinese characters)
+      # @param line [String] Line to wrap
+      # @return [Array<String>] Array of wrapped lines
+      def wrap_long_line(line)
+        return [""] if line.nil? || line.empty?
+        
+        max_width = screen.width
+        return [line] if max_width <= 0
+        
+        # Strip ANSI codes for width calculation
+        visible_line = line.gsub(/\e\[[0-9;]*m/, '')
+        
+        # Check if line needs wrapping
+        display_width = calculate_display_width(visible_line)
+        return [line] if display_width <= max_width
+        
+        # Line needs wrapping - split by considering display width
+        wrapped = []
+        current_line = ""
+        current_width = 0
+        ansi_codes = []  # Track ANSI codes to carry over
+        
+        # Extract ANSI codes and text segments
+        segments = line.split(/(\e\[[0-9;]*m)/)
+        
+        segments.each do |segment|
+          if segment =~ /^\e\[[0-9;]*m$/
+            # ANSI code - add to current codes
+            ansi_codes << segment
+            current_line += segment
+          else
+            # Text segment - process character by character
+            segment.each_char do |char|
+              char_width = char_display_width(char)
+              
+              if current_width + char_width > max_width && !current_line.empty?
+                # Complete current line
+                wrapped << current_line
+                # Start new line with carried-over ANSI codes
+                current_line = ansi_codes.join
+                current_width = 0
+              end
+              
+              current_line += char
+              current_width += char_width
+            end
+          end
+        end
+        
+        # Add remaining content
+        wrapped << current_line unless current_line.empty? || current_line == ansi_codes.join
+        
+        wrapped.empty? ? [""] : wrapped
+      end
+      
+      # Calculate display width of a single character
+      # @param char [String] Single character
+      # @return [Integer] Display width (1 or 2)
+      def char_display_width(char)
+        code = char.ord
+        # East Asian Wide and Fullwidth characters take 2 columns
+        if (code >= 0x1100 && code <= 0x115F) ||
+           (code >= 0x2329 && code <= 0x232A) ||
+           (code >= 0x2E80 && code <= 0x303E) ||
+           (code >= 0x3040 && code <= 0xA4CF) ||
+           (code >= 0xAC00 && code <= 0xD7A3) ||
+           (code >= 0xF900 && code <= 0xFAFF) ||
+           (code >= 0xFE10 && code <= 0xFE19) ||
+           (code >= 0xFE30 && code <= 0xFE6F) ||
+           (code >= 0xFF00 && code <= 0xFF60) ||
+           (code >= 0xFFE0 && code <= 0xFFE6) ||
+           (code >= 0x1F300 && code <= 0x1F9FF) ||
+           (code >= 0x20000 && code <= 0x2FFFD) ||
+           (code >= 0x30000 && code <= 0x3FFFD)
+          2
+        else
+          1
+        end
+      end
+      
+      # Calculate display width of a string (considering multi-byte characters)
+      # @param text [String] Text to calculate
+      # @return [Integer] Display width
+      def calculate_display_width(text)
+        width = 0
+        text.each_char do |char|
+          width += char_display_width(char)
+        end
+        width
+      end
 
       # Calculate fixed area height (gap + todo + input)
       def fixed_area_height
