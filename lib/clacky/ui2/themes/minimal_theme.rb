@@ -26,12 +26,12 @@ module Clacky
         }.freeze
 
         COLORS = {
-          user: [:blue, :blue],
+          user: [:white, :white],
           assistant: [:green, :white],
           tool_call: [:cyan, :cyan],
           tool_result: [:white, :white],
           tool_denied: [:yellow, :yellow],
-          tool_planned: [:blue, :blue],
+          tool_planned: [:cyan, :cyan],
           tool_error: [:red, :red],
           thinking: [:dim, :dim],
           working: [:bright_yellow, :yellow],

@@ -32,6 +32,10 @@ module Clacky
         confirm_edits   - Auto-approve read-only tools, confirm edits
         plan_only       - Generate plan without executing
 
+      UI themes:
+        hacker          - Matrix/hacker-style with bracket symbols (default)
+        minimal         - Clean, simple symbols
+
       Session management:
         -c, --continue  - Continue the most recent session for this directory
         -l, --list      - List recent sessions
@@ -42,6 +46,8 @@ module Clacky
     LONGDESC
     option :mode, type: :string, default: "confirm_safes",
            desc: "Permission mode: auto_approve, confirm_safes, confirm_edits, plan_only"
+    option :theme, type: :string, default: "hacker",
+           desc: "UI theme: hacker, minimal (default: hacker)"
     option :verbose, type: :boolean, aliases: "-v", default: false, desc: "Show detailed output"
     option :path, type: :string, desc: "Project directory path (defaults to current directory)"
     option :continue, type: :boolean, aliases: "-c", desc: "Continue most recent session"
@@ -374,11 +380,20 @@ module Clacky
 
       # Run agent with UI2 split-screen interface
       def run_agent_with_ui2(agent, working_dir, agent_config, initial_message = nil, session_manager = nil, client = nil, is_session_load: false)
+        # Validate theme
+        theme_name = options[:theme] || "hacker"
+        available_themes = UI2::ThemeManager.available_themes.map(&:to_s)
+        unless available_themes.include?(theme_name)
+          say "Error: Unknown theme '#{theme_name}'. Available themes: #{available_themes.join(', ')}", :red
+          exit 1
+        end
+
         # Create UI2 controller with configuration
         ui_controller = UI2::UIController.new(
           working_dir: working_dir,
           mode: agent_config.permission_mode.to_s,
-          model: agent_config.model
+          model: agent_config.model,
+          theme: theme_name
         )
 
         # Inject UI into agent
