@@ -91,10 +91,13 @@ module Clacky
       def position_inline_input_cursor(inline_input)
         return unless inline_input
 
-        # InlineInput renders its own visual cursor via render_line_with_cursor
-        # (white background on cursor character), so we don't need terminal cursor.
-        # Just hide the terminal cursor to avoid showing two cursors.
-        screen.hide_cursor
+        # Calculate the actual terminal cursor position considering multi-byte characters
+        # InlineInput is on the last output line (@output_row - 1)
+        cursor_row = @output_row - 1
+        cursor_col = inline_input.cursor_col  # This already considers display width
+        
+        # Move terminal cursor to the correct position
+        screen.move_cursor(cursor_row, cursor_col)
         screen.flush
       end
 
@@ -208,6 +211,10 @@ module Clacky
           screen.move_cursor(last_row, 0)
           screen.clear_line
           print content
+          
+          # Hide terminal cursor to avoid showing two cursors
+          # InlineInput uses visual cursor (white background) which is better for multi-byte chars
+          screen.hide_cursor
           screen.flush
           
           # Don't re-render fixed areas - we're just updating existing content
