@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "base"
-require "base64"
+require_relative "../utils/file_processor"
 
 module Clacky
   module Tools
@@ -25,20 +25,7 @@ module Clacky
         required: ["path"]
       }
       
-      # Supported binary formats that can be sent to LLM
-      # Images: PNG, JPEG, GIF, WebP
-      # Documents: PDF
-      LLM_COMPATIBLE_FORMATS = %w[.png .jpg .jpeg .gif .webp .pdf].freeze
-      
-      # Binary file signatures (magic bytes) for detection
-      BINARY_SIGNATURES = {
-        png: "\x89PNG".b,
-        jpeg: "\xFF\xD8\xFF".b,
-        gif_87: "GIF87a".b,
-        gif_89: "GIF89a".b,
-        pdf: "%PDF".b,
-        webp_riff: "RIFF".b  # WebP starts with RIFF, followed by WEBP at offset 8
-      }.freeze
+
 
       def execute(path:, max_lines: 1000)
         # Expand ~ to home directory
@@ -171,36 +158,10 @@ module Clacky
       end
 
       private def binary_file?(path)
-        # Read first few bytes to check for binary signatures
+        # Use FileProcessor to detect binary files
         File.open(path, 'rb') do |file|
-          header = file.read(12) || ""
-          
-          # Check for known binary signatures
-          return true if header.start_with?(BINARY_SIGNATURES[:png])
-          return true if header.start_with?(BINARY_SIGNATURES[:jpeg])
-          return true if header.start_with?(BINARY_SIGNATURES[:gif_87])
-          return true if header.start_with?(BINARY_SIGNATURES[:gif_89])
-          return true if header.start_with?(BINARY_SIGNATURES[:pdf])
-          
-          # Check for WebP (RIFF....WEBP)
-          if header.start_with?(BINARY_SIGNATURES[:webp_riff]) && header.length >= 12
-            return true if header[8..11] == "WEBP".b
-          end
-          
-          # Heuristic: check for null bytes or high ratio of non-printable characters
-          # Read more bytes for better detection
-          sample = header + (file.read(500) || "")
-          return false if sample.empty?
-          
-          # Check for null bytes (common in binary files)
-          return true if sample.include?("\x00")
-          
-          # Check ratio of printable characters
-          printable_count = sample.chars.count { |c| c.ord >= 32 && c.ord < 127 || c == "\n" || c == "\r" || c == "\t" }
-          ratio = printable_count.to_f / sample.length
-          
-          # If less than 70% printable, consider it binary
-          ratio < 0.7
+          sample = file.read(8192) || ""
+          Utils::FileProcessor.binary_file?(sample)
         end
       rescue StandardError
         # If we can't read the file, assume it's not binary
@@ -208,29 +169,37 @@ module Clacky
       end
       
       private def handle_binary_file(path)
-        ext = File.extname(path).downcase
-        
-        # Check if it's an LLM-compatible format
-        if LLM_COMPATIBLE_FORMATS.include?(ext)
-          # Read file as binary and encode to base64
-          binary_data = File.binread(path)
-          base64_data = Base64.strict_encode64(binary_data)
-          
-          # Detect MIME type
-          mime_type = detect_mime_type(path, binary_data)
-          
-          {
-            path: path,
-            binary: true,
-            format: ext[1..-1], # Remove the leading dot
-            mime_type: mime_type,
-            size_bytes: binary_data.length,
-            base64_data: base64_data,
-            error: nil
-          }
+        # Check if it's a supported format using FileProcessor
+        if Utils::FileProcessor.supported_binary_file?(path)
+          # Use FileProcessor to convert to base64
+          begin
+            result = Utils::FileProcessor.file_to_base64(path)
+            {
+              path: path,
+              binary: true,
+              format: result[:format],
+              mime_type: result[:mime_type],
+              size_bytes: result[:size_bytes],
+              base64_data: result[:base64_data],
+              error: nil
+            }
+          rescue ArgumentError => e
+            # File too large or other error
+            file_size = File.size(path)
+            ext = File.extname(path).downcase
+            {
+              path: path,
+              binary: true,
+              format: ext.empty? ? "unknown" : ext[1..-1],
+              size_bytes: file_size,
+              content: nil,
+              error: e.message
+            }
+          end
         else
           # Binary file that we can't send to LLM
           file_size = File.size(path)
+          ext = File.extname(path).downcase
           {
             path: path,
             binary: true,
@@ -243,35 +212,7 @@ module Clacky
       end
       
       private def detect_mime_type(path, data)
-        ext = File.extname(path).downcase
-        
-        case ext
-        when ".png"
-          "image/png"
-        when ".jpg", ".jpeg"
-          "image/jpeg"
-        when ".gif"
-          "image/gif"
-        when ".webp"
-          "image/webp"
-        when ".pdf"
-          "application/pdf"
-        else
-          # Try to detect from file signature
-          if data.start_with?(BINARY_SIGNATURES[:png])
-            "image/png"
-          elsif data.start_with?(BINARY_SIGNATURES[:jpeg])
-            "image/jpeg"
-          elsif data.start_with?(BINARY_SIGNATURES[:gif_87]) || data.start_with?(BINARY_SIGNATURES[:gif_89])
-            "image/gif"
-          elsif data.start_with?(BINARY_SIGNATURES[:webp_riff]) && data.length >= 12 && data[8..11] == "WEBP".b
-            "image/webp"
-          elsif data.start_with?(BINARY_SIGNATURES[:pdf])
-            "application/pdf"
-          else
-            "application/octet-stream"
-          end
-        end
+        Utils::FileProcessor.detect_mime_type(path, data)
       end
       
       private def format_file_size(bytes)

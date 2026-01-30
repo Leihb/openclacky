@@ -4,8 +4,8 @@ require "securerandom"
 require "json"
 require "tty-prompt"
 require "set"
-require "base64"
 require_relative "utils/arguments_parser"
+require_relative "utils/file_processor"
 
 module Clacky
   class Agent
@@ -1255,64 +1255,13 @@ module Clacky
       content << { type: "text", text: text } unless text.nil? || text.empty?
 
       images.each do |image_path|
-        image_url = image_path_to_data_url(image_path)
+        image_url = Utils::FileProcessor.image_path_to_data_url(image_path)
         content << { type: "image_url", image_url: { url: image_url } }
       end
 
       content
     end
 
-    # Convert image file path to base64 data URL
-    # @param path [String] File path to image
-    # @return [String] base64 data URL (e.g., "data:image/png;base64,...")
-    def image_path_to_data_url(path)
-      unless File.exist?(path)
-        raise ArgumentError, "Image file not found: #{path}"
-      end
 
-      # Read file as binary
-      image_data = File.binread(path)
-
-      # Detect MIME type from file extension or content
-      mime_type = detect_image_mime_type(path, image_data)
-
-      # Encode to base64
-      base64_data = Base64.strict_encode64(image_data)
-
-      "data:#{mime_type};base64,#{base64_data}"
-    end
-
-    # Detect image MIME type
-    # @param path [String] File path
-    # @param data [String] Binary image data
-    # @return [String] MIME type (e.g., "image/png")
-    def detect_image_mime_type(path, data)
-      # Try to detect from file extension first
-      ext = File.extname(path).downcase
-      case ext
-      when ".png"
-        "image/png"
-      when ".jpg", ".jpeg"
-        "image/jpeg"
-      when ".gif"
-        "image/gif"
-      when ".webp"
-        "image/webp"
-      else
-        # Try to detect from file signature (magic bytes)
-        if data.start_with?("\x89PNG".b)
-          "image/png"
-        elsif data.start_with?("\xFF\xD8\xFF".b)
-          "image/jpeg"
-        elsif data.start_with?("GIF87a".b) || data.start_with?("GIF89a".b)
-          "image/gif"
-        elsif data.start_with?("RIFF".b) && data[8..11] == "WEBP".b
-          "image/webp"
-        else
-          # Default to png if unknown
-          "image/png"
-        end
-      end
-    end
   end
 end
