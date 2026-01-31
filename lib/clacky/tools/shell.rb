@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "tmpdir"
 require_relative "base"
 
 module Clacky
@@ -35,7 +36,7 @@ module Clacky
       INTERACTION_PATTERNS = [
         [/\[Y\/n\]|\[y\/N\]|\(yes\/no\)|\(Y\/n\)|\(y\/N\)/i, 'confirmation'],
         [/[Pp]assword\s*:\s*$|Enter password|enter password/, 'password'],
-        [/^\s*>>>\s*$|^\s*>>?\s*$|^irb\(.*\):\d+:\d+[>*]\s*$|^>\s*$/, 'repl'],
+        [/^\s*>>>\s*$|^\s*>>?\s*$|^irb\(.*\):\d+:\d+[>*]\s*$|^\>\s*$/, 'repl'],
         [/^\s*:\s*$|\(END\)|--More--|Press .* to continue|lines \d+-\d+/, 'pager'],
         [/Are you sure|Continue\?|Proceed\?|Confirm|Overwrite/i, 'question'],
         [/Enter\s+\w+:|Input\s+\w+:|Please enter|please provide/i, 'input'],
@@ -143,7 +144,7 @@ module Clacky
 
             stdout_output = stdout_buffer.string
             stderr_output = stderr_buffer.string
-            
+
             {
               command: command,
               stdout: truncate_output(stdout_output, max_output_lines),
@@ -157,7 +158,7 @@ module Clacky
         rescue StandardError => e
           stdout_output = stdout_buffer.string
           stderr_output = "Error executing command: #{e.message}\n#{e.backtrace.first(3).join("\n")}"
-          
+
           {
             command: command,
             stdout: truncate_output(stdout_output, max_output_lines),
@@ -253,10 +254,10 @@ module Clacky
       # Truncate output to max_lines, adding a truncation notice if needed
       def truncate_output(output, max_lines)
         return output if output.nil? || output.empty?
-        
+
         lines = output.lines
         return output if lines.length <= max_lines
-        
+
         truncated_lines = lines.first(max_lines)
         truncation_notice = "\n\n... [Output truncated: showing #{max_lines} of #{lines.length} lines] ...\n"
         truncated_lines.join + truncation_notice
@@ -293,69 +294,105 @@ module Clacky
 
       # Format result for LLM consumption - limit output size to save tokens
       # Maximum characters to include in LLM output
-      MAX_LLM_OUTPUT_CHARS = 2000
-      
+      MAX_LLM_OUTPUT_CHARS = 1000
+
       def format_result_for_llm(result)
         # Return error info as-is if command failed or timed out
         return result if result[:error] || result[:state] == 'TIMEOUT' || result[:state] == 'WAITING_INPUT'
-        
+
         stdout = result[:stdout] || ""
         stderr = result[:stderr] || ""
         exit_code = result[:exit_code] || 0
-        
+
         # Build compact result with truncated output
         compact = {
           command: result[:command],
           exit_code: exit_code,
           success: result[:success]
         }
-        
-        # Add elapsed time if available
+
+        # Add elapsed time if available (keep original precision)
         compact[:elapsed] = result[:elapsed] if result[:elapsed]
-        
-        # Truncate stdout to save tokens
-        if stdout.empty?
-          compact[:stdout] = ""
-        else
-          stdout_lines = stdout.lines
-          stdout_line_count = stdout_lines.length
-          
-          if stdout.length <= MAX_LLM_OUTPUT_CHARS
-            compact[:stdout] = stdout
-          else
-            # Take first N lines that fit within the character limit
-            accumulated_chars = 0
-            lines_to_include = []
-            
-            stdout_lines.each do |line|
-              break if accumulated_chars + line.length > MAX_LLM_OUTPUT_CHARS
-              lines_to_include << line
-              accumulated_chars += line.length
-            end
-            
-            compact[:stdout] = lines_to_include.join
-            compact[:stdout] += "\n\n... [Output truncated for LLM: showing #{lines_to_include.length} of #{stdout_line_count} lines, #{accumulated_chars} of #{stdout.length} chars] ...\n"
-          end
-        end
-        
-        # Truncate stderr to save tokens (usually more important than stdout, so keep more)
-        if stderr.empty?
-          compact[:stderr] = ""
-        else
-          stderr_line_count = stderr.lines.length
-          
-          if stderr.length <= MAX_LLM_OUTPUT_CHARS
-            compact[:stderr] = stderr
-          else
-            compact[:stderr] = stderr[0...MAX_LLM_OUTPUT_CHARS]
-            compact[:stderr] += "\n\n... [Error output truncated for LLM: showing #{MAX_LLM_OUTPUT_CHARS} of #{stderr.length} chars, #{stderr_line_count} lines] ...\n"
-          end
-        end
-        
-        # Add output_truncated flag
-        compact[:output_truncated] = result[:output_truncated] if result[:output_truncated]
-        
+
+        # Extract command name for temp file naming
+        command_name = extract_command_name(result[:command])
+
+        # Process stdout: truncate and optionally save to temp file
+        stdout_info = truncate_and_save(stdout, MAX_LLM_OUTPUT_CHARS, "stdout", command_name)
+        compact[:stdout] = stdout_info[:content]
+        compact[:stdout_full] = stdout_info[:temp_file] if stdout_info[:temp_file]
+
+        # Process stderr: truncate and optionally save to temp file
+        stderr_info = truncate_and_save(stderr, MAX_LLM_OUTPUT_CHARS, "stderr", command_name)
+        compact[:stderr] = stderr_info[:content]
+        compact[:stderr_full] = stderr_info[:temp_file] if stderr_info[:temp_file]
+
+        # Add output_truncated flag if present
+        compact[:output_truncated] = true if result[:output_truncated]
+
         compact
+      end
+
+      # Extract command name from full command for temp file naming
+      def extract_command_name(command)
+        first_word = command.strip.split(/\s+/).first
+        File.basename(first_word, ".*")
+      end
+
+      # Truncate output for LLM and optionally save full content to temp file
+      def truncate_and_save(output, max_chars, label, command_name)
+        return { content: "", temp_file: nil } if output.empty?
+
+        return { content: output, temp_file: nil } if output.length <= max_chars
+
+        # Sanitize command name for file name
+        safe_name = command_name.gsub(/[^\w\-.]/, "_")[0...50]
+
+        # Use Ruby tmpdir for safe temp file creation
+        temp_dir = Dir.mktmpdir
+        temp_file = File.join(temp_dir, "#{safe_name}_#{Time.now.strftime("%Y%m%d_%H%M%S")}.output")
+
+        # Write full output to temp file
+        File.write(temp_file, output)
+
+        # For LLM display: show first and last lines to preserve structure
+        lines = output.lines
+        return { content: output, temp_file: nil } if lines.length <= 2
+
+        # Reserve 60 chars for truncation notice
+        available_chars = max_chars - 60
+
+        # Take first few lines
+        first_part = []
+        accumulated = 0
+        lines.each do |line|
+          break if accumulated + line.length > available_chars / 2
+          first_part << line
+          accumulated += line.length
+        end
+
+        # Take last few lines
+        last_part = []
+        accumulated = 0
+        lines.reverse_each do |line|
+          break if accumulated + line.length > available_chars / 2
+          last_part.unshift(line)
+          accumulated += line.length
+        end
+
+        total_lines = lines.length
+
+        # Create notice message based on label
+        if label == "stderr"
+          notice = "... [Error output truncated for LLM: showing #{first_part.length} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ..."
+        else
+          notice = "... [Output truncated for LLM: showing #{first_part.length} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ..."
+        end
+
+        # Combine with compact notice
+        content = first_part.join + "\n#{notice}\n" + last_part.join
+
+        { content: content, temp_file: temp_file }
       end
     end
   end

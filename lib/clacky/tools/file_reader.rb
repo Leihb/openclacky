@@ -18,8 +18,20 @@ module Clacky
           },
           max_lines: {
             type: "integer",
-            description: "Maximum number of lines to read (optional)",
-            default: 1000
+            description: "Maximum number of lines to read from start (default: 500)",
+            default: 500
+          },
+          keyword: {
+            type: "string",
+            description: "Search keyword and return matching lines with context (recommended for large files)"
+          },
+          start_line: {
+            type: "integer",
+            description: "Start line number (1-indexed, e.g., 100 reads from line 100)"
+          },
+          end_line: {
+            type: "integer",
+            description: "End line number (1-indexed, e.g., 200 reads up to line 200)"
           }
         },
         required: ["path"]
@@ -27,7 +39,7 @@ module Clacky
       
 
 
-      def execute(path:, max_lines: 1000)
+      def execute(path:, max_lines: 500, keyword: nil, start_line: nil, end_line: nil)
         # Expand ~ to home directory
         expanded_path = File.expand_path(path)
         
@@ -57,17 +69,41 @@ module Clacky
           if binary_file?(expanded_path)
             return handle_binary_file(expanded_path)
           end
-          
-          # Read text file
-          lines = File.readlines(expanded_path).first(max_lines)
-          content = lines.join
-          truncated = File.readlines(expanded_path).size > max_lines
+
+          # Handle keyword search with context
+          if keyword && !keyword.empty?
+            return find_with_context(expanded_path, keyword)
+          end
+
+          # Read text file with optional line range
+          all_lines = File.readlines(expanded_path)
+          total_lines = all_lines.size
+
+          # Apply line range
+          start_idx = start_line ? [start_line - 1, 0].max : 0
+          end_idx = end_line ? [end_line - 1, total_lines - 1].max : [max_lines - 1, total_lines - 1].min
+
+          # Validate range
+          if start_idx > end_idx || start_idx >= total_lines
+            return {
+              path: expanded_path,
+              content: nil,
+              lines_read: 0,
+              error: "Invalid line range: start_line #{start_line || 1} > end_line #{end_line || total_lines}"
+            }
+          end
+
+          lines = all_lines[start_idx..end_idx] || []
+          truncated = total_lines > max_lines && !keyword
 
           {
             path: expanded_path,
-            content: content,
+            content: lines.join,
             lines_read: lines.size,
+            total_lines: total_lines,
             truncated: truncated,
+            start_line: start_line,
+            end_line: end_line,
             error: nil
           }
         rescue StandardError => e
@@ -155,6 +191,51 @@ module Clacky
         
         # For other cases, return the result as-is (agent will JSON.generate it)
         result
+      end
+
+      # Find lines matching keyword with context (5 lines before and after each match)
+      private def find_with_context(path, keyword)
+        context_lines_count = 5
+        all_lines = File.readlines(path)
+        total_lines = all_lines.size
+        matches = []
+
+        # Find all matching line indices (case-insensitive)
+        all_lines.each_with_index do |line, index|
+          if line.include?(keyword)
+            start_idx = [index - context_lines_count, 0].max
+            end_idx = [index + context_lines_count, total_lines - 1].min
+            matches << {
+              line_number: index + 1,
+              content: all_lines[start_idx..end_idx].join,
+              start_line: start_idx + 1,
+              end_line: end_idx + 1,
+              match_line: index + 1
+            }
+          end
+        end
+
+        if matches.empty?
+          {
+            path: path,
+            content: nil,
+            matches_count: 0,
+            error: "Keyword '#{keyword}' not found in file"
+          }
+        else
+          # Combine all matches with separator
+          combined_content = matches.map do |m|
+            "... Lines #{m[:start_line]}-#{m[:end_line]} (match at line #{m[:line_number]}):\n#{m[:content]}"
+          end.join("\n---\n")
+
+          {
+            path: path,
+            content: combined_content,
+            matches_count: matches.size,
+            keyword: keyword,
+            error: nil
+          }
+        end
       end
 
       private def binary_file?(path)
