@@ -29,7 +29,7 @@ module Clacky
           user: [:white, :white],
           assistant: [:green, :white],
           tool_call: [:cyan, :cyan],
-          tool_result: [:white, :white],
+          tool_result: [:cyan, :cyan],
           tool_denied: [:yellow, :yellow],
           tool_planned: [:cyan, :cyan],
           tool_error: [:red, :red],
