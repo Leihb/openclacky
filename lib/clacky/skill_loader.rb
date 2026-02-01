@@ -10,13 +10,14 @@ module Clacky
   class SkillLoader
     # Skill discovery locations (in priority order: lower index = lower priority)
     LOCATIONS = [
-      :global_claude,      # ~/.claude/skills/ (lowest priority, compatibility)
+      :default,            # gem's built-in default skills (lowest priority)
+      :global_claude,      # ~/.claude/skills/ (compatibility)
       :global_clacky,      # ~/.clacky/skills/
       :project_claude,     # .claude/skills/ (project-level compatibility)
       :project_clacky      # .clacky/skills/ (highest priority)
     ].freeze
 
-    # Initialize the skill loader
+    # Initialize the skill loader and automatically load all skills
     # @param working_dir [String] Current working directory for project-level discovery
     def initialize(working_dir = nil)
       @working_dir = working_dir || Dir.pwd
@@ -24,11 +25,19 @@ module Clacky
       @skills_by_command = {} # Map slash_command -> Skill
       @errors = []           # Store loading errors
       @loaded_from = {}      # Track which location each skill was loaded from
+      
+      # Automatically load all skills on initialization
+      load_all
     end
 
     # Load all skills from configured locations
+    # Clears previously loaded skills before loading to ensure idempotency
     # @return [Array<Skill>] Loaded skills
     def load_all
+      # Clear existing skills to ensure idempotent reloading
+      clear
+      
+      load_default_skills
       load_global_claude_skills
       load_global_clacky_skills
       load_project_claude_skills
@@ -275,6 +284,37 @@ module Clacky
         .to_yaml(line_width: 80)
 
       "---\n#{yaml}---\n\n#{content}"
+    end
+
+    # Load default skills from gem's default_skills directory
+    private def load_default_skills
+      # Get the gem's lib directory
+      gem_lib_dir = File.expand_path("../", __dir__)
+      default_skills_dir = File.join(gem_lib_dir, "clacky", "default_skills")
+      
+      return unless Dir.exist?(default_skills_dir)
+      
+      # Load each skill directory
+      Dir.glob(File.join(default_skills_dir, "*/SKILL.md")).each do |skill_file|
+        skill_dir = File.dirname(skill_file)
+        skill_name = File.basename(skill_dir)
+        
+        begin
+          skill = Skill.new(Pathname.new(skill_dir))
+          
+          # Check for duplicates (higher priority skills override)
+          if @skills.key?(skill.identifier)
+            next  # Skip if already loaded from higher priority location
+          end
+          
+          # Register skill
+          @skills[skill.identifier] = skill
+          @skills_by_command[skill.slash_command] = skill
+          @loaded_from[skill.identifier] = :default
+        rescue StandardError => e
+          @errors << "Failed to load default skill #{skill_name}: #{e.message}"
+        end
+      end
     end
   end
 end

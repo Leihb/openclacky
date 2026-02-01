@@ -29,10 +29,12 @@ RSpec.describe Clacky::SkillLoader do
 
   describe "#load_all" do
     context "with no skills directories" do
-      it "returns empty array" do
+      it "returns only virtual skills" do
         loader = described_class.new(working_dir)
+        skills = loader.load_all
 
-        expect(loader.load_all).to be_empty
+        expect(skills.size).to eq(1)
+        expect(skills.first.identifier).to eq("skill-add")
       end
     end
 
@@ -55,8 +57,8 @@ RSpec.describe Clacky::SkillLoader do
         loader = described_class.new(working_dir)
         skills = loader.load_all
 
-        expect(skills.size).to eq(1)
-        expect(skills.first.identifier).to eq("project-skill")
+        skill_identifiers = skills.map(&:identifier)
+        expect(skill_identifiers).to include("project-skill")
       end
     end
 
@@ -79,8 +81,8 @@ RSpec.describe Clacky::SkillLoader do
         loader = described_class.new(working_dir)
         skills = loader.load_all
 
-        expect(skills.size).to eq(1)
-        expect(skills.first.identifier).to eq("claude-skill")
+        skill_identifiers = skills.map(&:identifier)
+        expect(skill_identifiers).to include("claude-skill")
       end
     end
 
@@ -164,8 +166,8 @@ RSpec.describe Clacky::SkillLoader do
         loader = described_class.new(working_dir)
         skills = loader.load_all
 
-        expect(skills.size).to eq(1)
-        expect(skills.first.context_description).to eq("From .clacky (higher priority)")
+        duplicate_skill = skills.find { |s| s.identifier == "duplicate-skill" }
+        expect(duplicate_skill.context_description).to eq("From .clacky (higher priority)")
       end
 
       it "logs warning for skipped duplicates" do
@@ -200,7 +202,9 @@ RSpec.describe Clacky::SkillLoader do
           # When project .clacky skill is loaded, it should replace global .claude's skill
           # No warning should be generated because higher priority replaces lower
           expect(loader.errors).to be_empty
-          expect(loader.all_skills.first.context_description).to eq("Higher priority project version")
+          warn_skill = loader.all_skills.find { |s| s.identifier == "warn-skill" }
+          expect(warn_skill).not_to be_nil
+          expect(warn_skill.context_description).to eq("Higher priority project version")
         ensure
           FileUtils.rm_rf(global_claude_dir)
         end
@@ -228,8 +232,8 @@ RSpec.describe Clacky::SkillLoader do
         loader = described_class.new(working_dir)
         skills = loader.load_all
 
-        expect(skills.size).to eq(3)
-        expect(skills.map(&:identifier).sort).to eq(skill_names.sort)
+        skill_identifiers = skills.map(&:identifier)
+        expect(skill_identifiers).to include(*skill_names)
       end
     end
   end

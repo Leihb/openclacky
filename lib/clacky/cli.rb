@@ -362,6 +362,8 @@ module Clacky
 
         # Show location with priority indicator
         location = case loader.loaded_from[skill.identifier]
+        when :default
+          "built-in"
         when :project_clacky
           "project .clacky"
         when :project_claude
