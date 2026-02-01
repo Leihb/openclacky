@@ -4,6 +4,7 @@ require "pastel"
 require "tempfile"
 require_relative "../theme_manager"
 require_relative "../line_editor"
+require_relative "command_suggestions"
 
 module Clacky
   module UI2
@@ -68,6 +69,10 @@ module Clacky
           @animation_frame = 0
           @last_animation_update = Time.now
           @working_frames = ["❄", "❅", "❆"]
+
+          # Command suggestions dropdown
+          @command_suggestions = CommandSuggestions.new
+          @skill_loader = nil  # Will be set via set_skill_loader method
         end
 
         # Get current theme from ThemeManager
@@ -111,11 +116,21 @@ module Clacky
           # Bottom separator
           height += 1
           
+          # Command suggestions (rendered above input)
+          height += @command_suggestions.required_height if @command_suggestions
+          
           # Tips and user tips
           height += 1 if @tips_message
           height += 1 if @user_tip
           
           height
+        end
+
+        # Set skill loader for command suggestions
+        # @param skill_loader [Clacky::SkillLoader] The skill loader instance
+        def set_skill_loader(skill_loader)
+          @skill_loader = skill_loader
+          @command_suggestions.load_skill_commands(skill_loader) if skill_loader
         end
 
         # Update session bar info
@@ -144,17 +159,65 @@ module Clacky
 
           old_height = required_height
 
+          # Handle command suggestions navigation first if visible
+          if @command_suggestions.visible
+            case key
+            when :up_arrow
+              @command_suggestions.select_previous
+              return { action: nil }
+            when :down_arrow
+              @command_suggestions.select_next
+              return { action: nil }
+            when :enter
+              # Accept selected command
+              if @command_suggestions.has_suggestions?
+                selected = @command_suggestions.selected_command_text
+                if selected
+                  # Replace current input with selected command
+                  @lines = [selected]
+                  @line_index = 0
+                  @cursor_position = selected.length
+                  @command_suggestions.hide
+                  return { action: nil }
+                end
+              end
+              # Fall through to normal enter handling if no suggestion
+            when :escape
+              @command_suggestions.hide
+              return { action: nil }
+            when :tab
+              # Tab also accepts the suggestion
+              if @command_suggestions.has_suggestions?
+                selected = @command_suggestions.selected_command_text
+                if selected
+                  @lines = [selected]
+                  @line_index = 0
+                  @cursor_position = selected.length
+                  @command_suggestions.hide
+                  return { action: nil }
+                end
+              end
+            end
+          end
+
           result = case key
           when Hash
             if key[:type] == :rapid_input
               insert_text(key[:text])
               clear_tips
+              update_command_suggestions
             end
             { action: nil }
           when :enter then handle_enter
           when :newline then newline; { action: nil }
-          when :backspace then backspace; { action: nil }
-          when :delete then delete_char; { action: nil }
+          when :backspace 
+            backspace
+            update_command_suggestions
+            { action: nil }
+          when :delete 
+            delete_char
+            update_command_suggestions
+            { action: nil }
           when :left_arrow, :ctrl_b then cursor_left; { action: nil }
           when :right_arrow, :ctrl_f then cursor_right; { action: nil }
           when :up_arrow then handle_up_arrow
@@ -168,10 +231,15 @@ module Clacky
           when :ctrl_d then handle_ctrl_d
           when :ctrl_v then handle_paste
           when :shift_tab then { action: :toggle_mode }
-          when :escape then { action: nil }
+          when :escape 
+            if @command_suggestions.visible
+              @command_suggestions.hide
+            end
+            { action: nil }
           else
             if key.is_a?(String) && key.length >= 1 && key.ord >= 32
               insert_char(key)
+              update_command_suggestions
             end
             { action: nil }
           end
@@ -218,6 +286,13 @@ module Clacky
           # Bottom separator
           render_separator(current_row)
           current_row += 1
+
+          # Command suggestions (rendered above tips)
+          if @command_suggestions && @command_suggestions.visible
+            # Render suggestions at current row
+            print @command_suggestions.render(row: current_row, col: 0, width: [@width - 4, 60].min)
+            current_row += @command_suggestions.required_height
+          end
 
           # Tips bar (if any)
           if @tips_message
@@ -495,6 +570,7 @@ module Clacky
           @paste_counter = 0
           @paste_placeholders = {}
           clear_tips
+          @command_suggestions.hide if @command_suggestions
         end
 
         def submit
@@ -529,6 +605,23 @@ module Clacky
         end
 
         private
+
+        # Update command suggestions based on current input
+        # Shows suggestions when input starts with /
+        private def update_command_suggestions
+          return unless @command_suggestions
+          
+          current = current_line.strip
+          
+          # Check if we should show suggestions (input starts with /)
+          if current.start_with?('/') && @line_index == 0
+            # Extract the filter text (everything after /)
+            filter_text = current[1..-1] || ""
+            @command_suggestions.show(filter_text)
+          else
+            @command_suggestions.hide
+          end
+        end
 
         # Render all input lines with auto-wrap support
         # @param start_row [Integer] Starting row position

@@ -14,6 +14,7 @@ module Clacky
         @todo_area = todo_area
         @render_mutex = Mutex.new
         @output_row = 0  # Track current output row position
+        @last_fixed_area_height = 0  # Track previous fixed area height to detect shrinkage
 
         calculate_layout
         setup_resize_handler
@@ -249,8 +250,8 @@ module Clacky
             end
           end
 
-          # Hide terminal cursor
-          screen.hide_cursor
+          # Re-render fixed areas to restore cursor position in input area
+          render_fixed_areas
           screen.flush
         end
       end
@@ -456,10 +457,25 @@ module Clacky
         # The InlineInput is rendered inline with output
         return if input_area.paused?
 
+        current_fixed_height = fixed_area_height
         start_row = fixed_area_start_row
         gap_row = start_row
         todo_row = gap_row + 1
         input_row = todo_row + (@todo_area&.height || 0)
+
+        # If fixed area shrank, clear the extra lines at the top to remove residual content
+        if @last_fixed_area_height > current_fixed_height
+          height_diff = @last_fixed_area_height - current_fixed_height
+          old_start_row = screen.height - @last_fixed_area_height
+          # Clear the extra lines that are no longer part of fixed area
+          (old_start_row...(old_start_row + height_diff)).each do |row|
+            screen.move_cursor(row, 0)
+            screen.clear_line
+          end
+        end
+
+        # Update last height for next comparison
+        @last_fixed_area_height = current_fixed_height
 
         # Render gap line
         screen.move_cursor(gap_row, 0)

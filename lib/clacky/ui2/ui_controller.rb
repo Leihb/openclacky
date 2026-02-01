@@ -147,6 +147,12 @@ module Clacky
         @mode_toggle_callback = block
       end
 
+      # Set skill loader for command suggestions
+      # @param skill_loader [Clacky::SkillLoader] The skill loader instance
+      def set_skill_loader(skill_loader)
+        @input_area.set_skill_loader(skill_loader)
+      end
+
       # Append output to the output area
       # @param content [String] Content to append
       def append_output(content)
@@ -602,50 +608,15 @@ module Clacky
         require 'diffy'
 
         diff = Diffy::Diff.new(old_content, new_content, context: 3)
-        all_lines = diff.to_s(:color).lines
-        plain_lines = diff.to_s.lines
+        diff_lines = diff.to_s(:color).lines
 
-        old_lines = old_content.lines
-        new_lines = new_content.lines
-
-        # Find starting line numbers by searching for the first context line in old content
-        first_context_line = plain_lines.find { |l| l.start_with?(' ') }
-        old_line_num = 0
-        new_line_num = 0
-
-        if first_context_line
-          context_text = first_context_line.chomp
-          # Find the context line in old content to get starting position
-          old_idx = old_lines.index { |l| l.chomp == context_text }
-          old_line_num = old_idx + 1 if old_idx
-          new_line_num = old_line_num
+        # Show diff without line numbers
+        diff_lines.take(max_lines).each do |line|
+          append_output(line.chomp)
         end
 
-        # Process each diff line and calculate line numbers
-        numbered_lines = plain_lines.take(max_lines).each_with_index.map do |plain_line, index|
-          colored_line = all_lines[index].chomp
-
-          case plain_line.chomp
-          when /^ / # Context line - appears in both files
-            old_line_num += 1
-            new_line_num += 1
-            sprintf("%4d | %s", new_line_num, colored_line)
-          when /^-/ # Deletion - only in old file
-            old_line_num += 1
-            sprintf("%4d | %s", old_line_num, colored_line)
-          when /^/ # Addition - only in new file
-            new_line_num += 1
-            sprintf("%4d | %s", new_line_num, colored_line)
-          else
-            # Headers or other lines
-            sprintf("%4s | %s", "", colored_line)
-          end
-        end
-
-        numbered_lines&.each { |line| append_output(line) }
-
-        if plain_lines.size > max_lines
-          append_output("\n... (#{plain_lines.size - max_lines} more lines, diff truncated)")
+        if diff_lines.size > max_lines
+          append_output("\n... (#{diff_lines.size - max_lines} more lines, diff truncated)")
         end
       rescue LoadError
         # Fallback if diffy is not available
