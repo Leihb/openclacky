@@ -214,7 +214,7 @@ module Clacky
 
         # Delta tokens with color coding (green/yellow/red + dim)
         delta_tokens = token_data[:delta_tokens]
-        delta_str = "+#{delta_tokens}"
+        delta_str = delta_tokens.negative? ? "#{delta_tokens}" : "+#{delta_tokens}"
         color_style = if delta_tokens > 10000
           :red
         elsif delta_tokens > 5000
@@ -222,7 +222,11 @@ module Clacky
         else
           :green
         end
-        colored_delta = pastel.decorate(delta_str, color_style, :dim)
+        colored_delta = if delta_tokens.negative?
+          pastel.cyan(delta_str)
+        else
+          pastel.decorate(delta_str, color_style, :dim)
+        end
         token_info << colored_delta
 
         # Cache status indicator (using theme)
@@ -601,38 +605,47 @@ module Clacky
         all_lines = diff.to_s(:color).lines
         plain_lines = diff.to_s.lines
 
-        # Add line numbers to diff output
+        old_lines = old_content.lines
+        new_lines = new_content.lines
+
+        # Find starting line numbers by searching for the first context line in old content
+        first_context_line = plain_lines.find { |l| l.start_with?(' ') }
         old_line_num = 0
         new_line_num = 0
 
-        numbered_lines = all_lines.each_with_index.map do |line, index|
-          # Use plain text to detect line type (remove ANSI codes)
-          plain_line = plain_lines[index]&.chomp || line.gsub(/\e\[[0-9;]*m/, '').chomp
+        if first_context_line
+          context_text = first_context_line.chomp
+          # Find the context line in old content to get starting position
+          old_idx = old_lines.index { |l| l.chomp == context_text }
+          old_line_num = old_idx + 1 if old_idx
+          new_line_num = old_line_num
+        end
 
-          # Remove trailing newline from colored line to avoid double newlines
-          colored_line = line.chomp
+        # Process each diff line and calculate line numbers
+        numbered_lines = plain_lines.take(max_lines).each_with_index.map do |plain_line, index|
+          colored_line = all_lines[index].chomp
 
-          # Determine line type and number (use single line number for simplicity)
-          if plain_line.start_with?('+') || plain_line.start_with?('-') || plain_line.start_with?(' ')
+          case plain_line.chomp
+          when /^ / # Context line - appears in both files
+            old_line_num += 1
             new_line_num += 1
             sprintf("%4d | %s", new_line_num, colored_line)
-          elsif plain_line.start_with?('@@')
-            # Diff header: extract line numbers from @@ -old_start,old_count +new_start,new_count @@
-            if plain_line =~ /@@ -(\d+)(?:,\d+)? (\d+)(?:,\d+)? @@/
-              new_line_num = $2.to_i - 1
-            end
-            sprintf("%4s | %s", "", colored_line)
+          when /^-/ # Deletion - only in old file
+            old_line_num += 1
+            sprintf("%4d | %s", old_line_num, colored_line)
+          when /^/ # Addition - only in new file
+            new_line_num += 1
+            sprintf("%4d | %s", new_line_num, colored_line)
           else
-            # Other lines (headers, etc.)
+            # Headers or other lines
             sprintf("%4s | %s", "", colored_line)
           end
         end
 
-        display_lines = numbered_lines.first(max_lines)
-        display_lines.each { |line| append_output(line) }
+        numbered_lines&.each { |line| append_output(line) }
 
-        if all_lines.size > max_lines
-          append_output("\n... (#{all_lines.size - max_lines} more lines, diff truncated)")
+        if plain_lines.size > max_lines
+          append_output("\n... (#{plain_lines.size - max_lines} more lines, diff truncated)")
         end
       rescue LoadError
         # Fallback if diffy is not available

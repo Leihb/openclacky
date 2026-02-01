@@ -96,8 +96,12 @@ module Clacky
         width = screen.width
         wrap_row, wrap_col = inline_input.cursor_position_with_wrap(prompt, width)
 
-        # InlineInput is on the last output line, plus any wrapped rows
-        cursor_row = @output_row - 1 + wrap_row
+        # Get the number of lines InlineInput occupies (considering wrapping)
+        line_count = inline_input.line_count(width)
+
+        # InlineInput starts at @output_row - line_count
+        # Cursor is at wrap_row within that
+        cursor_row = @output_row - line_count + wrap_row
         cursor_col = wrap_col
 
         # Move terminal cursor to the correct position
