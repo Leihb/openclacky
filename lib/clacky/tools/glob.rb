@@ -62,8 +62,12 @@ module Clacky
             ignored: 0
           }
 
-          # Change to base path and find matches
-          full_pattern = File.join(base_path, pattern)
+          # Build full pattern - handle absolute paths correctly
+          full_pattern = if File.absolute_path?(pattern)
+                          pattern
+                        else
+                          File.join(base_path, pattern)
+                        end
           all_matches = Dir.glob(full_pattern, File::FNM_DOTMATCH)
                            .reject { |path| File.directory?(path) }
                            .reject { |path| path.end_with?(".", "..") }
