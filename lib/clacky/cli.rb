@@ -62,6 +62,13 @@ module Clacky
       end
       config = Clacky::Config.load
 
+      # Show message when using ClaudeCode environment variables
+      if config.config_source == "claude_code"
+        say "🔑 Using API key from ClaudeCode environment variables", :cyan
+        say "   (#{config.base_url})", :white
+        say ""
+      end
+
       unless config.api_key
         say "Error: API key not found. Please run 'clacky config set' first.", :red
         exit 1
@@ -750,14 +757,14 @@ module Clacky
             # Save final session state before exit
             if session_manager && agent.total_tasks > 0
               session_data = agent.to_session_data(status: :exited)
-              session_manager.save(session_data)
+              saved_path = session_manager.save(session_data)
 
               # Show session saved message in output area (before stopping UI)
               session_id = session_data[:session_id][0..7]
               ui_controller.append_output("")
               ui_controller.append_output("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
               ui_controller.append_output("")
-              ui_controller.append_output("Session saved: #{session_id}")
+              ui_controller.append_output("Session saved: #{saved_path}")
               ui_controller.append_output("Tasks completed: #{agent.total_tasks}")
               ui_controller.append_output("Total cost: $#{agent.total_cost.round(4)}")
               ui_controller.append_output("")
@@ -868,11 +875,6 @@ module Clacky
         if session_manager && agent.total_tasks > 0
           session_manager.save(agent.to_session_data)
         end
-
-        # Show goodbye message
-        say "\n👋 Goodbye! Session stats:", :green
-        say "   Tasks completed: #{agent.total_tasks}", :cyan
-        say "   Total cost: $#{agent.total_cost.round(4)}", :cyan
       end
 
     end

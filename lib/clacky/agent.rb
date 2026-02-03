@@ -226,6 +226,17 @@ module Clacky
           # Check if done (no more tool calls needed)
           if response[:finish_reason] == "stop" || response[:tool_calls].nil? || response[:tool_calls].empty?
             @ui&.show_assistant_message(response[:content]) if response[:content] && !response[:content].empty?
+
+            # Debug: log why we're stopping
+            if @config.verbose && (response[:tool_calls].nil? || response[:tool_calls].empty?)
+              reason = response[:finish_reason] == "stop" ? "API returned finish_reason=stop" : "No tool calls in response"
+              @ui&.log("Stopping: #{reason}", level: :debug)
+              if response[:content] && response[:content].is_a?(String)
+                preview = response[:content].length > 200 ? response[:content][0...200] + "..." : response[:content]
+                @ui&.log("Response content: #{preview}", level: :debug)
+              end
+            end
+
             break
           end
 
@@ -552,7 +563,7 @@ module Clacky
           retry
         else
           @ui&.show_error("Network failed after #{max_retries} retries: #{e.message}")
-          raise Error, "Network connection failed after #{max_retries} retries: #{e.message}"
+          raise AgentError, "Network connection failed after #{max_retries} retries: #{e.message}"
         end
       end
 
@@ -616,7 +627,10 @@ module Clacky
       # Always include content field (some APIs require it even with tool_calls)
       # Use empty string instead of null for better compatibility
       msg[:content] = response[:content] || ""
-      msg[:tool_calls] = format_tool_calls_for_api(response[:tool_calls]) if response[:tool_calls]
+      # Only add tool_calls if they actually exist (don't add empty arrays)
+      if response[:tool_calls]&.any?
+        msg[:tool_calls] = format_tool_calls_for_api(response[:tool_calls])
+      end
       @messages << msg
 
       response
@@ -724,10 +738,11 @@ module Clacky
             error_message: e.message,
             backtrace: e.backtrace&.first(20) # Keep first 20 lines of backtrace
           }
-          
+
           @hooks.trigger(:on_tool_error, call, e)
           @ui&.show_tool_error(e)
-          results << build_error_result(call, e.message)
+          # Use build_denied_result with system_injected=true so LLM knows it can retry
+          results << build_denied_result(call, e.message, true)
         end
       end
 
@@ -740,35 +755,11 @@ module Clacky
 
     def observe(response, tool_results)
       # Add tool results as messages
-      # Using OpenAI format which is compatible with most APIs through LiteLLM
-
-      # CRITICAL: Tool results must be in the same order as tool_calls in the response
-      # Claude/Bedrock API requires this strict ordering
+      # Use Client to format results based on API type (Anthropic vs OpenAI)
       return if tool_results.empty?
 
-      # Create a map of tool_call_id -> result for quick lookup
-      results_map = tool_results.each_with_object({}) do |result, hash|
-        hash[result[:id]] = result
-      end
-
-      # Add results in the same order as the original tool_calls
-      response[:tool_calls].each do |tool_call|
-        result = results_map[tool_call[:id]]
-        if result
-          @messages << {
-            role: "tool",
-            tool_call_id: result[:id],
-            content: result[:content]
-          }
-        else
-          # This shouldn't happen, but add a fallback error result
-          @messages << {
-            role: "tool",
-            tool_call_id: tool_call[:id],
-            content: JSON.generate({ error: "Tool result missing" })
-          }
-        end
-      end
+      formatted_messages = @client.format_tool_results(response, tool_results, model: @config.model)
+      formatted_messages.each { |msg| @messages << msg }
     end
 
     # Interrupt the agent's current run
