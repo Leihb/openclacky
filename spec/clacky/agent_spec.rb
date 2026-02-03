@@ -33,6 +33,26 @@ RSpec.describe Clacky::Agent do
     before do
       allow(client).to receive(:send_messages_with_tools)
         .and_return(tool_call_response, final_response)
+
+      # Mock the format_tool_results method
+      allow(client).to receive(:format_tool_results) do |response, tool_results, model:|
+        response[:tool_calls].map do |call|
+          result = tool_results.find { |r| r[:id] == call[:id] }
+          if result
+            {
+              role: "tool",
+              tool_call_id: call[:id],
+              content: result[:content]
+            }
+          else
+            {
+              role: "tool",
+              tool_call_id: call[:id],
+              content: JSON.generate({ error: "Tool result missing" })
+            }
+          end
+        end
+      end
     end
 
     it "executes Think-Act-Observe loop" do
@@ -76,6 +96,27 @@ RSpec.describe Clacky::Agent do
 
   describe "#observe" do
     it "maintains tool results in same order as tool_calls" do
+      # Mock the format_tool_results method
+      allow(client).to receive(:format_tool_results) do |response, tool_results, model:|
+        # Simulate OpenAI format output
+        response[:tool_calls].map do |call|
+          result = tool_results.find { |r| r[:id] == call[:id] }
+          if result
+            {
+              role: "tool",
+              tool_call_id: call[:id],
+              content: result[:content]
+            }
+          else
+            {
+              role: "tool",
+              tool_call_id: call[:id],
+              content: JSON.generate({ error: "Tool result missing" })
+            }
+          end
+        end
+      end
+
       # Simulate a response with multiple tool calls
       response = {
         tool_calls: [
@@ -107,6 +148,26 @@ RSpec.describe Clacky::Agent do
     end
 
     it "handles missing tool results with error fallback" do
+      # Mock the format_tool_results method
+      allow(client).to receive(:format_tool_results) do |response, tool_results, model:|
+        response[:tool_calls].map do |call|
+          result = tool_results.find { |r| r[:id] == call[:id] }
+          if result
+            {
+              role: "tool",
+              tool_call_id: call[:id],
+              content: result[:content]
+            }
+          else
+            {
+              role: "tool",
+              tool_call_id: call[:id],
+              content: JSON.generate({ error: "Tool result missing" })
+            }
+          end
+        end
+      end
+
       response = {
         tool_calls: [
           { id: "call_1", type: "function", function: { name: "tool_a", arguments: "{}" } },
@@ -127,7 +188,7 @@ RSpec.describe Clacky::Agent do
       expect(tool_messages.size).to eq(2)
       expect(tool_messages[0][:tool_call_id]).to eq("call_1")
       expect(tool_messages[1][:tool_call_id]).to eq("call_2")
-      
+
       # Second message should be an error
       error_content = JSON.parse(tool_messages[1][:content])
       expect(error_content["error"]).to eq("Tool result missing")

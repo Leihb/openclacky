@@ -9,7 +9,11 @@ RSpec.describe Clacky do
     expect(Clacky).to be_a(Module)
   end
 
-  it "defines the Error class" do
-    expect(Clacky::Error).to be < StandardError
+  it "defines the AgentError class" do
+    expect(Clacky::AgentError).to be < StandardError
+  end
+
+  it "defines the ToolCallError class" do
+    expect(Clacky::ToolCallError).to be < Clacky::AgentError
   end
 end

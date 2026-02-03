@@ -174,7 +174,7 @@ RSpec.describe Clacky::SkillLoader do
 
       expect do
         loader.create_skill("Invalid Name!", "content", "desc")
-      end.to raise_error(Clacky::Error, /Invalid skill name/)
+      end.to raise_error(Clacky::AgentError, /Invalid skill name/)
     end
   end
 

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "climate_control"
+
 module TestHelpers
   # Capture stdout and stderr output
   def capture_output
@@ -25,6 +27,11 @@ module TestHelpers
 
       yield config_file
     end
+  end
+
+  # Modify environment variables for testing
+  def with_env(env_vars)
+    ClimateControl.modify(env_vars) { yield }
   end
 
   # Mock API response for testing

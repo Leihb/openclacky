@@ -3,6 +3,7 @@
 require "clacky"
 require "tmpdir"
 require "fileutils"
+require "climate_control"
 require_relative "support/test_helpers"
 
 RSpec.configure do |config|
