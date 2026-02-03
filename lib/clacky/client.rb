@@ -8,56 +8,174 @@ module Clacky
     MAX_RETRIES = 10
     RETRY_DELAY = 5 # seconds
 
-    def initialize(api_key, base_url:)
+    def initialize(api_key, base_url:, model: nil)
       @api_key = api_key
       @base_url = base_url
+      @model = model
+    end
+
+    # Check if using Anthropic API format
+    # Returns true if:
+    # - Base URL contains "anthropic" (for direct Anthropic API)
+    # - Base URL contains "claude" (for compatible APIs like hongmacc.com)
+    # - Model name contains "claude" (for explicit Claude models)
+    def anthropic_format?(model = nil)
+      base_url_lower = @base_url.to_s.downcase
+
+      # Check base_url for Anthropic indicators first
+      if base_url_lower.include?("anthropic")
+        return true
+      end
+      if base_url_lower.include?("claude")
+        return true
+      end
+
+      # Fallback to model name check
+      model ||= @model
+      return false if model.nil?
+      model.to_s.downcase.include?("claude")
     end
 
     def send_message(content, model:, max_tokens:)
-      response = connection.post("chat/completions") do |req|
-        req.body = {
-          model: model,
-          max_tokens: max_tokens,
-          messages: [
-            {
-              role: "user",
-              content: content
-            }
-          ]
-        }.to_json
+      if anthropic_format?(model)
+        response = anthropic_connection.post("v1/messages") do |req|
+          req.body = {
+            model: model,
+            max_tokens: max_tokens,
+            messages: [
+              {
+                role: "user",
+                content: content
+              }
+            ]
+          }.to_json
+        end
+        handle_anthropic_simple_response(response)
+      else
+        response = openai_connection.post("chat/completions") do |req|
+          req.body = {
+            model: model,
+            max_tokens: max_tokens,
+            messages: [
+              {
+                role: "user",
+                content: content
+              }
+            ]
+          }.to_json
+        end
+        handle_response(response)
       end
-
-      handle_response(response)
     end
 
     def send_messages(messages, model:, max_tokens:)
-      response = connection.post("chat/completions") do |req|
-        req.body = {
-          model: model,
-          max_tokens: max_tokens,
-          messages: messages
-        }.to_json
-      end
+      if anthropic_format?(model)
+        # Convert to Anthropic format
+        body = build_anthropic_body(messages, model, [], max_tokens, false)
+        response = anthropic_connection.post("v1/messages") do |req|
+          req.body = body.to_json
+        end
+        handle_anthropic_simple_response(response)
+      else
+        response = openai_connection.post("chat/completions") do |req|
+          req.body = {
+            model: model,
+            max_tokens: max_tokens,
+            messages: messages
+          }.to_json
+        end
 
-      handle_response(response)
+        handle_response(response)
+      end
     end
 
     # Send messages with function calling (tools) support
     # Options:
     #   - enable_caching: Enable prompt caching for system prompt and tools (default: false)
     def send_messages_with_tools(messages, model:, tools:, max_tokens:, enable_caching: false)
-      # Apply caching to messages if enabled
-      caching_supported = supports_prompt_caching?(model)
-      caching_enabled = enable_caching && caching_supported
+      # Auto-detect API format based on model name and base_url
+      is_anthropic = anthropic_format?(model)
 
       # Deep clone messages to avoid modifying the original array
       processed_messages = messages.map { |msg| deep_clone(msg) }
 
-      # Add cache control to messages if caching is enabled
-      # Strategy: Cache system prompt and first user message for stable prefix caching
-      if caching_enabled
-        processed_messages = apply_message_caching(processed_messages)
+      # Apply caching if enabled and supported
+      caching_supported = supports_prompt_caching?(model)
+      caching_enabled = enable_caching && caching_supported
+
+      if is_anthropic
+        send_anthropic_request(processed_messages, model, tools, max_tokens, caching_enabled)
+      else
+        send_openai_request(processed_messages, model, tools, max_tokens, caching_enabled)
       end
+    end
+
+    # Format tool results based on API type
+    # Anthropic API: tool results go in user message content array
+    # OpenAI API: tool results are separate messages with role: "tool"
+    def format_tool_results(response, tool_results, model:)
+      return [] if tool_results.empty?
+
+      is_anthropic = anthropic_format?(model)
+
+      # Create a map of tool_call_id -> result for quick lookup
+      results_map = tool_results.each_with_object({}) do |result, hash|
+        hash[result[:id]] = result
+      end
+
+      if is_anthropic
+        # Anthropic format: tool results in user message content array
+        tool_result_blocks = response[:tool_calls].map do |tool_call|
+          result = results_map[tool_call[:id]]
+          if result
+            {
+              type: "tool_result",
+              tool_use_id: tool_call[:id],
+              content: result[:content]
+            }
+          else
+            {
+              type: "tool_result",
+              tool_use_id: tool_call[:id],
+              content: JSON.generate({ error: "Tool result missing" })
+            }
+          end
+        end
+
+        # Return as a user message
+        [
+          {
+            role: "user",
+            content: tool_result_blocks
+          }
+        ]
+      else
+        # OpenAI format: tool results as separate messages
+        response[:tool_calls].map do |tool_call|
+          result = results_map[tool_call[:id]]
+          if result
+            {
+              role: "tool",
+              tool_call_id: result[:id],
+              content: result[:content]
+            }
+          else
+            {
+              role: "tool",
+              tool_call_id: tool_call[:id],
+              content: JSON.generate({ error: "Tool result missing" })
+            }
+          end
+        end
+      end
+    end
+
+    private
+
+    # Send request using OpenAI API format
+    def send_openai_request(messages, model, tools, max_tokens, caching_enabled)
+      # Apply caching to messages if enabled
+      processed_messages = caching_enabled ? apply_message_caching(messages) : messages
 
       body = {
         model: model,
@@ -66,15 +184,9 @@ module Clacky
       }
 
       # Add tools if provided
-      # For Claude API with caching: mark the last tool definition with cache_control
       if tools&.any?
-        caching_supported = supports_prompt_caching?(model)
-        caching_enabled = enable_caching && caching_supported
-
         if caching_enabled
-          # Deep clone tools to avoid modifying original
           cached_tools = tools.map { |tool| deep_clone(tool) }
-          # Mark the last tool for caching (Claude caches from cache breakpoint to end)
           cached_tools.last[:cache_control] = { type: "ephemeral" }
           body[:tools] = cached_tools
         else
@@ -86,17 +198,309 @@ module Clacky
       if ENV['CLACKY_DEBUG_REQUEST']
         debug_file = "/tmp/clacky_request_#{Time.now.to_i}.json"
         File.write(debug_file, JSON.pretty_generate(body))
-        puts "DEBUG: Request saved to #{debug_file}"
       end
 
-      response = connection.post("chat/completions") do |req|
+      response = openai_connection.post("chat/completions") do |req|
         req.body = body.to_json
       end
 
       handle_tool_response(response)
     end
 
-    private
+    # Send request using Anthropic API format
+    def send_anthropic_request(messages, model, tools, max_tokens, caching_enabled)
+      # Convert OpenAI message format to Anthropic format
+      body = build_anthropic_body(messages, model, tools, max_tokens, caching_enabled)
+
+      # DEBUG: Always save request body
+      debug_file = "/tmp/clacky_request_body.json"
+      File.write(debug_file, JSON.pretty_generate(body))
+
+      response = anthropic_connection.post("v1/messages") do |req|
+        req.body = body.to_json
+      end
+
+      # Debug response
+      if ENV['CLACKY_DEBUG_REQUEST']
+        timestamp = Time.now.to_i
+        File.write("/tmp/clacky_debug_#{timestamp}.txt", "URL = #{@base_url}/v1/messages\n")
+        File.write("/tmp/clacky_debug_#{timestamp}.txt", "API Key = #{@api_key[0..10]}...\n")
+        File.write("/tmp/clacky_debug_#{timestamp}.txt", "Headers = #{anthropic_connection.headers.inspect}\n")
+        File.open("/tmp/clacky_debug_#{timestamp}.txt", "a") do |f|
+          f.puts "Response status = #{response.status}"
+          f.puts "Response body = #{response.body}"
+        end
+      end
+
+      handle_anthropic_response(response)
+    end
+
+    # Build request body in Anthropic format
+    def build_anthropic_body(messages, model, tools, max_tokens, caching_enabled)
+      # Separate system messages from regular messages
+      system_messages = messages.select { |m| m[:role] == "system" }
+      regular_messages = messages.reject { |m| m[:role] == "system" }
+
+      # Build system for Anthropic - use string format which is most compatible
+      system = if system_messages.any?
+        system_messages.map do |msg|
+          content = msg[:content]
+          if content.is_a?(String)
+            content
+          elsif content.is_a?(Array)
+            content.map { |block| block.is_a?(Hash) ? (block[:text] || block.dig(:text) || "") : block.to_s }.compact.join("\n")
+          else
+            content.to_s
+          end
+        end.join("\n\n")
+      else
+        ""
+      end
+
+      # Convert regular messages to Anthropic format
+      anthropic_messages = regular_messages.map { |msg| convert_to_anthropic_message(msg, caching_enabled) }
+
+      # Convert tools to Anthropic format
+      anthropic_tools = tools&.map { |tool| convert_to_anthropic_tool(tool, caching_enabled) }
+
+      # Add cache_control to last tool if caching is enabled
+      if caching_enabled && anthropic_tools&.any?
+        anthropic_tools.last[:cache_control] = { type: "ephemeral" }
+      end
+
+      # DEBUG: Log tools transformation
+      debug_file = "/tmp/clacky_tools_debug.txt"
+      File.write(debug_file, "Tools Debug:\n")
+      File.write(debug_file, "Input tools count: #{tools&.length || 0}\n", mode: "a")
+      File.write(debug_file, "Anthropic tools count: #{anthropic_tools&.length || 0}\n", mode: "a")
+      if tools&.any?
+        File.write(debug_file, "First input tool: #{JSON.pretty_generate(tools.first)}\n", mode: "a")
+      end
+      if anthropic_tools&.any?
+        File.write(debug_file, "First anthropic tool: #{JSON.pretty_generate(anthropic_tools.first)}\n", mode: "a")
+      end
+
+      body = {
+        model: model,
+        max_tokens: max_tokens,
+        messages: anthropic_messages
+      }
+
+      # Only include system if it's not empty
+      body[:system] = system if system && !system.empty?
+
+      body[:tools] = anthropic_tools if anthropic_tools&.any?
+
+      # DEBUG: Log final body
+      File.write(debug_file, "Body has tools: #{body.key?(:tools)}\n", mode: "a")
+      File.write(debug_file, "Body tools count: #{body[:tools]&.length || 0}\n", mode: "a")
+
+      body
+    end
+
+    # Convert a message to Anthropic format
+    def convert_to_anthropic_message(message, caching_enabled)
+      role = message[:role]
+      content = message[:content]
+      tool_calls = message[:tool_calls]
+
+      # For assistant messages with tool_calls, convert tool_calls to content blocks
+      if role == "assistant" && tool_calls && tool_calls.any?
+        # Build content blocks from both content and tool_calls
+        blocks = []
+
+        # Add text content first
+        if content.is_a?(String) && !content.empty?
+          blocks << { type: "text", text: content }
+        elsif content.is_a?(Array)
+          blocks.concat(content.map do |block|
+            case block[:type]
+            when "text"
+              { type: "text", text: block[:text] }
+            when "image_url"
+              url = block.dig(:image_url, :url) || block[:url]
+              if url&.start_with?("data:")
+                match = url.match(/^data:([^;]+);base64,(.*)$/)
+                if match
+                  { type: "image", source: { type: "base64", media_type: match[1], data: match[2] } }
+                else
+                  { type: "image", source: { type: "url", url: url } }
+                end
+              else
+                { type: "image", source: { type: "url", url: url } }
+              end
+            else
+              block
+            end
+          end)
+        end
+
+        # Add tool_use blocks
+        tool_calls.each do |call|
+          # Handle both OpenAI format (with function key) and direct format
+          if call[:function]
+            # OpenAI format
+            tool_use_block = {
+              type: "tool_use",
+              id: call[:id],
+              name: call[:function][:name],
+              input: call[:function][:arguments].is_a?(String) ? JSON.parse(call[:function][:arguments]) : call[:function][:arguments]
+            }
+          else
+            # Direct format
+            tool_use_block = {
+              type: "tool_use",
+              id: call[:id],
+              name: call[:name],
+              input: call[:arguments].is_a?(String) ? JSON.parse(call[:arguments]) : call[:arguments]
+            }
+          end
+          blocks << tool_use_block
+        end
+
+        return { role: role, content: blocks }
+      end
+
+      # Convert string content to array format
+      if content.is_a?(String)
+        return { role: role, content: [{ type: "text", text: content }] }
+      end
+
+      # Handle array content (already in some format)
+      if content.is_a?(Array)
+        blocks = content.map do |block|
+          case block[:type]
+          when "text"
+            { type: "text", text: block[:text] }
+          when "image_url"
+            url = block.dig(:image_url, :url) || block[:url]
+            if url&.start_with?("data:")
+              match = url.match(/^data:([^;]+);base64,(.*)$/)
+              if match
+                { type: "image", source: { type: "base64", media_type: match[1], data: match[2] } }
+              else
+                { type: "image", source: { type: "url", url: url } }
+              end
+            else
+              { type: "image", source: { type: "url", url: url } }
+            end
+          else
+            block
+          end
+        end
+        return { role: role, content: blocks }
+      end
+
+      { role: role, content: message[:content] }
+    end
+
+    # Convert a tool to Anthropic format
+    # Handles both OpenAI format (with nested function key) and direct format
+    def convert_to_anthropic_tool(tool, caching_enabled)
+      # Handle OpenAI format from to_function_definition
+      func = tool[:function] || tool
+      {
+        name: func[:name],
+        description: func[:description],
+        input_schema: func[:parameters]
+      }
+    end
+
+    # Handle Anthropic API response
+    def handle_anthropic_response(response)
+      case response.status
+      when 200
+        data = JSON.parse(response.body)
+        content_blocks = data["content"] || []
+        usage = data["usage"] || {}
+
+        # Extract content
+        content = content_blocks.select { |b| b["type"] == "text" }.map { |b| b["text"] }.join("")
+
+        # Extract tool calls
+        tool_calls = content_blocks.select { |b| b["type"] == "tool_use" }.map do |tc|
+          {
+            id: tc["id"],
+            type: "function",
+            name: tc["name"],
+            arguments: tc["input"].is_a?(String) ? tc["input"] : tc["input"].to_json
+          }
+        end
+
+        # DEBUG: Log what we got
+        debug_file = "/tmp/clacky_anthropic_response.txt"
+        File.write(debug_file, "Response Analysis:\n")
+        File.write(debug_file, "content_blocks count: #{content_blocks.length}\n", mode: "a")
+        File.write(debug_file, "content_block types: #{content_blocks.map { |b| b["type"] }.inspect}\n", mode: "a")
+        File.write(debug_file, "tool_use blocks found: #{content_blocks.select { |b| b["type"] == "tool_use" }.length}\n", mode: "a")
+        File.write(debug_file, "extracted tool_calls: #{tool_calls.length}\n", mode: "a")
+        File.write(debug_file, "finish_reason (raw): #{data["stop_reason"]}\n", mode: "a")
+        File.write(debug_file, "Full content_blocks: #{JSON.pretty_generate(content_blocks)}\n", mode: "a")
+
+        # Parse finish reason
+        finish_reason = case data["stop_reason"]
+        when "end_turn" then "stop"
+        when "tool_use" then "tool_calls"
+        when "max_tokens" then "length"
+        else data["stop_reason"]
+        end
+
+        # Build usage data
+        usage_data = {
+          prompt_tokens: usage["input_tokens"],
+          completion_tokens: usage["output_tokens"],
+          total_tokens: usage["input_tokens"].to_i + usage["output_tokens"].to_i
+        }
+
+        # Add cache metrics if present
+        if usage["cache_read_input_tokens"]
+          usage_data[:cache_read_input_tokens] = usage["cache_read_input_tokens"]
+        end
+        if usage["cache_creation_input_tokens"]
+          usage_data[:cache_creation_input_tokens] = usage["cache_creation_input_tokens"]
+        end
+
+        {
+          content: content,
+          tool_calls: tool_calls,
+          finish_reason: finish_reason,
+          usage: usage_data,
+          raw_api_usage: usage
+        }
+      else
+        raise_error(response)
+      end
+    end
+
+    # Handle simple Anthropic response (without tool calls)
+    def handle_anthropic_simple_response(response)
+      case response.status
+      when 200
+        data = JSON.parse(response.body)
+        content_blocks = data["content"] || []
+        usage = data["usage"] || {}
+
+        # Extract text content
+        content = content_blocks.select { |b| b["type"] == "text" }.map { |b| b["text"] }.join("")
+
+        # Build usage data
+        usage_data = {
+          prompt_tokens: usage["input_tokens"],
+          completion_tokens: usage["output_tokens"],
+          total_tokens: usage["input_tokens"].to_i + usage["output_tokens"].to_i
+        }
+
+        {
+          content: content,
+          tool_calls: [],
+          finish_reason: "stop",
+          usage: usage_data,
+          raw_api_usage: usage
+        }
+      else
+        raise_error(response)
+      end
+    end
 
     # Check if the model supports prompt caching
     # Currently only Claude 3.5+ models support this feature
@@ -180,12 +584,26 @@ module Clacky
       end
     end
 
-    def connection
-      @connection ||= Faraday.new(url: @base_url) do |conn|
+    # Connection for OpenAI API format (uses Bearer token)
+    def openai_connection
+      @openai_connection ||= Faraday.new(url: @base_url) do |conn|
         conn.headers["Content-Type"] = "application/json"
         conn.headers["Authorization"] = "Bearer #{@api_key}"
-        conn.options.timeout = 120  # Read timeout in seconds
-        conn.options.open_timeout = 10  # Connection timeout in seconds
+        conn.options.timeout = 120
+        conn.options.open_timeout = 10
+        conn.adapter Faraday.default_adapter
+      end
+    end
+
+    # Connection for Anthropic API format (uses x-api-key header)
+    def anthropic_connection
+      @anthropic_connection ||= Faraday.new(url: @base_url) do |conn|
+        conn.headers["Content-Type"] = "application/json"
+        conn.headers["x-api-key"] = @api_key
+        conn.headers["anthropic-version"] = "2023-06-01"
+        conn.headers["anthropic-dangerous-direct-browser-access"] = "true"
+        conn.options.timeout = 120
+        conn.options.open_timeout = 10
         conn.adapter Faraday.default_adapter
       end
     end
@@ -195,14 +613,8 @@ module Clacky
       when 200
         data = JSON.parse(response.body)
         data["choices"].first["message"]["content"]
-      when 401
-        raise Error, "Invalid API key"
-      when 429
-        raise Error, "Rate limit exceeded"
-      when 500..599
-        raise Error, "Server error: #{response.status}"
       else
-        raise Error, "Unexpected error: #{response.status} - #{response.body}"
+        raise_error(response)
       end
     end
 
@@ -254,19 +666,68 @@ module Clacky
           usage: usage_data,
           raw_api_usage: raw_api_usage
         }
-      when 401
-        raise Error, "Invalid API key"
-      when 429
-        raise Error, "Rate limit exceeded"
-      when 500..599
-        error_body = begin
-          JSON.parse(response.body)
-        rescue JSON::ParserError
-          response.body
-        end
-        raise Error, "Server error: #{response.status}\nResponse: #{error_body.inspect}"
       else
-        raise Error, "Unexpected error: #{response.status} - #{response.body}"
+        raise_error(response)
+      end
+    end
+
+    private
+
+    def raise_error(response)
+      # Try to parse error body as JSON for better error messages
+      error_body = begin
+        JSON.parse(response.body)
+      rescue JSON::ParserError
+        nil
+      end
+
+      # Extract meaningful error message from response
+      error_message = extract_error_message(error_body, response.body)
+
+      case response.status
+      when 400
+        # Bad request - could be invalid model, quota exceeded, etc.
+        hint = if error_message.downcase.include?("unavailable") || error_message.downcase.include?("quota")
+          " (possibly out of credits)"
+        else
+          ""
+        end
+        raise AgentError, "API request failed (400): #{error_message}#{hint}"
+      when 401
+        raise AgentError, "Invalid API key"
+      when 403
+        raise AgentError, "Access denied: #{error_message}"
+      when 404
+        raise AgentError, "API endpoint not found: #{error_message}"
+      when 429
+        raise AgentError, "Rate limit exceeded"
+      when 500..599
+        raise AgentError, "Server error (#{response.status}): #{error_message}"
+      else
+        raise AgentError, "Unexpected error (#{response.status}): #{error_message}"
+      end
+    end
+
+    # Extract the most meaningful error message from API response
+    private def extract_error_message(error_body, raw_body)
+      return raw_body unless error_body.is_a?(Hash)
+
+      # Priority order for error messages:
+      # 1. upstreamMessage (often contains the real reason)
+      # 2. error.message (Anthropic format)
+      # 3. message
+      # 4. error (string)
+      # 5. raw body
+      if error_body["upstreamMessage"] && !error_body["upstreamMessage"].empty?
+        error_body["upstreamMessage"]
+      elsif error_body.dig("error", "message")
+        error_body.dig("error", "message")
+      elsif error_body["message"]
+        error_body["message"]
+      elsif error_body["error"].is_a?(String)
+        error_body["error"]
+      else
+        raw_body
       end
     end
 
