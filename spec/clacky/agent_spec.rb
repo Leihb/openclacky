@@ -676,4 +676,107 @@ RSpec.describe Clacky::Agent do
       expect(assistant_messages.last[:content]).to include("break it down into smaller steps")
     end
   end
+
+  describe "#inject_todo_reminder" do
+    let(:todo_tool) { instance_double(Clacky::Tools::TodoManager) }
+    
+    before do
+      allow(agent.instance_variable_get(:@tool_registry)).to receive(:get)
+        .with("todo_manager").and_return(todo_tool)
+    end
+
+    context "when there are pending TODOs" do
+      before do
+        allow(todo_tool).to receive(:execute).with(action: "list", todos_storage: anything).and_return({
+          todos: [
+            { id: 1, task: "Task 1", status: "pending" },
+            { id: 2, task: "Task 2", status: "completed" },
+            { id: 3, task: "Task 3", status: "pending" }
+          ]
+        })
+      end
+
+      it "injects reminder into string result" do
+        result = agent.send(:inject_todo_reminder, "safe_shell", "Command executed successfully")
+        
+        expect(result).to include("Command executed successfully")
+        expect(result).to include("📋 REMINDER")
+        expect(result).to include("2 pending TODO(s)")
+      end
+
+      it "injects reminder into hash result" do
+        result = agent.send(:inject_todo_reminder, "file_reader", { content: "file content" })
+        
+        expect(result[:content]).to eq("file content")
+        expect(result[:_todo_reminder]).to include("📋 REMINDER")
+        expect(result[:_todo_reminder]).to include("2 pending TODO(s)")
+      end
+
+      it "injects reminder into array result" do
+        result = agent.send(:inject_todo_reminder, "glob", ["file1.rb", "file2.rb"])
+        
+        expect(result[0..1]).to eq(["file1.rb", "file2.rb"])
+        expect(result.last).to be_a(Hash)
+        expect(result.last[:_todo_reminder]).to include("📋 REMINDER")
+      end
+    end
+
+    context "when there are no pending TODOs" do
+      before do
+        allow(todo_tool).to receive(:execute).with(action: "list", todos_storage: anything).and_return({
+          todos: [
+            { id: 1, task: "Task 1", status: "completed" },
+            { id: 2, task: "Task 2", status: "completed" }
+          ]
+        })
+      end
+
+      it "does not inject reminder" do
+        result = agent.send(:inject_todo_reminder, "safe_shell", "Command executed successfully")
+        
+        expect(result).to eq("Command executed successfully")
+        expect(result).not_to include("📋 REMINDER")
+      end
+    end
+
+    context "when tool is todo_manager" do
+      before do
+        allow(todo_tool).to receive(:execute).with(action: "list", todos_storage: anything).and_return({
+          todos: [{ id: 1, task: "Task 1", status: "pending" }]
+        })
+      end
+
+      it "skips injection to avoid redundancy" do
+        result = agent.send(:inject_todo_reminder, "todo_manager", { message: "TODO added" })
+        
+        expect(result).to eq({ message: "TODO added" })
+        expect(result[:_todo_reminder]).to be_nil
+      end
+    end
+
+    context "when todo_manager is not available" do
+      before do
+        allow(agent.instance_variable_get(:@tool_registry)).to receive(:get)
+          .with("todo_manager").and_return(nil)
+      end
+
+      it "returns result without modification" do
+        result = agent.send(:inject_todo_reminder, "safe_shell", "Command executed successfully")
+        
+        expect(result).to eq("Command executed successfully")
+      end
+    end
+
+    context "when todo_tool execution fails" do
+      before do
+        allow(todo_tool).to receive(:execute).and_raise(StandardError.new("Tool error"))
+      end
+
+      it "returns result without modification" do
+        result = agent.send(:inject_todo_reminder, "safe_shell", "Command executed successfully")
+        
+        expect(result).to eq("Command executed successfully")
+      end
+    end
+  end
 end
