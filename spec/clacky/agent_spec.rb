@@ -393,9 +393,6 @@ RSpec.describe Clacky::Agent do
     end
 
     it "compresses messages when threshold is exceeded" do
-      allow(client).to receive(:send_messages_with_tools)
-        .and_return(mock_api_response(content: "done"))
-
       # Add messages with enough content to exceed 80K token threshold
       # Each message needs ~1600 chars to reach ~400 tokens (4 chars/token)
       # 200 messages × 400 tokens = 80K tokens
@@ -415,7 +412,13 @@ RSpec.describe Clacky::Agent do
       # Verify we have enough tokens to trigger compression
       expect(initial_tokens).to be >= 80_000
 
-      compression_agent.send(:compress_messages_if_needed)
+      # Mock LLM response: first call is compression, returns compressed summary
+      allow(client).to receive(:send_messages_with_tools)
+        .and_return(mock_api_response(content: "<summary>Compressed history of all previous conversations</summary>"))
+
+      # Call think which will trigger and handle compression automatically
+      compression_agent.send(:think)
+
       final_count = compression_agent.instance_variable_get(:@messages).size
       final_tokens = compression_agent.send(:total_message_tokens)[:total]
 
@@ -522,9 +525,6 @@ RSpec.describe Clacky::Agent do
     end
 
     it "triggers compression when message count exceeds threshold even if tokens are below threshold" do
-      allow(client).to receive(:send_messages_with_tools)
-        .and_return(mock_api_response(content: "done"))
-
       messages = compression_agent.instance_variable_get(:@messages)
       messages << { role: "system", content: "System prompt" }
 
@@ -544,7 +544,13 @@ RSpec.describe Clacky::Agent do
       expect(initial_tokens).to be < 80_000
       expect(initial_count).to be >= 201
 
-      compression_agent.send(:compress_messages_if_needed)
+      # Mock LLM response: first call is compression, returns compressed summary
+      allow(client).to receive(:send_messages_with_tools)
+        .and_return(mock_api_response(content: "<summary>Compressed history of short messages</summary>"))
+
+      # Call think which will trigger and handle compression automatically
+      compression_agent.send(:think)
+
       final_count = compression_agent.instance_variable_get(:@messages).size
       final_tokens = compression_agent.send(:total_message_tokens)[:total]
 

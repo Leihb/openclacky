@@ -1,24 +1,24 @@
 # frozen_string_literal: true
 
 module Clacky
-  # Message compressor using LLM-based compression
+  # Message compressor using Insert-then-Compress strategy
   #
-  # Strategy: Uses LLM to intelligently compress conversation history while preserving
-  # critical information like technical decisions, code changes, error messages, and
-  # pending tasks. The compression prompt instructs the LLM to return a JSON array
-  # of compressed messages.
+  # New Strategy: Instead of creating a separate API call for compression,
+  # we insert a compression instruction into the current conversation flow.
+  # This allows us to reuse the existing cache (system prompt + tools) and
+  # only pay for processing the new compression instruction.
   #
-  # Usage:
-  #   compressor = MessageCompressor.new(client, model: "claude-3-5-sonnet")
-  #   compressed = compressor.compress(messages)
-  #   # => Array of compressed messages (system message + compressed conversation)
+  # Flow:
+  # 1. Agent detects compression threshold is reached
+  # 2. Compressor builds a compression instruction message
+  # 3. Agent inserts this message and calls LLM (with cache reuse!)
+  # 4. LLM returns compressed summary
+  # 5. Compressor rebuilds message list: system + summary + recent messages
+  # 6. Agent continues with new message list (cache will rebuild from here)
   #
-  # The compress method:
-  # 1. Preserves the system message
-  # 2. Formats all other messages as readable text
-  # 3. Sends to LLM with compression instructions
-  # 4. Parses the JSON response back into message objects
-  # 5. Returns [system_message, *compressed_messages]
+  # Benefits:
+  # - Compression call reuses existing cache (huge token savings)
+  # - Only one cache rebuild after compression (vs two with old approach)
   #
   class MessageCompressor
     COMPRESSION_PROMPT = <<~PROMPT.freeze
@@ -47,7 +47,7 @@ module Clacky
       - Errors encountered and fixes applied
       - Current work status and pending tasks
 
-      Begin your summary NOW. Remember: PURE TEXT response only, starting with <analysis> or <summary> tags."""
+      Begin your summary NOW. Remember: PURE TEXT response only, starting with <analysis> or <summary> tags.
     PROMPT
 
     def initialize(client, model: nil)
@@ -55,44 +55,36 @@ module Clacky
       @model = model
     end
 
-    # Compress messages using Insert-then-Compress strategy with LLM
+    # Generate compression instruction message to be inserted into conversation
+    # This enables cache reuse by using the same API call with tools
     # @param messages [Array<Hash>] Original conversation messages
     # @param recent_messages [Array<Hash>] Recent messages to keep uncompressed (optional)
-    # @return [Array<Hash>] Compressed messages
-    def compress(messages, recent_messages: [])
-      # Use LLM-based compression
-      llm_compress_messages(messages, recent_messages: recent_messages)
-    end
-
-    private
-
-    # Main LLM compression method
-    def llm_compress_messages(messages, recent_messages: [])
-      # Find and preserve system message
-      system_msg = messages.find { |m| m[:role] == "system" }
-
+    # @return [Hash] Compression instruction message to insert, or nil if nothing to compress
+    def build_compression_message(messages, recent_messages: [])
       # Get messages to compress (exclude system message and recent messages)
       messages_to_compress = messages.reject { |m| m[:role] == "system" || recent_messages.include?(m) }
 
-      # If nothing to compress, return original messages
-      return messages if messages_to_compress.empty?
+      # If nothing to compress, return nil
+      return nil if messages_to_compress.empty?
 
       # Build compression prompt with instruction and conversation
       content = build_compression_content(messages_to_compress)
       full_prompt = "#{COMPRESSION_PROMPT}\n\nConversation to compress:\n\n#{content}"
 
-      # Prepare messages array for LLM call
-      llm_messages = [{ role: "user", content: full_prompt }]
+      # Return the compression instruction as a user message
+      { role: "user", content: full_prompt }
+    end
 
-      # Call LLM to compress
-      response = @client.send_messages(
-        llm_messages,
-        model: @model,
-        max_tokens: 8192
-      )
+    # Parse LLM response and rebuild message list with compression
+    # @param compressed_content [String] The compressed summary from LLM
+    # @param original_messages [Array<Hash>] Original messages before compression
+    # @param recent_messages [Array<Hash>] Recent messages to preserve
+    # @return [Array<Hash>] Rebuilt message list: system + compressed + recent
+    def rebuild_with_compression(compressed_content, original_messages:, recent_messages:)
+      # Find and preserve system message
+      system_msg = original_messages.find { |m| m[:role] == "system" }
 
       # Parse the compressed result
-      compressed_content = response[:content]
       parsed_messages = parse_compressed_result(compressed_content)
 
       # If parsing fails or returns empty, raise error
@@ -103,6 +95,8 @@ module Clacky
       # Return system message + compressed messages + recent messages
       [system_msg, *parsed_messages, *recent_messages].compact
     end
+
+    private
 
     def build_compression_content(messages)
       # Format messages as readable text for compression
