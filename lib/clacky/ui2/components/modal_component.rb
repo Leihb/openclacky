@@ -23,11 +23,14 @@ module Clacky
         # Configure and show the modal
         # @param title [String] Modal title
         # @param fields [Array<Hash>] Field definitions
+        # @param validator [Proc, nil] Optional validation callback that receives values hash
+        #                              Should return { success: true } or { success: false, error: "message" }
         # @return [Hash, nil] Hash of field values, or nil if cancelled
-        def show(title:, fields:)
+        def show(title:, fields:, validator: nil)
           @title = title
           @fields = fields
           @values = {}
+          @error_message = nil
 
           # Get terminal size
           term_height, term_width = IO.console.winsize
@@ -37,24 +40,61 @@ module Clacky
           start_col = [(term_width - @width) / 2, 1].max
 
           begin
-            # Draw modal background and border
-            draw_modal(start_row, start_col)
+            loop do
+              # Draw modal background and border
+              draw_modal(start_row, start_col)
 
-            # Draw instructions
-            draw_buttons(start_row + @height - 3, start_col)
-            
-            # Collect input for each field
-            current_row = start_row + 3
-            @fields.each do |field|
-              value = collect_field_input(field, current_row, start_col)
-              return nil if value == :cancelled  # User pressed Esc
-              @values[field[:name]] = value
-              current_row += 2
+              # Draw error message if present
+              if @error_message
+                draw_error_message(start_row + @height - 5, start_col)
+              end
+
+              # Draw instructions
+              draw_buttons(start_row + @height - 3, start_col)
+              
+              # Collect input for each field
+              current_row = start_row + 3
+              @fields.each do |field|
+                value = collect_field_input(field, current_row, start_col)
+                if value == :cancelled
+                  print "\e[?25l"  # Hide cursor
+                  return nil  # User pressed Esc
+                end
+                @values[field[:name]] = value
+                current_row += 2
+              end
+
+              # All fields collected - validate if validator provided
+              if validator
+                # Show "Testing..." message
+                testing_row = start_row + @height - 5
+                testing_col = start_col + 3
+                print "\e[#{testing_row};#{testing_col}H\e[K"
+                print @pastel.cyan("⏳ Testing connection...")
+                STDOUT.flush
+                
+                validation_result = validator.call(@values)
+                
+                # Clear testing message
+                print "\e[#{testing_row};#{testing_col}H\e[K"
+                
+                if validation_result[:success]
+                  # Validation passed - hide cursor and return values
+                  print "\e[?25l"
+                  return @values
+                else
+                  # Validation failed - show error and loop again
+                  @error_message = validation_result[:error] || "Validation failed"
+                  # Clear modal to redraw with error
+                  clear_modal(start_row, start_col)
+                  sleep 1.5  # Give user time to read the error
+                end
+              else
+                # No validator - return immediately
+                print "\e[?25l"
+                return @values
+              end
             end
-
-            # All fields collected successfully - hide cursor
-            print "\e[?25l"
-            @values
           ensure
             # Clear modal area
             clear_modal(start_row, start_col)
@@ -188,6 +228,17 @@ module Clacky
               end
             end
           end
+        end
+
+        # Draw error message
+        private def draw_error_message(row, col)
+          max_width = @width - 6
+          # Truncate error message if too long
+          error_text = @error_message.length > max_width ? @error_message[0..max_width-4] + "..." : @error_message
+          error_col = col + 3
+          
+          formatted = @pastel.red("⚠ #{error_text}")
+          print "\e[#{row};#{error_col}H#{formatted}"
         end
 
         # Draw confirmation buttons

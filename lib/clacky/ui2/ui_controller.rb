@@ -851,7 +851,7 @@ module Clacky
       # Show configuration modal dialog
       # @param current_config [Clacky::Config] Current configuration object
       # @return [Hash, nil] Hash with updated config values, or nil if cancelled
-      public def show_config_modal(current_config)
+      public def show_config_modal(current_config, test_callback: nil)
         modal = Components::ModalComponent.new
 
         # Prepare masked API key for display
@@ -881,8 +881,24 @@ module Clacky
           }
         ]
 
+        # Create validator if test_callback provided
+        validator = if test_callback
+          lambda do |values|
+            # Merge values with current config
+            test_config = current_config.dup
+            test_config.api_key = values[:api_key] unless values[:api_key].to_s.empty?
+            test_config.model = values[:model] unless values[:model].to_s.empty?
+            test_config.base_url = values[:base_url] unless values[:base_url].to_s.empty?
+            
+            # Call the test callback with merged config
+            test_callback.call(test_config)
+          end
+        else
+          nil
+        end
+
         # Show modal and collect values
-        modal.show(title: "Configuration", fields: fields)
+        modal.show(title: "Configuration", fields: fields, validator: validator)
       end
     end
   end
