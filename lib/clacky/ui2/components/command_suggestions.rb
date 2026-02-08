@@ -189,8 +189,8 @@ module Clacky
             @filtered_commands = @commands.select do |cmd|
               # Remove leading / for comparison
               cmd_name = cmd[:command].sub(/^\//, "")
-              cmd_name.downcase.start_with?(filter_lower) ||
-                cmd[:description].downcase.include?(filter_lower)
+              # Only match command name, not description
+              cmd_name.downcase.start_with?(filter_lower)
             end
           end
         end
