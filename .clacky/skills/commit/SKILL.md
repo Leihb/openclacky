@@ -9,6 +9,17 @@ user-invocable: true
 
 This skill helps users create well-structured, semantic git commits by analyzing changes and suggesting appropriate commit messages.
 
+## ⚠️ CRITICAL REQUIREMENT: SINGLE-LINE COMMITS ONLY
+
+**ALL commit messages created by this skill MUST be single-line only.**
+
+- ✅ DO: `git commit -m "feat: add user authentication"`
+- ❌ DON'T: Multi-line commits with body text
+- ❌ DON'T: Multiple `-m` flags
+- ❌ DON'T: Commit messages with `\n` or additional paragraphs
+
+Keep commits concise and focused. If more detail is needed, suggest adding it separately in PR descriptions or documentation.
+
 ## Overview
 
 This skill automates the process of reviewing git changes and creating meaningful, conventional commits following the semantic commit format (feat/fix/chore/test).
@@ -62,12 +73,14 @@ Based on the analysis, generate commit messages following the conventional commi
 - `style`: Code style changes (formatting, whitespace)
 - `perf`: Performance improvements
 
-**Guidelines**:
+**CRITICAL GUIDELINES**:
+- **MUST BE SINGLE-LINE**: Commit messages MUST be a single line only. DO NOT create multi-line commit messages.
 - Keep messages concise (ideally under 50 characters)
 - Use imperative mood ("add feature" not "added feature")
 - Don't end with a period
 - Be specific but brief
 - One logical change per commit
+- If more detail is needed, suggest adding it in PR description or commit body separately, but the initial commit MUST be single-line
 
 **Examples**:
 - `feat: add user authentication`
@@ -120,9 +133,15 @@ For each approved commit:
 # Stage specific files
 git add <file1> <file2> ...
 
-# Create commit with message
+# Create commit with SINGLE-LINE message only
 git commit -m "<type>: <description>"
 ```
+
+**IMPORTANT**: 
+- Use ONLY `git commit -m "single line message"` format
+- DO NOT use multi-line commits with additional body text
+- DO NOT use `-m` flag multiple times
+- Keep the commit message as a single, concise line
 
 Provide feedback after each commit:
 - Confirm successful commit
@@ -151,8 +170,12 @@ git diff <file>
 # Stage files
 git add <file>
 
-# Create commit
-git commit -m "message"
+# Create commit (SINGLE-LINE only)
+git commit -m "type: single line description"
+
+# NEVER use multi-line format like:
+# git commit -m "title" -m "body"  ❌ DON'T DO THIS
+# git commit -m "title\n\nbody"    ❌ DON'T DO THIS
 
 # View commit history
 git log --oneline -n 5
@@ -203,10 +226,12 @@ Next steps: Review with 'git log' or push with 'git push'
 ## Best Practices
 
 ### Commit Message Rules
+- **MUST be single-line only** - Never use multi-line commit messages
 - Start with lowercase (except proper nouns)
 - Use present tense imperative
 - Be specific but concise
 - Focus on "what" and "why", not "how"
+- Maximum 72 characters for the single line
 
 ### Commit Organization
 - One logical change per commit
