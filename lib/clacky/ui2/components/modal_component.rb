@@ -139,7 +139,11 @@ module Clacky
             # Collect input for each field
             current_row = start_row + 3
             @fields.each do |field|
-              value = collect_field_input(field, current_row, start_col)
+              # Use previously entered value as default if validation failed
+              field_with_previous = field.dup
+              field_with_previous[:default] = @values[field[:name]] || field[:default]
+              
+              value = collect_field_input(field_with_previous, current_row, start_col)
               if value == :cancelled
                 print "\e[?25l"  # Hide cursor
                 return nil  # User pressed Esc
@@ -244,8 +248,9 @@ module Clacky
               # Show placeholder in dim gray
               display_text = @pastel.dim(placeholder)
             elsif field[:mask]
-              # Show masked input
-              display_text = @pastel.cyan('*' * buffer.length)
+              # Show masked input - limit display length to prevent overflow
+              mask_length = [buffer.length, input_width].min
+              display_text = @pastel.cyan('*' * mask_length)
             else
               # Show normal input
               display_text = @pastel.cyan(buffer)
@@ -309,13 +314,17 @@ module Clacky
 
         # Draw error message
         private def draw_error_message(row, col)
+          return if @error_message.nil? || @error_message.empty?
+          
           max_width = @width - 6
           # Truncate error message if too long
           error_text = @error_message.length > max_width ? @error_message[0..max_width-4] + "..." : @error_message
           error_col = col + 3
           
-          formatted = @pastel.red("⚠ #{error_text}")
-          print "\e[#{row};#{error_col}H#{formatted}"
+          # Clear the line first to prevent leftover characters
+          print "\e[#{row};#{error_col}H\e[K"
+          formatted = @pastel.red("⚠  #{error_text}")
+          print formatted
         end
 
         # Draw confirmation buttons

@@ -174,7 +174,7 @@ module Clacky
               error: "String to replace not found in file. The first line of old_string exists at line #{similar_locations.first[:line_number]}, " \
                      "but the full multi-line string doesn't match. This is often caused by whitespace differences (tabs vs spaces). " \
                      "\n\nContext around line #{similar_locations.first[:line_number]}:\n#{context_display}\n\n" \
-                     "TIP: Make sure to copy the exact whitespace characters from the file. Use file_reader to see the actual content."
+                     "TIP: Use file_reader to see the actual content, then retry. No need to explain, just execute the tools."
             }
           end
         end
@@ -183,7 +183,7 @@ module Clacky
         {
           error: "String to replace not found in file '#{File.basename(path)}'. " \
                  "Make sure old_string matches exactly (including all whitespace). " \
-                 "TIP: Use file_reader to view the exact content first, then copy the exact string including all spaces and tabs."
+                 "TIP: Use file_reader to view the exact content first, then retry. No need to explain, just execute the tools."
         }
       end
 
