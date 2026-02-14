@@ -17,10 +17,10 @@ module Clacky
           # Get current theme colors
           theme = ThemeManager.current_theme
 
-          # Configure tty-markdown colors based on current theme
-          # tty-markdown uses Pastel internally, we can configure symbols
+          # Configure tty-markdown with custom theme and symbols
           parsed = TTY::Markdown.parse(content, 
-            colors: theme_colors,
+            theme: theme_colors,
+            symbols: custom_symbols,
             width: TTY::Screen.width - 4  # Leave some margin
           )
 
@@ -57,21 +57,42 @@ module Clacky
           theme = ThemeManager.current_theme
 
           # Map our theme colors to tty-markdown's expected format
+          # Note: theme.colors values are already arrays, so we need to flatten when adding styles
           {
             # Headers use info color (cyan/blue)
-            header: theme.colors[:info],
+            h1: Array(theme.colors[:info]) + [:bold],
+            h2: Array(theme.colors[:info]) + [:bold],
+            h3: Array(theme.colors[:info]),
+            h4: Array(theme.colors[:info]),
+            h5: Array(theme.colors[:info]),
+            h6: Array(theme.colors[:info]),
+            # Horizontal rule - make it subtle (dim gray)
+            hr: [:bright_black],
             # Code blocks use dim color
-            code: theme.colors[:thinking],
+            code: Array(theme.colors[:thinking]),
             # Links use success color (green)
-            link: theme.colors[:success],
+            link: Array(theme.colors[:success]),
             # Lists use default text color
-            list: :bright_white,
+            list: [:bright_white],
             # Strong/bold use bright white
-            strong: :bright_white,
+            strong: [:bright_white, :bold],
             # Emphasis/italic use white
-            em: :white,
+            em: [:white],
             # Note/blockquote use dim color
-            note: theme.colors[:thinking],
+            note: Array(theme.colors[:thinking]),
+            quote: Array(theme.colors[:thinking]),
+          }
+        end
+
+        # Get custom symbols for markdown rendering
+        # @return [Hash] Symbol configuration for tty-markdown
+        def custom_symbols
+          {
+            override: {
+              # Make horizontal rule simpler - just a line without decorative diamonds
+              diamond: "",
+              line: "-"
+            }
           }
         end
       end
