@@ -66,96 +66,108 @@ module Clacky
         stdout_buffer = StringIO.new
         stderr_buffer = StringIO.new
         soft_timeout_triggered = false
+        process_pid = nil
 
         begin
           Open3.popen3(command) do |stdin, stdout, stderr, wait_thr|
+            process_pid = wait_thr.pid
             start_time = Time.now
 
             stdout.sync = true
             stderr.sync = true
 
-            loop do
-              elapsed = Time.now - start_time
+            begin
+              loop do
+                elapsed = Time.now - start_time
 
-              if elapsed > hard_timeout
-                Process.kill('TERM', wait_thr.pid) rescue nil
-                sleep 0.5
-                Process.kill('KILL', wait_thr.pid) if wait_thr.alive? rescue nil
-
-                return format_timeout_result(
-                  command,
-                  stdout_buffer.string,
-                  stderr_buffer.string,
-                  elapsed,
-                  :hard_timeout,
-                  hard_timeout,
-                  max_output_lines
-                )
-              end
-
-              if elapsed > soft_timeout && !soft_timeout_triggered
-                soft_timeout_triggered = true
-
-                # L1: Check for interaction patterns
-                interaction = detect_interaction(stdout_buffer.string)
-                if interaction
+                if elapsed > hard_timeout
                   Process.kill('TERM', wait_thr.pid) rescue nil
-                  return format_waiting_input_result(
+                  sleep 0.5
+                  Process.kill('KILL', wait_thr.pid) if wait_thr.alive? rescue nil
+
+                  return format_timeout_result(
                     command,
                     stdout_buffer.string,
                     stderr_buffer.string,
-                    interaction,
+                    elapsed,
+                    :hard_timeout,
+                    hard_timeout,
                     max_output_lines
                   )
                 end
-              end
 
-              break unless wait_thr.alive?
+                if elapsed > soft_timeout && !soft_timeout_triggered
+                  soft_timeout_triggered = true
 
-              begin
-                ready = IO.select([stdout, stderr], nil, nil, 0.1)
-                if ready
-                  ready[0].each do |io|
-                    begin
-                      data = io.read_nonblock(4096)
-                      if io == stdout
-                        stdout_buffer.write(data)
-                      else
-                        stderr_buffer.write(data)
-                      end
-                    rescue IO::WaitReadable, EOFError
-                    end
+                  # L1: Check for interaction patterns
+                  interaction = detect_interaction(stdout_buffer.string)
+                  if interaction
+                    Process.kill('TERM', wait_thr.pid) rescue nil
+                    return format_waiting_input_result(
+                      command,
+                      stdout_buffer.string,
+                      stderr_buffer.string,
+                      interaction,
+                      max_output_lines
+                    )
                   end
                 end
-              rescue StandardError => e
+
+                break unless wait_thr.alive?
+
+                begin
+                  ready = IO.select([stdout, stderr], nil, nil, 0.1)
+                  if ready
+                    ready[0].each do |io|
+                      begin
+                        data = io.read_nonblock(4096)
+                        if io == stdout
+                          stdout_buffer.write(data)
+                        else
+                          stderr_buffer.write(data)
+                        end
+                      rescue IO::WaitReadable, EOFError
+                      end
+                    end
+                  end
+                rescue StandardError => e
+                end
+
+                sleep 0.1
               end
 
-              sleep 0.1
-            end
+              begin
+                stdout_buffer.write(stdout.read)
+              rescue StandardError
+              end
+              begin
+                stderr_buffer.write(stderr.read)
+              rescue StandardError
+              end
 
-            begin
-              stdout_buffer.write(stdout.read)
-            rescue StandardError
-            end
-            begin
-              stderr_buffer.write(stderr.read)
-            rescue StandardError
-            end
+              stdout_output = stdout_buffer.string
+              stderr_output = stderr_buffer.string
 
-            stdout_output = stdout_buffer.string
-            stderr_output = stderr_buffer.string
-
-            {
-              command: command,
-              stdout: truncate_output(stdout_output, max_output_lines),
-              stderr: truncate_output(stderr_output, max_output_lines),
-              exit_code: wait_thr.value.exitstatus,
-              success: wait_thr.value.success?,
-              elapsed: Time.now - start_time,
-              output_truncated: output_truncated?(stdout_output, stderr_output, max_output_lines)
-            }
+              {
+                command: command,
+                stdout: truncate_output(stdout_output, max_output_lines),
+                stderr: truncate_output(stderr_output, max_output_lines),
+                exit_code: wait_thr.value.exitstatus,
+                success: wait_thr.value.success?,
+                elapsed: Time.now - start_time,
+                output_truncated: output_truncated?(stdout_output, stderr_output, max_output_lines)
+              }
+            ensure
+              # Ensure child process is killed when block exits (for any reason: exception, return, etc.)
+              if wait_thr&.alive?
+                Process.kill('TERM', wait_thr.pid) rescue nil
+                sleep 0.1
+                Process.kill('KILL', wait_thr.pid) if wait_thr.alive? rescue nil
+              end
+            end
           end
         rescue StandardError => e
+          # Handle other errors
           stdout_output = stdout_buffer.string
           stderr_output = "Error executing command: #{e.message}\n#{e.backtrace.first(3).join("\n")}"
 

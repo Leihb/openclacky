@@ -48,7 +48,7 @@ require_relative "clacky/agent"
 require_relative "clacky/cli"
 
 module Clacky
+  class AgentInterrupted < Exception; end  # Inherit from Exception to bypass rescue StandardError
   class AgentError < StandardError; end
-  class AgentInterrupted < StandardError; end
   class ToolCallError < AgentError; end  # Raised when tool call fails due to invalid parameters
 end
