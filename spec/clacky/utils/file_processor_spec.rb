@@ -248,19 +248,43 @@ RSpec.describe Clacky::Utils::FileProcessor do
   end
 
   describe ".binary_file?" do
-    it "detects binary file with high ratio of non-printable characters (>= 512 bytes)" do
-      # Create data >= 512 bytes with high ratio of non-printable characters
-      data = "\x00\x01\x02\x03\x04\x05" * 100
+    # Detection is based solely on known magic byte signatures.
+    # Files without a recognised signature are treated as text to avoid
+    # false positives on multibyte-encoded text (e.g. Chinese, Japanese).
+
+    it "detects PNG via magic bytes" do
+      data = "\x89PNG\r\n\x1a\n".b + "x" * 100
       expect(described_class.binary_file?(data)).to be true
     end
 
-    it "returns false for short text files (below min length threshold)" do
+    it "detects JPEG via magic bytes" do
+      data = "\xFF\xD8\xFF".b + "x" * 100
+      expect(described_class.binary_file?(data)).to be true
+    end
+
+    it "detects PDF via magic bytes" do
+      data = "%PDF-1.4" + "x" * 100
+      expect(described_class.binary_file?(data)).to be true
+    end
+
+    it "detects GIF via magic bytes" do
+      data = "GIF89a" + "x" * 100
+      expect(described_class.binary_file?(data)).to be true
+    end
+
+    it "returns false for data with non-printable bytes but no magic signature" do
+      # Without a known signature, we do not flag as binary (prefer false negatives)
+      data = "\x00\x01\x02\x03\x04\x05".b * 100
+      expect(described_class.binary_file?(data)).to be false
+    end
+
+    it "returns false for plain text" do
       data = "This is plain text content\nwith multiple lines\n"
       expect(described_class.binary_file?(data)).to be false
     end
 
-    it "returns false for short data with non-printable characters" do
-      data = "text\x00binary".b
+    it "returns false for UTF-8 multibyte text (Chinese)" do
+      data = "这是一个中文测试文件。" * 50
       expect(described_class.binary_file?(data)).to be false
     end
 

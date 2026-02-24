@@ -166,35 +166,30 @@ module Clacky
         end
 
         # Check if file is binary (not text)
-        # @param data [String] File content
+        # @param data [String] File content (should be read in binary mode, encoding: ASCII-8BIT)
         # @param sample_size [Integer] Number of bytes to check (default: 8192)
         # @return [Boolean] True if file appears to be binary
-        def binary_file?(data, sample_size: 8192, min_binary_length: 512)
-          # Check first N bytes for binary content
-          sample = data[0, sample_size] || ""
+        #
+        # Strategy: only trust known magic byte signatures.
+        # We intentionally avoid heuristics (byte-ratio, UTF-8 validity, etc.) because
+        # they produce false positives on legitimate text files containing multibyte
+        # characters (e.g. Chinese, Japanese). Occasionally missing an unlabelled binary
+        # is acceptable; misclassifying a real text file is not.
+        def binary_file?(data, sample_size: 8192)
+          sample = data.b[0, sample_size] || ""
           return false if sample.empty?
 
-          # Check for known binary signatures first
+          # Check for known binary file signatures (magic bytes)
           FILE_SIGNATURES.each do |signature, _format|
             return true if sample.start_with?(signature)
           end
 
-          # Check for WebP (RIFF format)
-          if sample.start_with?("RIFF".b) && sample.length >= 12 && sample[8..11] == "WEBP".b
+          # Check for WebP (RIFF....WEBP header)
+          if sample.start_with?("RIFF".b) && sample.bytesize >= 12 && sample[8..11] == "WEBP".b
             return true
           end
 
-          # Only check non-printable ratio for samples above minimum length
-          # This prevents short outputs from being incorrectly flagged as binary
-          return false if sample.size < min_binary_length
-
-          # Count non-printable characters (excluding common whitespace)
-          non_printable = sample.bytes.count do |byte|
-            byte < 32 && ![9, 10, 13].include?(byte) || byte >= 127
-          end
-
-          # If more than 30% non-printable, consider it binary
-          (non_printable.to_f / sample.size) > 0.3
+          false
         end
 
         # Check if a file at the given path is binary (not text)
