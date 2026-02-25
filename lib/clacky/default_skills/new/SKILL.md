@@ -36,7 +36,7 @@ cd <project_name>
 
 ### 5. Success Message
 Tell user:
-- ✅ Project created successfully!
+- Project created successfully!
 - Next step: enter project directory to start development
 - Command: `cd <project_name>`
 
@@ -52,4 +52,4 @@ Response:
 1. Creating a new project named "blog"
 2. Cloning template...
 3. Installing dependencies...
-4. ✅ Done! You can now: `cd blog` to start development
+4. Done! You can now: `cd blog` to start development
