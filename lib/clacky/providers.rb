@@ -11,19 +11,12 @@ module Clacky
     # - api: API type (anthropic-messages, openai-responses, openai-completions)
     # - default_model: Recommended default model
     PRESETS = {
-      "anthropic" => {
-        "name" => "Anthropic (Claude)",
-        "base_url" => "https://api.anthropic.com",
-        "api" => "anthropic-messages",
-        "default_model" => "claude-sonnet-4.6",
-        "models" => ["claude-opus-4-6", "claude-sonnet-4.6", "claude-haiku-4"]
-      }.freeze,
 
       "openrouter" => {
         "name" => "OpenRouter",
         "base_url" => "https://openrouter.ai/api/v1",
         "api" => "openai-responses",
-        "default_model" => "anthropic/claude-sonnet-4-5",
+        "default_model" => "anthropic/claude-sonnet-4-6",
         "models" => []  # Dynamic - fetched from API
       }.freeze,
 
@@ -41,7 +34,16 @@ module Clacky
         "api" => "openai-completions",
         "default_model" => "kimi-k2.5",
         "models" => ["kimi-k2.5"]
+      }.freeze,
+
+      "anthropic" => {
+        "name" => "Anthropic (Claude)",
+        "base_url" => "https://api.anthropic.com",
+        "api" => "anthropic-messages",
+        "default_model" => "claude-sonnet-4.6",
+        "models" => ["claude-opus-4-6", "claude-sonnet-4.6", "claude-haiku-4.5"]
       }.freeze
+
     }.freeze
 
     class << self
