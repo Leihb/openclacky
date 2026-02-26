@@ -167,6 +167,17 @@ module Clacky
               # Clear testing messages
               print "\e[#{testing_row};#{testing_col}H\e[K"
               print "\e[#{testing_row + 1};#{testing_col}H\e[K"
+              
+              if validation_result[:success]
+                # Validation passed - hide cursor and return values
+                print "\e[?25l"
+                return @values
+              else
+                # Validation failed - show error and loop again to let user correct input
+                @error_message = validation_result[:error] || "Validation failed"
+                # Don't clear modal - just loop again to redraw with error message
+                # This prevents the modal from flickering
+              end
             else
               # No validator - return immediately
               print "\e[?25l"
