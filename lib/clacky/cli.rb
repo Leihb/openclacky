@@ -2,6 +2,7 @@
 
 require "thor"
 require "tty-prompt"
+require "fileutils"
 require_relative "ui2"
 require_relative "json_ui_controller"
 
@@ -224,7 +225,17 @@ module Clacky
       def validate_working_directory(path)
         working_dir = path || Dir.pwd
 
-        # Expand path to absolute path
+        # If no path specified and currently in home directory, use ~/clacky_workspace
+        if path.nil? && File.expand_path(working_dir) == File.expand_path(Dir.home)
+          working_dir = File.expand_path("~/clacky_workspace")
+          
+          # Create directory if it doesn't exist
+          unless Dir.exist?(working_dir)
+            FileUtils.mkdir_p(working_dir)
+          end
+        end
+        
+        # Always expand to absolute path
         working_dir = File.expand_path(working_dir)
 
         # Validate directory exists
