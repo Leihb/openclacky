@@ -506,8 +506,6 @@ module Clacky
             handle_time_machine_command(ui_controller, agent, session_manager)
             next
           when "/clear"
-            # Show user input first
-            ui_controller.append_output(display) if display
             sleep 0.1
             # Clear output area
             ui_controller.layout.clear_output
@@ -523,8 +521,6 @@ module Clacky
             ui_controller.stop
             exit(0)
           when "/help"
-            # Show user input first
-            ui_controller.append_output(display) if display
             sleep 0.1
             ui_controller.show_help
             next

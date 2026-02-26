@@ -894,11 +894,11 @@ module Clacky
 
       # Handle submit action
       private def handle_submit(data)
-        # Call callback first (allows interrupting previous agent before showing new input)
-        @input_callback&.call(data[:text], data[:images])
-
-        # Append the input content to output area after callback completes
+        # Append the input content to output area first (so it displays before callback execution)
         @layout.append_output(data[:display]) unless data[:display].empty?
+
+        # Then call callback (allows interrupting previous agent before processing new input)
+        @input_callback&.call(data[:text], data[:images])
       end
 
       # Show configuration modal dialog with multi-model support
@@ -953,14 +953,23 @@ module Clacky
           when :add
             new_model = show_model_edit_form(nil, test_callback: test_callback)
             if new_model
+              # Determine anthropic_format based on provider
+              # For Anthropic provider, use Anthropic API format
+              anthropic_format = new_model[:provider] == "anthropic"
+              
               current_config.add_model(
                 model: new_model[:model],
                 api_key: new_model[:api_key],
-                base_url: new_model[:base_url]
-                # anthropic_format defaults to false in add_model method
+                base_url: new_model[:base_url],
+                anthropic_format: anthropic_format
               )
               # Auto-save after adding
               current_config.save
+              # Set newly added model as default
+              current_config.switch_model(current_config.models.length - 1)
+              current_config.save
+              # Return to exit the menu
+              return { action: :switch }
             end
           when :edit
             current_model = current_config.current_model
@@ -1043,8 +1052,39 @@ module Clacky
         is_new = model.nil?
         model ||= {}
         
+        # For new models, show provider selection first
+        selected_provider = nil
+        if is_new
+          # Build provider choices
+          provider_choices = Clacky::Providers.list.map do |id, name|
+            { name: name, value: id }
+          end
+          provider_choices << { name: "─" * 40, disabled: true }
+          provider_choices << { name: "Custom (manual configuration)", value: "custom" }
+          
+          # Show provider selection
+          selected_provider = modal.show(
+            title: "Select Provider",
+            choices: provider_choices
+          )
+          
+          # User cancelled
+          return nil if selected_provider.nil?
+        end
+        
         # Prepare masked API key for display
         masked_key = mask_api_key(model["api_key"])
+        
+        # Pre-fill values from provider preset if selected
+        provider_preset = nil
+        if selected_provider && selected_provider != "custom"
+          provider_preset = Clacky::Providers.get(selected_provider)
+        end
+        
+        # Get default values from provider or existing model
+        default_model = provider_preset ? provider_preset["default_model"] : model["model"]
+        default_base_url = provider_preset ? provider_preset["base_url"] : model["base_url"]
+        default_api_key = model["api_key"] || ""
         
         # Define fields
         fields = [
@@ -1056,13 +1096,13 @@ module Clacky
           },
           {
             name: :model,
-            label: "Model #{is_new ? '' : "(current: #{model['model']})"}:",
-            default: ""
+            label: "Model #{is_new && default_model ? "(default: #{default_model})" : (is_new ? '' : "(current: #{model['model']})")}:",
+            default: default_model || ""
           },
           {
             name: :base_url,
-            label: "Base URL #{is_new ? '' : "(current: #{model['base_url']})"}:",
-            default: ""
+            label: "Base URL #{is_new && default_base_url ? "(default: #{default_base_url})" : (is_new ? '' : "(current: #{model['base_url']})")}:",
+            default: default_base_url || ""
           }
         ]
         
@@ -1103,20 +1143,31 @@ module Clacky
           nil
         end
         
+        # Determine modal title based on provider
+        modal_title = if is_new && selected_provider && selected_provider != "custom"
+          provider_name = Clacky::Providers.get(selected_provider)&.dig("name") || selected_provider
+          "Add #{provider_name} Model"
+        elsif is_new
+          "Add Custom Model"
+        else
+          "Edit Model"
+        end
+        
         # Show modal and collect values
         result = modal.show(
-          title: is_new ? "Add New Model" : "Edit Model",
+          title: modal_title,
           fields: fields,
           validator: validator
         )
         
         return nil if result.nil?
         
-        # Merge with existing model values
+        # Merge with existing model values or provider defaults
         {
           api_key: result[:api_key].to_s.empty? ? model["api_key"] : result[:api_key],
-          model: result[:model].to_s.empty? ? model["model"] : result[:model],
-          base_url: result[:base_url].to_s.empty? ? model["base_url"] : result[:base_url]
+          model: result[:model].to_s.empty? ? (model["model"] || default_model) : result[:model],
+          base_url: result[:base_url].to_s.empty? ? (model["base_url"] || default_base_url) : result[:base_url],
+          provider: selected_provider
         }
       end
       
