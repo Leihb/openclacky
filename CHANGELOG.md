@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-02-26
+
+### Added
+- Cross-platform auto-install script with mise and WSL support
+- Built-in provider presets for quick model configuration
+- Terminal restart reminder after installation
+- More bin commands for improved CLI experience
+- Shields.io badges to README
+
+### Improved
+- Install script robustness and user experience
+- Code-explorer workflow with forked subagent mode explanation
+- README with features, usage scenarios, and comparison table
+- Installation section with clearer instructions
+
+### Fixed
+- Binary file detection using magic bytes only (prevents false positives on multibyte text)
+- Display user input before executing callback in handle_submit
+- Install script now uses gem-only approach (removed homebrew dependency)
+
+### More
+- Minor formatting fixes in install script and README
+- Removed skill emoji for cleaner UI
+- Removed test-skill
+- Updated install script configuration
+
 ## [0.7.1] - 2026-02-24
 
 This release brings significant user experience improvements, new interaction modes, and enhanced agent capabilities.
