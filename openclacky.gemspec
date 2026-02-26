@@ -28,7 +28,7 @@ Gem::Specification.new do |spec|
     end
   end
   spec.bindir = "bin"
-  spec.executables = ["clacky", "openclacky"]
+  spec.executables = ["clacky", "openclacky", "clarky"]
   spec.require_paths = ["lib"]
 
   # Runtime dependencies
