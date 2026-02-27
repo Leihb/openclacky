@@ -8,48 +8,79 @@ user-invocable: true
 # Create New Project
 
 ## Usage
-When user wants to create a new project:
-- "help me create a new project"
-- "I want to start a new project called blog"
-- "/new my-app"
+When user wants to create a new Rails project:
+- "help me create a new Rails project"
+- "I want to start a new Rails project"
+- "/new"
 
 ## Process Steps
 
-### 1. Get Project Name
-- Extract project name from user input
-- Validate: letters, numbers, underscores, hyphens only
-- Must start with a letter
+### 1. Check Directory Before Starting
+Before running the setup script, check if current directory is empty:
+- Use glob tool to check if directory has files: `glob("*", base_path: ".")`
+- If directory is NOT empty, ask user for confirmation: "Current directory is not empty. Continue anyway? (y/n)"
+- If user declines, abort and suggest creating project in an empty directory
 
-### 2. Check Directory
-If directory already exists, ask user to choose a different name
-
-### 3. Clone Template
+### 2. Run Setup Script
+Execute the create_rails_project.sh script in current directory:
 ```bash
-git clone git@github.com:clacky-ai/rails-template-7x-starter.git <project_name>
+<clacky_skills_path>/new/scripts/create_rails_project.sh
 ```
 
-### 4. Install Dependencies
-```bash
-cd <project_name>
-./bin/setup
+The script will automatically:
+
+**Step 1: Clone Template**
+- Clone rails-template-7x-starter to a temporary directory
+- Move all files to current directory
+- Delete template's .git directory
+- Initialize new git repository with initial commit
+
+**Step 2: Check Environment**
+- Run rails_env_checker.sh to verify dependencies:
+  - Ruby >= 3.0.0 (must be pre-installed)
+  - Node.js >= 22.0.0 (will install automatically if missing on macOS/Ubuntu)
+  - PostgreSQL (will install automatically if missing on macOS/Ubuntu)
+- Script automatically installs missing dependencies without prompting
+
+**Step 3: Install Project Dependencies**
+- Run ./bin/setup to:
+  - Install Ruby gems (bundle install)
+  - Install npm packages (npm install)
+  - Copy configuration files
+  - Setup database (db:prepare)
+  
+**Step 4: Project Setup Complete**
+- Script completes successfully
+- Project is ready to run
+
+### 3. Start Development Server
+After the script completes, use the run_project tool to start the server:
+```
+run_project(action: "start")
 ```
 
-### 5. Success Message
-Tell user:
-- Project created successfully!
-- Next step: enter project directory to start development
-- Command: `cd <project_name>`
+This will start the Rails development server in the background. Inform user:
+- Application: http://localhost:3000
+- Admin: http://localhost:3000/admin (admin/admin)
 
 ## Error Handling
-- Directory exists → Ask for different name
-- Git clone fails → Check network connection
-- Setup fails → Suggest manual run: ./bin/setup
+- Directory not empty → Ask user confirmation, abort if declined
+- Git clone fails → Check network connection, verify repository URL
+- Ruby not installed → Error message, user must install Ruby 3.x manually
+- Node.js < 22 → Script installs automatically (macOS/Ubuntu)
+- PostgreSQL missing → Script installs automatically (macOS/Ubuntu)
+- bin/setup fails → Show error, suggest running `./bin/setup` manually
+- run_project fails → Check logs with `run_project(action: "output")` and verify database status
 
 ## Example Interaction
-User: "help me create a blog project"
+User: "/new"
 
 Response:
-1. Creating a new project named "blog"
-2. Cloning template...
-3. Installing dependencies...
-4. Done! You can now: `cd blog` to start development
+1. Checking if current directory is empty...
+2. Running create_rails_project.sh in current directory
+3. Cloning Rails template from GitHub...
+4. Checking environment dependencies...
+5. Installing project dependencies...
+6. Project setup complete!
+7. Starting development server with run_project...
+8. ✨ Server running! Visit http://localhost:3000
