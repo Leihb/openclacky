@@ -98,22 +98,12 @@ module Clacky
             preview_error = show_write_preview(args)
           when "edit"
             preview_error = show_edit_preview(args)
-          when "shell", "safe_shell"
-            show_shell_preview(args)
-          else
-            # For other tools, show formatted arguments
-            tool = @tool_registry.get(call[:name]) rescue nil
-            if tool
-              formatted = tool.format_call(args) rescue "#{call[:name]}(...)"
-              @ui&.show_tool_args(formatted)
-            else
-              @ui&.show_tool_args(call[:arguments])
-            end
+          # Shell and other tools don't need special preview
+          # They will be shown via show_tool_call in the main flow
           end
 
           preview_error
         rescue JSON::ParserError
-          @ui&.show_tool_args(call[:arguments])
           nil
         end
       end
@@ -256,7 +246,8 @@ module Clacky
             /go\s+(build|test)/,
             /make\s+(test|build)/,
             /pytest/,
-            /jest/
+            /jest/,
+            /sleep\s+\d+/  # sleep command with duration
           ]
 
           slow_patterns.any? { |pattern| command.match?(pattern) }

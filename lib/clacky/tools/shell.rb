@@ -306,7 +306,7 @@ module Clacky
 
       # Format result for LLM consumption - limit output size to save tokens
       # Maximum characters to include in LLM output
-      MAX_LLM_OUTPUT_CHARS = 1000
+      MAX_LLM_OUTPUT_CHARS = 4000
 
       def format_result_for_llm(result)
         # Return error info as-is if command failed or timed out
@@ -367,42 +367,41 @@ module Clacky
         # Write full output to temp file
         File.write(temp_file, output)
 
-        # For LLM display: show first and last lines to preserve structure
+        # For LLM display: show first N lines to preserve most useful information
         lines = output.lines
         return { content: output, temp_file: nil } if lines.length <= 2
 
-        # Reserve 60 chars for truncation notice
-        available_chars = max_chars - 60
+        # Reserve space for truncation notice (including temp file path)
+        notice_overhead = 200
+        available_chars = max_chars - notice_overhead
 
-        # Take first few lines
+        # Prioritize first lines as they usually contain the most important information
         first_part = []
         accumulated = 0
         lines.each do |line|
-          break if accumulated + line.length > available_chars / 2
+          break if accumulated + line.length > available_chars
           first_part << line
           accumulated += line.length
         end
 
-        # Take last few lines
-        last_part = []
-        accumulated = 0
-        lines.reverse_each do |line|
-          break if accumulated + line.length > available_chars / 2
-          last_part.unshift(line)
-          accumulated += line.length
-        end
-
         total_lines = lines.length
+        shown_lines = first_part.length
 
-        # Create notice message based on label
+        # Create prominent notice message with temp file path
         if label == "stderr"
-          notice = "... [Error output truncated for LLM: showing #{first_part.length} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ..."
+          notice = <<~NOTICE
+
+            ... [Error output truncated for LLM: showing #{shown_lines} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ...
+          NOTICE
         else
-          notice = "... [Output truncated for LLM: showing #{first_part.length} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ..."
+          notice = <<~NOTICE
+
+            ... [Output truncated for LLM: showing #{shown_lines} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ...
+          NOTICE
         end
 
         # Combine with compact notice
-        content = first_part.join + "\n#{notice}\n" + last_part.join
+        content = first_part.join + notice
 
         { content: content, temp_file: temp_file }
       end
