@@ -88,9 +88,28 @@ To use this skill, simply say:
    git push origin main --tags
    ```
 
-4. **Verify Publication**
+4. **Create GitHub Release**
+
+   Extract the release notes for this version from CHANGELOG.md, then create a GitHub Release:
+   ```bash
+   gh release create v{version} \
+     --title "v{version}" \
+     --notes-file /tmp/release_notes.md \
+     --latest
+   ```
+
+   Steps:
+   - Parse the CHANGELOG.md section for `[{version}]`
+   - Write it to a temp file (e.g., `/tmp/release_notes_{version}.md`) to avoid shell escaping issues
+   - Run `gh release create` with `--notes-file`
+   - Verify the release appears at: `https://github.com/clacky-ai/open-clacky/releases`
+
+   > **Prerequisite**: `gh` CLI must be installed (`brew install gh`) and authenticated (`gh auth login`)
+
+5. **Verify Publication**
    - Check gem appears on RubyGems.org
    - Verify version information is correct
+   - Confirm GitHub Release is visible at the releases page
 
 ### 6. Documentation - CHANGELOG Writing Process
 
@@ -201,6 +220,15 @@ git commit -m "chore: bump version to X.Y.Z"
 git tag vX.Y.Z
 git push origin main
 git push origin --tags
+
+# Create GitHub Release (requires gh CLI)
+# 1. Extract release notes from CHANGELOG.md for this version
+# 2. Write to temp file to avoid shell escaping issues
+# 3. Create the release
+gh release create vX.Y.Z \
+  --title "vX.Y.Z" \
+  --notes-file /tmp/release_notes_X.Y.Z.md \
+  --latest
 ```
 
 ## File Locations
@@ -218,6 +246,7 @@ git push origin --tags
 - New version successfully published to RubyGems
 - Git repository updated with version tag
 - CHANGELOG.md updated with release notes
+- GitHub Release created and visible at https://github.com/clacky-ai/open-clacky/releases
 - No build or deployment errors
 
 ## Error Handling
@@ -227,6 +256,8 @@ git push origin --tags
 - If gem build fails, check gemspec configuration
 - If git push fails, verify repository permissions
 - If gem push fails, check RubyGems credentials
+- If `gh release create` fails, ensure `gh` CLI is installed (`brew install gh`) and authenticated (`gh auth login`)
+- If GitHub Release notes look wrong, check CHANGELOG.md formatting for the version section
 
 ## Notes
 
@@ -241,6 +272,7 @@ git push origin --tags
 - Git repository access
 - RubyGems account with push permissions
 - Bundle and RSpec for testing
+- `gh` CLI installed and authenticated (`brew install gh && gh auth login`)
 
 ## Version History
 
