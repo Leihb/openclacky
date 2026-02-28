@@ -25,6 +25,7 @@ require_relative "clacky/utils/gitignore_parser"
 require_relative "clacky/utils/limit_stack"
 require_relative "clacky/utils/path_helper"
 require_relative "clacky/utils/file_ignore_helper"
+require_relative "clacky/utils/string_matcher"
 require_relative "clacky/tools/base"
 
 require_relative "clacky/tools/shell"

@@ -382,8 +382,12 @@ module Clacky
 
         file_content = File.read(path)
 
-        # Check if old_string exists in file
-        unless file_content.include?(old_string)
+        # Use the same find_match logic as Edit tool to handle fuzzy matching
+        # (trim, unescape, smart line matching) — prevents diff from being blank
+        # when simple include? fails but Edit#execute's fuzzy match would succeed
+        match_result = Utils::StringMatcher.find_match(file_content, old_string)
+
+        unless match_result
           # Log debug info for troubleshooting
           @debug_logs << {
             timestamp: Time.now.iso8601,
@@ -402,11 +406,14 @@ module Clacky
           }
         end
 
+        # Use the actual matched string (may differ via trim/unescape) for replacement
+        actual_old_string = match_result[:matched_string]
+
         # Use the same replace logic as the actual tool execution
         new_content = if replace_all
-                        file_content.gsub(old_string, new_string)
+                        file_content.gsub(actual_old_string, new_string)
                       else
-                        file_content.sub(old_string, new_string)
+                        file_content.sub(actual_old_string, new_string)
                       end
         @ui&.show_diff(file_content, new_content, max_lines: 50)
         nil  # No error
