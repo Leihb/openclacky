@@ -107,7 +107,7 @@ module Clacky
 
     # === Progress (no-ops — no spinner in plain mode) ===
 
-    def show_progress(message = nil, prefix_newline: true); end
+    def show_progress(message = nil, prefix_newline: true, output_buffer: nil); end
     def clear_progress; end
 
     # === State updates (no-ops) ===

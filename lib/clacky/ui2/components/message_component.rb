@@ -44,7 +44,28 @@ module Clacky
           text = format_text(content, :user)
           time_str = timestamp ? @pastel.dim("[#{format_timestamp(timestamp)}]") : ""
 
-          "\n#{symbol} #{text} #{time_str}".rstrip
+          result = "\n#{symbol} #{text} #{time_str}".rstrip
+
+          # Append image attachment info if present
+          if images && images.any?
+            images.each_with_index do |img_path, idx|
+              filename = File.basename(img_path)
+              filesize = File.exist?(img_path) ? format_filesize(File.size(img_path)) : "N/A"
+              result += "\n" + @pastel.dim("    [Image #{idx + 1}] #{filename} (#{filesize})")
+            end
+          end
+
+          result
+        end
+
+        private def format_filesize(bytes)
+          if bytes < 1024
+            "#{bytes}b"
+          elsif bytes < 1024 * 1024
+            "#{(bytes / 1024.0).round(1)}kb"
+          else
+            "#{(bytes / (1024.0 * 1024)).round(1)}mb"
+          end
         end
 
         # Render assistant message

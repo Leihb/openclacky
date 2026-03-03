@@ -18,12 +18,14 @@ module Clacky
       # Render a user message
       # @param content [String] Message content
       # @param timestamp [Time, nil] Optional timestamp
+      # @param images [Array<String>] Optional image paths
       # @return [String] Rendered message
-      def render_user_message(content, timestamp: nil)
+      def render_user_message(content, timestamp: nil, images: [])
         @message_component.render(
           role: "user",
           content: content,
-          timestamp: timestamp
+          timestamp: timestamp,
+          images: images
         )
       end
 

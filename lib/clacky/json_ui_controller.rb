@@ -28,10 +28,6 @@ module Clacky
 
     # === Output display ===
 
-    def show_user_message(content, images: [])
-      emit("user_message", content: content, images: images)
-    end
-
     def show_assistant_message(content)
       return if content.nil? || content.strip.empty?
 
@@ -117,7 +113,7 @@ module Clacky
 
     # === Progress ===
 
-    def show_progress(message = nil, prefix_newline: true)
+    def show_progress(message = nil, prefix_newline: true, output_buffer: nil)
       @progress_start_time = Time.now
       emit("progress", message: message, status: "start")
     end

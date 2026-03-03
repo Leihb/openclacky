@@ -347,14 +347,6 @@ module Clacky
 
       # === Semantic UI Methods (for Agent to call directly) ===
 
-      # Show user message
-      # @param content [String] Message content
-      # @param images [Array] Image paths (optional)
-      def show_user_message(content, images: [])
-        output = @renderer.render_user_message(content)
-        append_output(output)
-      end
-
       # Show assistant message
       # @param content [String] Message content
       def show_assistant_message(content)
@@ -963,8 +955,11 @@ module Clacky
 
       # Handle submit action
       private def handle_submit(data)
-        # Append the input content to output area first (so it displays before callback execution)
-        @layout.append_output(data[:display]) unless data[:display].empty?
+        # Render user message immediately before running agent
+        unless data[:text].empty? && data[:images].empty?
+          output = @renderer.render_user_message(data[:text], images: data[:images])
+          append_output(output)
+        end
 
         # Then call callback (allows interrupting previous agent before processing new input)
         @input_callback&.call(data[:text], data[:images])

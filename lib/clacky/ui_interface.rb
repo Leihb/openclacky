@@ -5,7 +5,6 @@ module Clacky
   # All UI controllers (UIController, JsonUIController) must implement these methods.
   module UIInterface
     # === Output display ===
-    def show_user_message(content, images: []); end
     def show_assistant_message(content); end
     def show_tool_call(name, args); end
     def show_tool_result(result); end
@@ -28,7 +27,7 @@ module Clacky
     def log(message, level: :info); end
 
     # === Progress ===
-    def show_progress(message = nil, prefix_newline: true); end
+    def show_progress(message = nil, prefix_newline: true, output_buffer: nil); end
     def clear_progress; end
 
     # === State updates ===
