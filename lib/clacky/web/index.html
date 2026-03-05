@@ -62,6 +62,68 @@
   <!-- ── MAIN ─────────────────────────────────────────────────────────── -->
   <main id="main">
 
+    <!-- Onboard panel (shown on first run) -->
+    <div id="onboard-panel" style="display:none">
+      <div id="onboard-inner">
+        <div class="onboard-logo">⚡</div>
+        <h1 class="onboard-title">Welcome to Clacky</h1>
+        <p class="onboard-subtitle" id="onboard-subtitle">Let's get you set up in a minute.</p>
+
+        <!-- Step indicators -->
+        <div id="onboard-steps">
+          <div class="onboard-step active" id="step-dot-1">1</div>
+          <div class="onboard-step-line"></div>
+          <div class="onboard-step" id="step-dot-2">2</div>
+        </div>
+
+        <!-- Phase 1: Key setup -->
+        <div id="onboard-phase-key">
+          <p class="onboard-phase-title">Connect your AI model</p>
+
+          <!-- Provider quick-select -->
+          <div class="onboard-field">
+            <label class="onboard-label">Provider</label>
+            <select id="onboard-provider-select" class="onboard-select">
+              <option value="">— Choose provider —</option>
+            </select>
+          </div>
+          <div class="onboard-field">
+            <label class="onboard-label">Model</label>
+            <input id="onboard-model" type="text" class="onboard-input" placeholder="e.g. claude-sonnet-4-5">
+          </div>
+          <div class="onboard-field">
+            <label class="onboard-label">Base URL</label>
+            <input id="onboard-base-url" type="text" class="onboard-input" placeholder="https://api.anthropic.com">
+          </div>
+          <div class="onboard-field">
+            <label class="onboard-label">API Key</label>
+            <div class="onboard-input-row">
+              <input id="onboard-api-key" type="password" class="onboard-input" placeholder="sk-…">
+              <button id="onboard-toggle-key" class="btn-toggle-key" title="Show/hide">👁</button>
+            </div>
+          </div>
+
+          <div id="onboard-test-result" class="onboard-test-result"></div>
+
+          <div class="onboard-actions">
+            <button id="onboard-btn-test" class="onboard-btn-primary">Test & Continue →</button>
+          </div>
+        </div>
+
+        <!-- Phase 2: Soul setup -->
+        <div id="onboard-phase-soul" style="display:none">
+          <p class="onboard-phase-title">Personalize your assistant</p>
+          <p class="onboard-phase-desc">
+            Takes about 30 seconds. Clacky will ask you two quick things via interactive cards.
+          </p>
+          <div class="onboard-actions onboard-actions-split">
+            <button id="onboard-btn-start-soul" class="onboard-btn-primary">Let's go →</button>
+            <button id="onboard-btn-skip" class="onboard-btn-secondary">Skip for now</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Welcome screen -->
     <div id="welcome" class="centered">
       <div class="welcome-icon">⚡</div>
@@ -168,6 +230,7 @@
 <script src="/tasks.js"></script>
 <script src="/skills.js"></script>
 <script src="/settings.js"></script>
+<script src="/onboard.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

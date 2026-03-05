@@ -502,12 +502,13 @@ module Clacky
             end
 
             if @config.permission_mode == :auto_approve
-              # Auto-approve mode means no human is watching — inject a reply so the LLM
-              # knows it should make a reasonable decision and keep going
+              # auto_approve means no human is watching (unattended/scheduled tasks).
+              # Inject an auto_reply so the LLM makes a reasonable decision and keeps going.
               result = result.merge(
                 auto_reply: "No user is available. Please make a reasonable decision based on the context and continue."
               )
             else
+              # confirm_all / confirm_safes — a human is present, truly wait for user input.
               awaiting_feedback = true
             end
           else

@@ -168,7 +168,8 @@ module Clacky
         working_dir = File.expand_path("~/clacky_workspace")
         FileUtils.mkdir_p(working_dir)
 
-        session_id = @session_builder.call(name: name, working_dir: working_dir)
+        # Scheduled tasks run unattended — use auto_approve so request_user_feedback doesn't block.
+        session_id = @session_builder.call(name: name, working_dir: working_dir, permission_mode: :auto_approve)
 
         $stdout.puts "[Clacky Scheduler] Firing task '#{task_name}' (session: #{session_id})"
 

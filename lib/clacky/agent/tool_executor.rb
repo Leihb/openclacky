@@ -11,7 +11,11 @@ module Clacky
       # @return [Boolean] true if should auto-execute
       def should_auto_execute?(tool_name, tool_params = {})
         case @config.permission_mode
-        when :auto_approve
+        when :auto_approve, :confirm_all
+          # Both modes auto-execute all file/shell tools without confirmation.
+          # The difference is only in request_user_feedback handling:
+          #   auto_approve → no human present, inject auto_reply
+          #   confirm_all  → human present, truly wait for user input
           true
         when :confirm_safes
           # Use SafeShell integration for safety check

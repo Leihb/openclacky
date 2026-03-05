@@ -86,6 +86,25 @@ module Clacky
           prompt += "=" * 80
         end
 
+        # Load agent soul and user profile from ~/.clacky/agents/
+        agents_dir = File.expand_path("~/.clacky/agents")
+        [
+          { file: "SOUL.md", label: "AGENT SOUL" },
+          { file: "USER.md", label: "USER PROFILE" }
+        ].each do |entry|
+          path = File.join(agents_dir, entry[:file])
+          next unless File.exist?(path)
+
+          content = File.read(path).strip
+          next if content.empty?
+
+          prompt += "\n\n" + "=" * 80 + "\n"
+          prompt += "#{entry[:label]} (from ~/.clacky/agents/#{entry[:file]}):\n"
+          prompt += "=" * 80 + "\n"
+          prompt += content
+          prompt += "\n" + "=" * 80
+        end
+
         # Add all loaded skills to system prompt
         skill_context = build_skill_context
         prompt += skill_context if skill_context && !skill_context.empty?

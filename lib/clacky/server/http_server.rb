@@ -21,6 +21,28 @@ module Clacky
     class HttpServer
       WEB_ROOT = File.expand_path("../web", __dir__)
 
+      # Default SOUL.md written when the user skips the onboard conversation.
+      # A richer version is created by the Agent during the soul_setup phase.
+      DEFAULT_SOUL_MD = <<~MD.freeze
+        # Clacky — Agent Soul
+
+        You are Clacky, a friendly and capable AI coding assistant and technical
+        co-founder. You are sharp, concise, and proactive. You speak plainly and
+        avoid unnecessary formality. You love helping people ship great software.
+
+        ## Personality
+        - Warm and encouraging, but direct and honest
+        - Think step-by-step before acting; explain your reasoning briefly
+        - Prefer doing over talking — use tools, write code, ship results
+        - Adapt your language and tone to match the user's style
+
+        ## Strengths
+        - Full-stack software development (Ruby, Python, JS, and more)
+        - Architectural thinking and code review
+        - Debugging tricky problems with patience and creativity
+        - Breaking big goals into small, executable steps
+      MD
+
       def initialize(host: "127.0.0.1", port: 7070, agent_config:, client_factory:)
         @host           = host
         @port           = port
@@ -114,6 +136,9 @@ module Clacky
         when ["POST",   "/api/config"]        then api_save_config(req, res)
         when ["POST",   "/api/config/test"]   then api_test_config(req, res)
         when ["GET",    "/api/providers"]     then api_list_providers(res)
+        when ["GET",    "/api/onboard/status"]    then api_onboard_status(res)
+        when ["POST",   "/api/onboard/complete"]  then api_onboard_complete(req, res)
+        when ["POST",   "/api/onboard/skip-soul"] then api_onboard_skip_soul(res)
         else
           if method == "DELETE" && path.start_with?("/api/sessions/")
             session_id = path.sub("/api/sessions/", "")
@@ -155,10 +180,53 @@ module Clacky
       end
 
       # Auto-create a default session when the server starts.
+      # Skipped when no API key is configured (onboard flow will handle it).
       def create_default_session
+        return unless @agent_config.models_configured?
+
         working_dir = default_working_dir
         FileUtils.mkdir_p(working_dir) unless Dir.exist?(working_dir)
         build_session(name: "Session 1", working_dir: working_dir)
+      end
+
+      # ── Onboard API ───────────────────────────────────────────────────────────
+
+      # GET /api/onboard/status
+      # Phase "key_setup"  → no API key configured yet
+      # Phase "soul_setup" → key configured, but ~/.clacky/agents/SOUL.md missing
+      # needs_onboard: false → fully set up
+      def api_onboard_status(res)
+        soul_path = File.expand_path("~/.clacky/agents/SOUL.md")
+
+        if !@agent_config.models_configured?
+          json_response(res, 200, { needs_onboard: true, phase: "key_setup" })
+        elsif !File.exist?(soul_path)
+          json_response(res, 200, { needs_onboard: true, phase: "soul_setup" })
+        else
+          json_response(res, 200, { needs_onboard: false })
+        end
+      end
+
+      # POST /api/onboard/complete
+      # Called after key setup is done (soul_setup is optional/skipped).
+      # Creates the default session if none exists yet, returns it.
+      def api_onboard_complete(req, res)
+        create_default_session if @registry.list.empty?
+        first_session = @registry.list.first
+        json_response(res, 200, { ok: true, session: first_session })
+      end
+
+      # POST /api/onboard/skip-soul
+      # Writes a minimal SOUL.md so the soul_setup phase is not re-triggered
+      # on the next server start when the user chooses to skip the conversation.
+      def api_onboard_skip_soul(res)
+        agents_dir = File.expand_path("~/.clacky/agents")
+        FileUtils.mkdir_p(agents_dir)
+        soul_path = File.join(agents_dir, "SOUL.md")
+        unless File.exist?(soul_path)
+          File.write(soul_path, DEFAULT_SOUL_MD)
+        end
+        json_response(res, 200, { ok: true })
       end
 
       # ── Schedules API ─────────────────────────────────────────────────────────
@@ -253,7 +321,8 @@ module Clacky
           working_dir  = File.expand_path("~/clacky_workspace")
           FileUtils.mkdir_p(working_dir)
 
-          session_id = build_session(name: session_name, working_dir: working_dir)
+          # Tasks run unattended — use auto_approve so request_user_feedback doesn't block.
+          session_id = build_session(name: session_name, working_dir: working_dir, permission_mode: :auto_approve)
 
           # Store the pending task prompt so the WS "run_task" message can start it
           # after the client has subscribed and is ready to receive broadcasts.
@@ -667,12 +736,17 @@ module Clacky
 
       # Create a session in the registry and wire up Agent + WebUIController.
       # Returns the new session_id.
-      def build_session(name:, working_dir:)
+      # Build a new agent session.
+      # @param name [String] display name for the session
+      # @param working_dir [String] working directory for the agent
+      # @param permission_mode [Symbol] :confirm_all (default, human present) or
+      #   :auto_approve (unattended — suppresses request_user_feedback waits)
+      def build_session(name:, working_dir:, permission_mode: :confirm_all)
         session_id = @registry.create(name: name, working_dir: working_dir)
 
         client = @client_factory.call
         config = @agent_config.dup
-        config.permission_mode = :auto_approve
+        config.permission_mode = permission_mode
         agent  = Clacky::Agent.new(client, config, working_dir: working_dir)
 
         broadcaster = method(:broadcast)
