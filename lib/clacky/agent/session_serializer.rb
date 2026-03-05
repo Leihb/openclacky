@@ -131,6 +131,82 @@ module Clacky
         end
       end
 
+      # Replay conversation history by calling ui.show_* methods for each message.
+      # Supports cursor-based pagination using created_at timestamps on user messages.
+      # Each "round" starts at a user message and includes all subsequent assistant/tool messages.
+      #
+      # @param ui [Object] UI interface that responds to show_user_message, show_assistant_message, etc.
+      # @param limit [Integer] Maximum number of rounds (user turns) to replay
+      # @param before [Float, nil] Unix timestamp cursor — only replay rounds where the user message
+      #   created_at < before. Pass nil to get the most recent rounds.
+      # @return [Hash] { has_more: Boolean } — whether older rounds exist beyond this page
+      def replay_history(ui, limit: 20, before: nil)
+        # Split @messages into rounds, each starting at a real user message
+        rounds = []
+        current_round = nil
+
+        @messages.each do |msg|
+          role = msg[:role].to_s
+
+          if role == "user" && !msg[:system_injected] && msg[:content].is_a?(String) &&
+             !msg[:content].to_s.start_with?("[SYSTEM]")
+            # Start a new round at each real user message
+            current_round = { user_msg: msg, events: [] }
+            rounds << current_round
+          elsif current_round
+            current_round[:events] << msg
+          end
+        end
+
+        # Apply before-cursor filter: only rounds whose user message created_at < before
+        if before
+          rounds = rounds.select { |r| r[:user_msg][:created_at] && r[:user_msg][:created_at] < before }
+        end
+
+        has_more = rounds.size > limit
+        # Take the most recent `limit` rounds
+        page = rounds.last(limit)
+
+        page.each do |round|
+          msg = round[:user_msg]
+          # Emit user message with its timestamp for dedup on the frontend
+          ui.show_user_message(extract_text_from_content(msg[:content]), created_at: msg[:created_at])
+
+          round[:events].each do |ev|
+            case ev[:role].to_s
+            when "assistant"
+              # Text content
+              text = extract_text_from_content(ev[:content]).to_s.strip
+              ui.show_assistant_message(text) unless text.empty?
+
+              # Tool calls embedded in assistant message
+              Array(ev[:tool_calls]).each do |tc|
+                name     = tc[:name] || tc.dig(:function, :name) || ""
+                args_raw = tc[:arguments] || tc.dig(:function, :arguments) || {}
+                args     = args_raw.is_a?(String) ? (JSON.parse(args_raw) rescue args_raw) : args_raw
+                ui.show_tool_call(name, args)
+              end
+
+            when "user"
+              # Anthropic-format tool results (role: user, content: array of tool_result blocks)
+              next unless ev[:content].is_a?(Array)
+
+              ev[:content].each do |blk|
+                next unless blk.is_a?(Hash) && blk[:type] == "tool_result"
+
+                ui.show_tool_result(blk[:content].to_s)
+              end
+
+            when "tool"
+              # OpenAI-format tool result
+              ui.show_tool_result(ev[:content].to_s)
+            end
+          end
+        end
+
+        { has_more: has_more }
+      end
+
       private
 
       # Extract text from message content (handles string and array formats)

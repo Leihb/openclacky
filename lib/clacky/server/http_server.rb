@@ -12,6 +12,41 @@ require_relative "scheduler"
 
 module Clacky
   module Server
+    # Lightweight UI collector used by api_session_messages to capture events
+    # emitted by Agent#replay_history without broadcasting over WebSocket.
+    # Implements the same show_* interface as WebUIController.
+    class HistoryCollector
+      def initialize(session_id, events)
+        @session_id = session_id
+        @events     = events
+      end
+
+      def show_user_message(content, created_at: nil)
+        ev = { type: "history_user_message", session_id: @session_id, content: content }
+        ev[:created_at] = created_at if created_at
+        @events << ev
+      end
+
+      def show_assistant_message(content)
+        return if content.nil? || content.to_s.strip.empty?
+
+        @events << { type: "assistant_message", session_id: @session_id, content: content }
+      end
+
+      def show_tool_call(name, args)
+        args_data = args.is_a?(String) ? (JSON.parse(args) rescue args) : args
+        @events << { type: "tool_call", session_id: @session_id, name: name, args: args_data }
+      end
+
+      def show_tool_result(result)
+        @events << { type: "tool_result", session_id: @session_id, result: result }
+      end
+
+      # Ignore all other UI methods (progress, errors, etc.) during history replay
+      def method_missing(name, *args, **kwargs); end
+      def respond_to_missing?(name, include_private = false) = true
+    end
+
     # HttpServer runs an embedded WEBrick HTTP server with WebSocket support.
     #
     # Routes:
@@ -140,7 +175,10 @@ module Clacky
         when ["POST",   "/api/onboard/complete"]  then api_onboard_complete(req, res)
         when ["POST",   "/api/onboard/skip-soul"] then api_onboard_skip_soul(res)
         else
-          if method == "DELETE" && path.start_with?("/api/sessions/")
+          if method == "GET" && path.match?(%r{^/api/sessions/[^/]+/messages$})
+            session_id = path.sub("/api/sessions/", "").sub("/messages", "")
+            api_session_messages(session_id, req, res)
+          elsif method == "DELETE" && path.start_with?("/api/sessions/")
             session_id = path.sub("/api/sessions/", "")
             api_delete_session(session_id, res)
           elsif method == "DELETE" && path.start_with?("/api/schedules/")
@@ -476,6 +514,34 @@ module Clacky
           }
         end
         json_response(res, 200, { providers: providers })
+      end
+
+      # GET /api/sessions/:id/messages?limit=20&before=1709123456.789
+      # Replays conversation history for a session via the agent's replay_history method.
+      # Returns a list of UI events (same format as WS events) for the frontend to render.
+      def api_session_messages(session_id, req, res)
+        unless @registry.exist?(session_id)
+          return json_response(res, 404, { error: "Session not found" })
+        end
+
+        # Parse query params
+        query   = URI.decode_www_form(req.query_string.to_s).to_h
+        limit   = [query["limit"].to_i.then { |n| n > 0 ? n : 20 }, 100].min
+        before  = query["before"]&.to_f
+
+        agent = nil
+        @registry.with_session(session_id) { |s| agent = s[:agent] }
+
+        unless agent
+          return json_response(res, 200, { events: [], has_more: false })
+        end
+
+        # Collect events emitted by replay_history via a lightweight collector UI
+        collected = []
+        collector = HistoryCollector.new(session_id, collected)
+        result    = agent.replay_history(collector, limit: limit, before: before)
+
+        json_response(res, 200, { events: collected, has_more: result[:has_more] })
       end
 
       def api_delete_session(session_id, res)

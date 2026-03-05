@@ -61,6 +61,7 @@ body {
 
 /* ── Session List ────────────────────────────────────────────────────────── */
 .session-item {
+  position: relative;
   padding: 10px 12px;
   border-radius: 6px;
   cursor: pointer;
@@ -70,6 +71,30 @@ body {
 }
 .session-item:hover { background: #1f2937; }
 .session-item.active { background: #1f2937; border-color: #30363d; }
+
+/* Delete button on session list items — visible only on hover */
+.session-delete-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #8b949e;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: background .15s, color .15s;
+}
+.session-item:hover .session-delete-btn { display: flex; }
+.session-delete-btn:hover { background: #3d1a1a; color: #f85149; }
 .session-name {
   font-size: 13px;
   font-weight: 600;
@@ -365,6 +390,24 @@ body {
 #chat-title { font-weight: 600; font-size: 15px; }
 .status-idle    { font-size: 11px; color: #8b949e; }
 .status-running { font-size: 11px; color: #3fb950; }
+
+/* Delete session button in chat header */
+.btn-delete-session {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #6e7681;
+  cursor: pointer;
+  padding: 0;
+  transition: background .15s, color .15s;
+}
+.btn-delete-session:hover { background: #3d1a1a; color: #f85149; }
 
 /* ── Messages ────────────────────────────────────────────────────────────── */
 #messages {

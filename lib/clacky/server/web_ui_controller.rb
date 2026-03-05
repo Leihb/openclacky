@@ -40,6 +40,12 @@ module Clacky
 
       # === Output display ===
 
+      def show_user_message(content, created_at: nil)
+        data = { content: content }
+        data[:created_at] = created_at if created_at
+        emit("history_user_message", **data)
+      end
+
       def show_assistant_message(content)
         return if content.nil? || content.to_s.strip.empty?
 

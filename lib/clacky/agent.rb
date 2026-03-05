@@ -163,7 +163,7 @@ module Clacky
 
       # Format user message with images if provided
       user_content = format_user_content(user_input, images)
-      @messages << { role: "user", content: user_content, task_id: task_id }
+      @messages << { role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f }
       @total_tasks += 1
 
       @hooks.trigger(:on_start, user_input)
