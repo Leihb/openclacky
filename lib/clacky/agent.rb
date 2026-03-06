@@ -220,6 +220,8 @@ module Clacky
           # Check if request_user_feedback was called
           if action_result[:awaiting_feedback]
             awaiting_user_feedback = true
+            observe(response, action_result[:tool_results])
+            break
           end
 
           # Observe: Add tool results to conversation context
