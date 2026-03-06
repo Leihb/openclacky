@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.0] - 2026-03-06
 
 ### Added
+- **Browser tool**: AI agent can now control the user's Chrome browser via Chrome DevTools Protocol (CDP) — click, fill forms, take screenshots, scroll, and interact with pages using the user's real login session
 - White-label brand licensing system: customize the web UI with your own name, logo, colors, and skills via `brand_config.yml`
 - Brand skills tab in the web UI with private badge, shown only when brand skills are configured
 - Slash command prompt rule: skill invocations (e.g. `/skill-name`) are now expanded inside the agent at run time, enabling mid-session skill triggering
