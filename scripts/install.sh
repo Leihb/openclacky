@@ -98,6 +98,17 @@ install_via_gem() {
         return 1
     fi
 
+    # Enforce Ruby >= 3.1.0 before attempting gem install
+    if ! command_exists ruby; then
+        print_error "Ruby is not available"
+        return 1
+    fi
+    RUBY_VERSION=$(ruby -e 'puts RUBY_VERSION' 2>/dev/null)
+    if ! version_ge "$RUBY_VERSION" "3.1.0"; then
+        print_error "Ruby $RUBY_VERSION is too old (>= 3.1.0 required)"
+        return 1
+    fi
+
     print_info "Installing OpenClacky gem..."
     gem install openclacky
 
@@ -258,8 +269,9 @@ suggest_ruby_installation() {
         echo "  This script can automatically install Ruby and dependencies for you."
         echo "  Uses mise - a fast, polyglot tool version manager."
         echo ""
-        read -p "Would you like to install Ruby and dependencies automatically? (y/n) " -n 1 -r
+        read -p "Would you like to install Ruby and dependencies automatically? [Y/n] " REPLY
         echo ""
+        REPLY="${REPLY:-Y}"
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             install_macos_dependencies
             return $?
@@ -285,8 +297,9 @@ suggest_ruby_installation() {
             echo "  This script can automatically install Ruby and dependencies for you."
             echo "  Uses mise - a fast, polyglot tool version manager."
             echo ""
-            read -p "Would you like to install Ruby and dependencies automatically? (y/n) " -n 1 -r
+            read -p "Would you like to install Ruby and dependencies automatically? [Y/n] " REPLY
             echo ""
+            REPLY="${REPLY:-Y}"
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 install_ubuntu_dependencies
                 return $?
@@ -470,28 +483,42 @@ main() {
 }
 
 # Install agent-browser (browser automation tool)
+# This step is optional — failures are silently skipped with a hint.
 install_agent_browser() {
-    print_step "Installing agent-browser..."
+    print_step "Installing agent-browser (optional)..."
+
+    # Try to find npm; if missing, attempt to install Node.js via mise
+    if ! command_exists npm; then
+        if command_exists mise || [ -x "$HOME/.local/bin/mise" ]; then
+            print_info "Installing Node.js via mise..."
+            "$HOME/.local/bin/mise" install node@22 > /dev/null 2>&1 || true
+            "$HOME/.local/bin/mise" use -g node@22 > /dev/null 2>&1 || true
+            # Reload mise so node/npm are on PATH
+            eval "$("$HOME/.local/bin/mise" activate bash 2>/dev/null)" 2>/dev/null || true
+        fi
+    fi
 
     if ! command_exists npm; then
-        if command_exists mise; then
-            print_info "Installing Node.js via mise..."
-            ~/.local/bin/mise install node@22 > /dev/null 2>&1
-            ~/.local/bin/mise use -g node@22 > /dev/null 2>&1
-        fi
+        print_warning "agent-browser skipped (Node.js/npm not found)."
+        print_info "To enable browser automation later:"
+        print_info "  mise install node@22 && mise use -g node@22 && npm install -g agent-browser"
+        return 0
     fi
 
-    if command_exists npm; then
-        if ! command_exists agent-browser; then
-            npm install -g agent-browser > /dev/null 2>&1
-            print_success "agent-browser installed"
-        else
-            print_success "agent-browser already installed"
-        fi
-    else
-        print_warning "Node.js/npm not found. Browser automation requires Node.js (>= 22)."
-        print_warning "Install mise (https://mise.jdx.dev) then run: mise install node@22 && mise use -g node@22"
+    if command_exists agent-browser; then
+        print_success "agent-browser already installed"
+        return 0
     fi
+
+    print_info "Running: npm install -g agent-browser"
+    if npm install -g agent-browser > /dev/null 2>&1; then
+        print_success "agent-browser installed"
+    else
+        print_warning "agent-browser installation failed — skipping."
+        print_info "To install manually later: npm install -g agent-browser"
+    fi
+
+    return 0
 }
 
 # Post-installation information
@@ -509,10 +536,17 @@ show_post_install_info() {
     echo "   openclacky"
     echo "   > /config"
     echo ""
-    print_info "2. Create a new project:"
+    print_info "2. Start (Terminal / CLI mode):"
+    echo "   openclacky"
+    echo ""
+    print_info "3. Start (Web UI mode):"
+    echo "   openclacky server"
+    echo "   Then open http://localhost:7070 in your browser"
+    echo ""
+    print_info "4. Create a new project:"
     echo "   > /new your-project-name"
     echo ""
-    print_info "3. Get help:"
+    print_info "5. Get help:"
     echo "   > /help"
     echo ""
     print_success "Happy coding! 🚀"
