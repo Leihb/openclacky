@@ -36,7 +36,19 @@ module Clacky
 
       def show_tool_call(name, args)
         args_data = args.is_a?(String) ? (JSON.parse(args) rescue args) : args
-        @events << { type: "tool_call", session_id: @session_id, name: name, args: args_data }
+        summary   = tool_call_summary(name, args_data)
+        @events << { type: "tool_call", session_id: @session_id, name: name, args: args_data, summary: summary }
+      end
+
+      private def tool_call_summary(name, args)
+        class_name = name.to_s.split("_").map(&:capitalize).join
+        return nil unless Clacky::Tools.const_defined?(class_name)
+
+        tool = Clacky::Tools.const_get(class_name).new
+        args_sym = args.is_a?(Hash) ? args.transform_keys(&:to_sym) : {}
+        tool.format_call(args_sym)
+      rescue StandardError
+        nil
       end
 
       def show_tool_result(result)

@@ -57,7 +57,10 @@ module Clacky
         return if name.to_s == "request_user_feedback"
 
         args_data = args.is_a?(String) ? (JSON.parse(args) rescue args) : args
-        emit("tool_call", name: name, args: args_data)
+
+        # Generate a human-readable summary using the tool's format_call method
+        summary = tool_call_summary(name, args_data)
+        emit("tool_call", name: name, args: args_data, summary: summary)
       end
 
       def show_tool_result(result)
@@ -210,6 +213,19 @@ module Clacky
       end
 
       private
+
+      # Generate a short human-readable summary for a tool call display.
+      # Delegates to each tool's own format_call method when available.
+      def tool_call_summary(name, args)
+        class_name = name.to_s.split("_").map(&:capitalize).join
+        return nil unless Clacky::Tools.const_defined?(class_name)
+
+        tool = Clacky::Tools.const_get(class_name).new
+        args_sym = args.is_a?(Hash) ? args.transform_keys(&:to_sym) : {}
+        tool.format_call(args_sym)
+      rescue StandardError
+        nil
+      end
 
       def emit(type, **data)
         event = { type: type, session_id: @session_id }.merge(data)
