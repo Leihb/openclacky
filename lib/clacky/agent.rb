@@ -17,6 +17,7 @@ require_relative "agent/skill_manager"
 require_relative "agent/system_prompt_builder"
 require_relative "agent/llm_caller"
 require_relative "agent/time_machine"
+require_relative "agent/memory_updater"
 
 module Clacky
   class Agent
@@ -29,6 +30,7 @@ module Clacky
     include SystemPromptBuilder
     include LlmCaller
     include TimeMachine
+    include MemoryUpdater
 
     attr_reader :session_id, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
                 :cache_stats, :cost_source, :ui, :skill_loader
@@ -259,6 +261,9 @@ module Clacky
           @modified_files_in_task = []  # Reset for next task
         end
         
+        # Trigger long-term memory update at end of session
+        trigger_memory_update
+
         @ui&.show_complete(
           iterations: result[:iterations],
           cost: result[:total_cost_usd],

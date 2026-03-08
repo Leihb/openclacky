@@ -46,6 +46,12 @@ module Clacky
 
         NOTE: Available skills are listed below in the AVAILABLE SKILLS section.
         When a user's request matches a skill, you MUST use the skill tool instead of implementing it yourself.
+
+        ## Long-term Memory
+        You have long-term memories in `~/.clacky/memories/`. Use `invoke_skill("recall-memory", "<topic>")` when:
+        - The user references something from a past session
+        - You encounter a concept or decision you're unsure about
+        Do NOT recall proactively — only when genuinely needed.
       PROMPT
 
       # Build complete system prompt with project rules and skills
