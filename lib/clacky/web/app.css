@@ -874,6 +874,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  margin-bottom: 16px;
 }
 .model-card-header {
   display: flex;
@@ -1003,6 +1004,27 @@ body {
 .btn-save-model {
   font-size: 13px;
   padding: 6px 18px;
+}
+.btn-set-default {
+  font-size: 13px;
+  padding: 6px 14px;
+  background: #238636;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.btn-set-default:hover {
+  background: #2ea043;
+}
+.btn-set-default:disabled {
+  background: #484f58;
+  cursor: not-allowed;
+}
+.model-card-actions-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 /* ── Modals ──────────────────────────────────────────────────────────────── */
