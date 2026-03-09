@@ -105,7 +105,7 @@ module Clacky
           session_registry: @registry,
           session_builder:  method(:build_session)
         )
-        @skill_loader    = Clacky::SkillLoader.new
+        @skill_loader    = Clacky::SkillLoader.new(nil, brand_config: Clacky::BrandConfig.load)
       end
 
       def start
@@ -210,7 +210,10 @@ module Clacky
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
         when ["GET",    "/api/brand"]             then api_brand_info(res)
         else
-          if method == "GET" && path.match?(%r{^/api/sessions/[^/]+/messages$})
+          if method == "GET" && path.match?(%r{^/api/sessions/[^/]+/skills$})
+            session_id = path.sub("/api/sessions/", "").sub("/skills", "")
+            api_session_skills(session_id, res)
+          elsif method == "GET" && path.match?(%r{^/api/sessions/[^/]+/messages$})
             session_id = path.sub("/api/sessions/", "").sub("/messages", "")
             api_session_messages(session_id, req, res)
           elsif method == "DELETE" && path.start_with?("/api/sessions/")
@@ -380,6 +383,9 @@ module Clacky
         result = @brand_test ? brand.activate_mock!(key) : brand.activate!(key)
 
         if result[:success]
+          # Refresh skill_loader with the now-activated brand config so brand
+          # skills are loadable from this point forward (e.g. after sync).
+          @skill_loader = Clacky::SkillLoader.new(nil, brand_config: brand)
           json_response(res, 200, { ok: true, brand_name: result[:brand_name] || brand.brand_name })
         else
           json_response(res, 422, { ok: false, error: result[:message] })
@@ -446,8 +452,9 @@ module Clacky
         result = @brand_test ? brand.install_mock_brand_skill!(skill_info) : brand.install_brand_skill!(skill_info)
 
         if result[:success]
-          # Reload skills so the Agent can pick up the new skill immediately
-          @skill_loader.load_all
+          # Reload skills so the Agent can pick up the new skill immediately.
+          # Re-create the loader with the current brand_config so brand skills are decryptable.
+          @skill_loader = Clacky::SkillLoader.new(nil, brand_config: brand)
           json_response(res, 200, { ok: true, slug: result[:slug], version: result[:version] })
         else
           json_response(res, 422, { ok: false, error: result[:error] })
@@ -653,6 +660,38 @@ module Clacky
           }
         end
         json_response(res, 200, { skills: skills })
+      end
+
+      # GET /api/sessions/:id/skills — list user-invocable skills for a session,
+      # filtered by the session's agent profile. Used by the frontend slash-command
+      # autocomplete so only skills valid for the current profile are suggested.
+      def api_session_skills(session_id, res)
+        session = @registry.get(session_id)
+        unless session
+          json_response(res, 404, { error: "Session not found" })
+          return
+        end
+
+        agent = session[:agent]
+        unless agent
+          json_response(res, 404, { error: "Agent not found" })
+          return
+        end
+
+        agent.skill_loader.load_all
+        profile = agent.agent_profile
+
+        skills = agent.skill_loader.user_invocable_skills
+        skills = skills.select { |s| s.allowed_for_agent?(profile.name) } if profile
+
+        skill_data = skills.map do |skill|
+          {
+            name:        skill.identifier,
+            description: skill.description || skill.context_description
+          }
+        end
+
+        json_response(res, 200, { skills: skill_data })
       end
 
       # PATCH /api/skills/:name/toggle — enable or disable a skill
@@ -1078,11 +1117,9 @@ module Clacky
         client = @client_factory.call
         config = @agent_config.dup
         config.permission_mode = permission_mode
-        agent  = Clacky::Agent.new(client, config, working_dir: working_dir, profile: profile)
-
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)
-        agent.instance_variable_set(:@ui, ui)
+        agent  = Clacky::Agent.new(client, config, working_dir: working_dir, ui: ui, profile: profile)
 
         @registry.with_session(session_id) do |s|
           s[:agent] = agent
@@ -1106,11 +1143,9 @@ module Clacky
 
         client = @client_factory.call
         config = @agent_config.dup
-        agent  = Clacky::Agent.from_session(client, config, session_data, profile: "general")
-
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)
-        agent.instance_variable_set(:@ui, ui)
+        agent  = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: "general")
 
         @registry.with_session(session_id) do |s|
           s[:agent] = agent

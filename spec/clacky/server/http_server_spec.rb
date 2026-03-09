@@ -408,6 +408,62 @@ RSpec.describe Clacky::Server::HttpServer do
     end
   end
 
+  # ── GET /api/sessions/:id/skills ─────────────────────────────────────────
+
+  describe "GET /api/sessions/:id/skills" do
+    it "returns 404 when the session does not exist" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "GET", path: "/api/sessions/nonexistent/skills")
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(404)
+        expect(parsed_body(res)["error"]).to match(/not found/i)
+      end
+    end
+
+    it "returns profile-filtered user_invocable skills for a session" do
+      with_server(agent_config: agent_config) do |server|
+        # Create a session
+        create_req = fake_req(method: "POST", path: "/api/sessions",
+                              body: { name: "skill-test-session", profile: "general" })
+        create_res = fake_res
+        dispatch(server, create_req, create_res)
+        session_id = parsed_body(create_res)["session"]["id"]
+
+        # Mock the agent's skill_loader and agent_profile
+        session_data = server.instance_variable_get(:@registry).get(session_id)
+        agent        = session_data[:agent]
+
+        mock_skill = instance_double(Clacky::Skill,
+          identifier:           "recall-memory",
+          description:          "Recall memories",
+          context_description:  "Recall memories",
+          user_invocable?:      true,
+          disabled?:            false,
+          allowed_for_agent?:   true
+        )
+        allow(mock_skill).to receive(:allowed_for_agent?).with(anything).and_return(true)
+
+        mock_loader = instance_double(Clacky::SkillLoader,
+          load_all:              nil,
+          user_invocable_skills: [mock_skill]
+        )
+        allow(agent).to receive(:skill_loader).and_return(mock_loader)
+
+        req = fake_req(method: "GET", path: "/api/sessions/#{session_id}/skills")
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        body = parsed_body(res)
+        expect(body).to have_key("skills")
+        expect(body["skills"]).to be_an(Array)
+        expect(body["skills"].first["name"]).to eq("recall-memory")
+      end
+    end
+  end
+
   # ── mask_api_key helper ───────────────────────────────────────────────────
 
   describe "#mask_api_key (private)" do
