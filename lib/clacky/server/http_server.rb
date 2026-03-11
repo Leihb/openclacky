@@ -1281,6 +1281,7 @@ module Clacky
 
         client = @client_factory.call
         config = @agent_config.deep_copy
+        config.permission_mode = permission_mode
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)
         agent  = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: "general")
