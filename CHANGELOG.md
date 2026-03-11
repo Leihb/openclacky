@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-03-11
+
+### Fixed
+- **SSL connection on mise/Homebrew Ruby**: disabled SSL certificate verification in Faraday HTTP client to fix `SSL_connect` errors that affected users who installed Ruby via `mise` + Homebrew on macOS (where the system CA bundle is not linked automatically)
+- **ChannelManager startup crash**: fixed `NoMethodError` for undefined `Clacky.logger` — now correctly calls `Clacky::Logger`
+
 ## [0.8.4] - 2026-03-10
 
 ### Added
