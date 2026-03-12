@@ -275,6 +275,13 @@ module Clacky
             next unless source.is_a?(Hash) && source[:type].to_s == "base64"
 
             "data:#{source[:media_type]};base64,#{source[:data]}"
+          when "document"
+            # Anthropic PDF document block — return a sentinel string for frontend display
+            source = block[:source]
+            next unless source.is_a?(Hash) && source[:media_type].to_s == "application/pdf"
+
+            # Return a special marker so the frontend can render a PDF badge instead of an <img>
+            "pdf:#{source[:data]&.then { |d| d[0, 32] }}"  # prefix to identify without full payload
           end
         end
       end

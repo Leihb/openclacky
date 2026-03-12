@@ -141,7 +141,7 @@ module Clacky
       @config.model_name
     end
 
-    def run(user_input, images: [])
+    def run(user_input, images: [], files: [])
       # Start new task for Time Machine
       task_id = start_new_task
 
@@ -172,8 +172,8 @@ module Clacky
         @messages << system_message
       end
 
-      # Format user message with images if provided
-      user_content = format_user_content(user_input, images)
+      # Format user message with images and files if provided
+      user_content = format_user_content(user_input, images, files)
       @messages << { role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f }
       @total_tasks += 1
 
@@ -817,11 +817,16 @@ module Clacky
     end
 
     # Format user content with optional images
+    # PDF files are handled upstream (server injects file path into message text),
+    # so this method only needs to handle images.
     # @param text [String] User's text input
     # @param images [Array<String>] Array of image file paths or data: URLs
-    # @return [String|Array] String if no images, Array with text and image_url objects if images present
-    private def format_user_content(text, images)
-      return text if images.nil? || images.empty?
+    # @param files [Array] Unused — kept for signature compatibility
+    # @return [String|Array] String if no images, Array with content blocks otherwise
+    private def format_user_content(text, images, files = [])
+      images ||= []
+
+      return text if images.empty?
 
       content = []
       content << { type: "text", text: text } unless text.nil? || text.empty?

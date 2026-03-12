@@ -964,6 +964,16 @@ body {
   margin-bottom: 4px;
   object-fit: contain;
 }
+.msg-pdf-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-primary);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
 
 /* ── Input area (wraps preview strip + input bar) ────────────────────────── */
 #input-area {
@@ -1023,6 +1033,53 @@ body {
   padding: 0;
 }
 .img-preview-remove:hover { background: var(--color-error); }
+
+/* PDF preview badge in image-preview-strip */
+.pdf-preview-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-tertiary);
+  flex-shrink: 0;
+  gap: 4px;
+}
+.pdf-preview-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+.pdf-preview-name {
+  font-size: 9px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 56px;
+  padding: 0 2px;
+}
+.pdf-preview-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(0,0,0,.7);
+  color: #fff;
+  border: none;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+}
+.pdf-preview-remove:hover { background: var(--color-error); }
 
 /* ── Skill autocomplete dropdown ─────────────────────────────────────────── */
 #skill-autocomplete {

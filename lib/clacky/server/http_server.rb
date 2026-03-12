@@ -8,6 +8,7 @@ require "fileutils"
 require "tmpdir"
 require "uri"
 require "open3"
+require "securerandom"
 require_relative "session_registry"
 require_relative "web_ui_controller"
 require_relative "scheduler"
@@ -233,6 +234,7 @@ module Clacky
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
         when ["GET",    "/api/brand"]             then api_brand_info(res)
         when ["GET",    "/api/channels"]          then api_list_channels(res)
+        when ["POST",   "/api/upload"]            then api_upload_file(req, res)
         else
           if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
@@ -573,6 +575,35 @@ module Clacky
         end
 
         json_response(res, 200, { channels: platforms })
+      end
+
+      # POST /api/upload
+      # Accepts a multipart/form-data file upload (field name: "file").
+      # Saves the file to a temporary directory and returns a file_id + absolute path.
+      # The file is NOT read into memory as base64 — only the path is returned.
+      def api_upload_file(req, res)
+        upload = parse_multipart_upload(req, "file")
+        unless upload
+          json_response(res, 400, { ok: false, error: "No file field found in multipart body" })
+          return
+        end
+
+        # Sanitize filename and build a unique temp path
+        safe_name = File.basename(upload[:filename].to_s.gsub(/[^\w.\-]/, "_"))
+        safe_name = "upload" if safe_name.empty?
+        file_id   = "#{SecureRandom.hex(8)}_#{safe_name}"
+        upload_dir = File.join(Dir.tmpdir, "clacky-uploads")
+        FileUtils.mkdir_p(upload_dir)
+        dest_path = File.join(upload_dir, file_id)
+
+        File.binwrite(dest_path, upload[:data])
+
+        json_response(res, 200, {
+          ok:      true,
+          file_id: file_id,
+          name:    upload[:filename].to_s,
+          path:    dest_path
+        })
       end
 
       # POST /api/channels/:platform
@@ -1211,7 +1242,7 @@ module Clacky
 
         when "message"
           session_id = msg["session_id"] || conn.session_id
-          handle_user_message(session_id, msg["content"].to_s, msg["images"] || [])
+          handle_user_message(session_id, msg["content"].to_s, msg["images"] || [], msg["files"] || [])
 
         when "confirmation"
           session_id = msg["session_id"] || conn.session_id
@@ -1248,7 +1279,7 @@ module Clacky
 
       # ── Session actions ───────────────────────────────────────────────────────
 
-      def handle_user_message(session_id, content, images)
+      def handle_user_message(session_id, content, images, files = [])
         return unless @registry.exist?(session_id)
 
         session = @registry.get(session_id)
@@ -1258,11 +1289,23 @@ module Clacky
         @registry.with_session(session_id) { |s| agent = s[:agent] }
         return unless agent
 
+        # Append PDF file paths to the message text so the agent can use the pdf skill
+        # to read them — avoids passing huge base64 data through WebSocket / API
+        pdf_files = (files || []).select { |f| (f["mime_type"] || f[:mime_type]) == "application/pdf" }
+        unless pdf_files.empty?
+          pdf_lines = pdf_files.map do |f|
+            path = f["path"] || f[:path]
+            name = f["name"] || f[:name]
+            "[PDF attached: #{name} — file path: #{path}]"
+          end
+          content = [content, *pdf_lines].join("\n")
+        end
+
         @registry.update(session_id, status: :running)
         broadcast_session_update(session_id)
 
         thread = Thread.new do
-          agent.run(content, images: images)
+          agent.run(content, images: images, files: [])
           @registry.update(session_id, status: :idle, error: nil)
           broadcast_session_update(session_id)
           @session_manager.save(agent.to_session_data(status: :success))
