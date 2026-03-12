@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-03-13
+
+### Added
+- **PDF file upload and reading**: users can now upload PDF files directly in the WebUI chat; the agent reads and analyzes the content via the built-in `pdf-reader` skill
+- **WebUI favicon and SVG icons**: browser tab now shows the Clacky icon
+- **Public skill store install**: skills from the public store can be installed directly via the WebUI without a GitHub URL
+- **Auto-kill previous server on startup**: launching `clacky serve` now automatically kills any previously running instance via pidfile, preventing port conflicts
+
+### Improved
+- **Brand skill loading speed**: loading brand skills no longer triggers a network decryption request — name and description are now read from the local `brand_skills.json` cache, making New Session significantly faster
+- **Memory update UX**: memory update step now shows a spinner and info-style message instead of a bare log line
+- **Browser snapshot output**: snapshot output is compressed to reduce token cost when the agent uses browser tools
+- **Subagent output**: subagent task completion now shows a brief info line instead of a full "Task Complete" block, reducing noise in the parent agent's context
+
+### Fixed
+- **Subagent token delta on first iteration**: subagent now inherits `previous_total_tokens` correctly, fixing an inflated token count on the first tool iteration
+- **Chrome DevTools inspect URL**: updated the remote debugging URL to include the `#remote-debugging` fragment for correct navigation
+- **Shell output token explosion**: long lines in shell output are now truncated to prevent excessive token usage
+
+### More
+- Binary file size limit lowered from 5 MB to 512 KB to reduce accidental token cost
+- `kill_existing_server` logic moved from CLI into `HttpServer` for cleaner separation
+- Browser tool prefers `snapshot -i` over `screenshot` for lower token cost
+- Cross-platform PID file path using `Dir.tmpdir` instead of hardcoded `/tmp`
+
 ## [0.8.6] - 2026-03-12
 
 ### Added
