@@ -208,7 +208,12 @@ module Clacky
 
           # Check if done (no more tool calls needed)
           if response[:finish_reason] == "stop" || response[:tool_calls].nil? || response[:tool_calls].empty?
-            @ui&.show_assistant_message(response[:content]) if response[:content] && !response[:content].empty?
+            # During memory update phase, show LLM response as info (not a chat bubble)
+            if @memory_updating && response[:content] && !response[:content].empty?
+              @ui&.show_info("🧠 " + response[:content].strip)
+            elsif response[:content] && !response[:content].empty?
+              @ui&.show_assistant_message(response[:content])
+            end
 
             # Debug: log why we're stopping
             if @config.verbose && (response[:tool_calls].nil? || response[:tool_calls].empty?)
@@ -227,7 +232,8 @@ module Clacky
           end
 
           # Show assistant message if there's content before tool calls
-          if response[:content] && !response[:content].empty?
+          # During memory update phase, suppress text output (only tool calls matter)
+          if response[:content] && !response[:content].empty? && !@memory_updating
             @ui&.show_assistant_message(response[:content])
           end
 

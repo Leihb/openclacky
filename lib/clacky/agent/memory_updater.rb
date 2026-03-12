@@ -42,7 +42,7 @@ module Clacky
 
         @memory_prompt_injected = true
         @memory_updating = true
-        @ui&.show_info("Updating long-term memory...")
+        @ui&.show_progress("Updating long-term memory…")
 
         @messages << {
           role: "user",
@@ -62,7 +62,7 @@ module Clacky
         @messages.reject! { |m| m[:memory_update] }
         @memory_prompt_injected = false
         @memory_updating = false
-        @ui&.show_info("Memory updated.")
+        @ui&.clear_progress
       end
 
       private def memory_update_enabled?
