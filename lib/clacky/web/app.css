@@ -389,12 +389,19 @@ body {
   font-size: 13px;
   padding: 0 4px;
   outline: none;
+  box-sizing: border-box;
 }
 .session-name {
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* While renaming, lift overflow so the input is fully visible */
+.session-name:has(input),
+.session-name.renaming {
+  overflow: visible;
+  white-space: normal;
 }
 .session-meta { font-size: 11px; color: var(--color-text-secondary); margin-top: 3px; }
 .session-dot {
