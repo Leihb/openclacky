@@ -225,6 +225,9 @@ module Clacky
               @ui&.show_assistant_message(response[:content])
             end
 
+            # Show token usage after the assistant message so WebUI renders it below the bubble
+            @ui&.show_token_usage(response[:token_usage]) if response[:token_usage]
+
             # Debug: log why we're stopping
             if @config.verbose && (response[:tool_calls].nil? || response[:tool_calls].empty?)
               reason = response[:finish_reason] == "stop" ? "API returned finish_reason=stop" : "No tool calls in response"
@@ -246,6 +249,10 @@ module Clacky
           if response[:content] && !response[:content].empty? && !@memory_updating
             @ui&.show_assistant_message(response[:content])
           end
+
+          # Show token usage after assistant message (or immediately if no message).
+          # This ensures WebUI renders the token line below the assistant bubble.
+          @ui&.show_token_usage(response[:token_usage]) if response[:token_usage]
 
           # Act: Execute tool calls
           action_result = act(response[:tool_calls])
@@ -414,6 +421,8 @@ module Clacky
       if response[:tool_calls]&.any?
         msg[:tool_calls] = format_tool_calls_for_api(response[:tool_calls])
       end
+      # Store token_usage in the message so replay_history can re-emit it
+      msg[:token_usage] = response[:token_usage] if response[:token_usage]
       @messages << msg
 
       response

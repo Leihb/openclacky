@@ -956,6 +956,32 @@ body {
 .tool-name     { color: var(--color-warning); font-weight: 600; }
 .progress-msg  { color: var(--color-accent-primary); font-size: 12px; align-self: center; animation: pulse 1.2s infinite; }
 
+/* ── Token usage line ────────────────────────────────────────────────────── */
+.token-usage-line {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+  padding: 2px 4px;
+  margin-top: -8px;
+}
+.token-usage-line b { font-weight: 600; color: var(--color-text-secondary); }
+.tu-label { color: var(--color-text-tertiary); font-weight: 600; }
+.tu-sep   { color: var(--color-text-muted); opacity: 0.45; padding: 0 1px; }
+.tu-cache { color: var(--color-accent-primary); font-weight: 600; }   /* [*] */
+.tu-field { color: var(--color-text-muted); }
+.tu-cost  { color: var(--color-text-tertiary); }
+.tu-delta       { font-weight: 700; }
+.tu-delta-ok    { color: #34d399; }   /* green — normal */
+.tu-delta-mid   { color: #f59e0b; }   /* yellow — moderate */
+.tu-delta-high  { color: #f87171; }   /* red — large */
+.tu-delta-neg   { color: var(--color-accent-primary); }  /* cyan — compression */
+
 /* ── Tool group (collapsible tool call list) ─────────────────────────────── */
 .tool-group {
   align-self: flex-start;

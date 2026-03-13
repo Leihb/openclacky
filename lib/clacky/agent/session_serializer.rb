@@ -194,6 +194,9 @@ module Clacky
                 ui.show_tool_call(name, args)
               end
 
+              # Emit token usage stored on this message (for history replay display)
+              ui.show_token_usage(ev[:token_usage]) if ev[:token_usage]
+
             when "user"
               # Anthropic-format tool results (role: user, content: array of tool_result blocks)
               next unless ev[:content].is_a?(Array)
