@@ -111,7 +111,9 @@
       <!-- Version badge: shown after version check, clickable when update available -->
       <div id="version-badge" class="version-badge" style="display:none">
         <span id="version-text" class="version-text"></span>
-        <span id="version-update-dot" class="version-update-dot" style="display:none" title="Update available"></span>
+        <span id="version-update-dot"  class="version-update-dot"  style="display:none"></span>
+        <span id="version-spinner"     class="version-spinner"      style="display:none"></span>
+        <span id="version-done-check"  class="version-done-check"   style="display:none">✓</span>
       </div>
     </div>
   </aside>
@@ -472,35 +474,7 @@
   </div>
 </div>
 
-<!-- ── UPGRADE MODAL ─────────────────────────────────────────────────────── -->
-<div id="upgrade-modal-overlay" class="modal-overlay" style="display:none">
-  <div class="modal-box upgrade-modal-box">
-    <div class="upgrade-modal-header">
-      <h3 id="upgrade-modal-title" class="upgrade-modal-title">Update Available</h3>
-      <button id="upgrade-modal-close" class="upgrade-modal-close" style="display:none">✕</button>
-    </div>
-    <div id="upgrade-modal-body" class="upgrade-modal-body">
-      <!-- Confirm state -->
-      <div id="upgrade-state-confirm">
-        <p id="upgrade-version-info" class="upgrade-version-info"></p>
-        <p class="upgrade-desc" data-i18n="upgrade.desc">A new version of openclacky is available. The server will restart automatically after the upgrade.</p>
-        <div class="modal-actions">
-          <button id="upgrade-btn-start" class="btn-primary">Upgrade Now</button>
-          <button id="upgrade-btn-cancel" class="btn-secondary">Cancel</button>
-        </div>
-      </div>
-      <!-- Progress state -->
-      <div id="upgrade-state-progress" style="display:none">
-        <pre id="upgrade-log" class="upgrade-log"></pre>
-      </div>
-      <!-- Reconnecting state -->
-      <div id="upgrade-state-reconnect" style="display:none">
-        <div class="upgrade-reconnect-spinner"></div>
-        <p class="upgrade-reconnect-msg" data-i18n="upgrade.reconnecting">Server is restarting, reconnecting...</p>
-      </div>
-    </div>
-  </div>
-</div>
+
 
 <script src="/marked.min.js"></script>
 <script src="/i18n.js"></script>

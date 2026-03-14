@@ -131,6 +131,10 @@ module Clacky
         @agent_config   = agent_config
         @client_factory = client_factory  # callable: -> { Clacky::Client.new(...) }
         @brand_test     = brand_test      # when true, skip remote API calls for license activation
+        # Capture the absolute path of the entry script and original ARGV at startup,
+        # so api_restart can re-exec the correct binary even if cwd changes later.
+        @restart_script = File.expand_path($0)
+        @restart_argv   = ARGV.dup
         @registry        = SessionRegistry.new
         @session_manager = Clacky::SessionManager.new
         @ws_clients      = {}  # session_id => [WebSocketConnection, ...]
@@ -272,8 +276,7 @@ module Clacky
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
         when ["GET",    "/api/version"]           then api_get_version(res)
         when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
-        when ["GET",    "/api/version"]           then api_get_version(res)
-        when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
+        when ["POST",   "/api/restart"]           then api_restart(req, res)
         else
           if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
@@ -635,12 +638,8 @@ module Clacky
             broadcast_all(type: "upgrade_log", line: output)
 
             if success
-              broadcast_all(type: "upgrade_log", line: "\n✓ Upgrade successful! Restarting server...\n")
+              broadcast_all(type: "upgrade_log", line: "\n✓ Upgrade successful! Please restart the server to apply the new version.\n")
               broadcast_all(type: "upgrade_complete", success: true)
-              sleep 1.5  # Give frontend time to receive the event before restart
-              # Re-exec the current process so the new gem version is loaded.
-              # $0 is the original executable path, ARGV are the original arguments.
-              exec($0, *ARGV)
             else
               broadcast_all(type: "upgrade_log", line: "\n✗ Upgrade failed. Please try manually: gem update openclacky\n")
               broadcast_all(type: "upgrade_complete", success: false)
@@ -649,6 +648,22 @@ module Clacky
             broadcast_all(type: "upgrade_log", line: "\n✗ Error during upgrade: #{e.message}\n")
             broadcast_all(type: "upgrade_complete", success: false)
           end
+        end
+      end
+
+      # POST /api/restart
+      # Re-execs the current process so the newly installed gem version is loaded.
+      # Uses the absolute script path captured at startup to avoid relative-path issues.
+      # Responds 200 first, then waits briefly for WEBrick to flush the response before exec.
+      def api_restart(req, res)
+        json_response(res, 200, { ok: true, message: "Restarting…" })
+
+        script = @restart_script
+        argv   = @restart_argv
+        Thread.new do
+          sleep 0.5  # Let WEBrick flush the HTTP response
+          Clacky::Logger.info("[Restart] exec: #{RbConfig.ruby} #{script} #{argv.join(' ')}")
+          exec(RbConfig.ruby, script, *argv)
         end
       end
 
@@ -1738,15 +1753,23 @@ module Clacky
 
         pid = File.read(pid_file).strip.to_i
         return if pid <= 0
+        # After exec-restart, the new process inherits the same PID as the old one.
+        # Skip sending TERM to ourselves — we are already the new server.
+        if pid == Process.pid
+          Clacky::Logger.info("[Server] exec-restart detected (PID=#{pid}), skipping self-kill.")
+          return
+        end
 
         begin
           Process.kill("TERM", pid)
+          Clacky::Logger.info("[Server] Stopped existing server (PID=#{pid}) on port #{port}.")
           puts "Stopped existing server (PID: #{pid}) on port #{port}."
           # Give it a moment to release the port
           sleep 0.5
         rescue Errno::ESRCH
-          # Process already gone — nothing to do
+          Clacky::Logger.info("[Server] Existing server PID=#{pid} already gone.")
         rescue Errno::EPERM
+          Clacky::Logger.warn("[Server] Could not stop existing server (PID=#{pid}) — permission denied.")
           puts "Could not stop existing server (PID: #{pid}) — permission denied."
         ensure
           File.delete(pid_file) if File.exist?(pid_file)
