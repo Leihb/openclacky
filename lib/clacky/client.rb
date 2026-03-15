@@ -143,16 +143,38 @@ module Clacky
     # ── Prompt caching helpers ────────────────────────────────────────────────
 
     # Add cache_control marker to the appropriate message in the array.
-    # Strategy: mark the last message, unless that message is a compression
-    # instruction (system_injected: true) — in that case mark the one before it.
+    #
+    # Strategy: mark the SECOND-TO-LAST non-injected assistant message.
+    #
+    # Rationale: Anthropic prompt caching is prefix-based. If we mark the last
+    # message (typically the latest user turn or tool_result), the cached prefix
+    # changes every request because tool results and user inputs vary each turn.
+    # This causes alternating miss/hit patterns observed in production.
+    #
+    # By placing the breakpoint on the most recent ASSISTANT message that precedes
+    # the current user turn, we cache everything up to (and including) the last LLM
+    # reply — a stable prefix. The new user turn + any tool results live AFTER the
+    # breakpoint and are not cached (they change every request anyway).
+    #
+    # Special cases:
+    #   - Compression instruction as last message: skip it, find the assistant before it.
+    #   - Fewer than 2 messages: fall back to marking the last message.
     def apply_message_caching(messages)
       return messages if messages.empty?
 
-      cache_index = if is_compression_instruction?(messages.last)
-                      [messages.length - 2, 0].max
-                    else
-                      messages.length - 1
-                    end
+      # Walk backwards to find the last assistant message that is not system_injected.
+      # That is the stable "end of history" to anchor the cache breakpoint on.
+      cache_index = nil
+      messages.each_with_index.reverse_each do |msg, idx|
+        next if msg[:system_injected]
+        if msg[:role] == "assistant"
+          cache_index = idx
+          break
+        end
+      end
+
+      # Fallback: if no assistant message found, mark the last message
+      cache_index ||= messages.length - 1
 
       messages.map.with_index do |msg, idx|
         idx == cache_index ? add_cache_control_to_message(msg) : msg
@@ -177,8 +199,18 @@ module Clacky
       msg.merge(content: content_array)
     end
 
+    # Only true for the compression-instruction user message inserted by MessageCompressor.
+    # Skill shim messages (also system_injected: true) must NOT be treated as compression
+    # instructions — doing so shifts the cache breakpoint into the volatile skill content
+    # block, causing a full cache miss on every slash command turn.
     def is_compression_instruction?(message)
-      message.is_a?(Hash) && message[:system_injected] == true
+      return false unless message.is_a?(Hash)
+      return false unless message[:system_injected] == true
+      return false unless message[:role] == "user"
+
+      content = message[:content].to_s
+      content.include?("CRITICAL: TASK CHANGE - MEMORY COMPRESSION MODE") ||
+        content.include?("MEMORY COMPRESSION MODE")
     end
 
     # ── HTTP connections ──────────────────────────────────────────────────────
