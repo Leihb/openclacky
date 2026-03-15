@@ -22,6 +22,9 @@ module Clacky
   #   product_name: "JohnAI Pro"
   #   logo_url: "https://example.com/logo.png"
   #   support_contact: "support@johnai.com"
+  #   support_qr_url: "https://example.com/qr.png"
+  #   theme_color: "#3B82F6"
+  #   homepage_url: "https://johnai.com"
   #   license_key: "0000002A-00000007-DEADBEEF-CAFEBABE-A1B2C3D4"
   #   license_activated_at: "2025-03-01T00:00:00Z"
   #   license_expires_at: "2026-03-01T00:00:00Z"
@@ -43,7 +46,8 @@ module Clacky
     attr_reader :brand_name, :license_key, :license_activated_at,
                 :license_expires_at, :license_last_heartbeat, :device_id,
                 :brand_command, :distribution_name, :product_name,
-                :logo_url, :support_contact, :license_user_id
+                :logo_url, :support_contact, :license_user_id,
+                :support_qr_url, :theme_color, :homepage_url
 
     def initialize(attrs = {})
       @brand_name              = attrs["brand_name"]
@@ -52,6 +56,9 @@ module Clacky
       @product_name            = attrs["product_name"]
       @logo_url                = attrs["logo_url"]
       @support_contact         = attrs["support_contact"]
+      @support_qr_url          = attrs["support_qr_url"]
+      @theme_color             = attrs["theme_color"]
+      @homepage_url            = attrs["homepage_url"]
       @license_key             = attrs["license_key"]
       @license_activated_at    = parse_time(attrs["license_activated_at"])
       @license_expires_at      = parse_time(attrs["license_expires_at"])
@@ -159,6 +166,13 @@ module Clacky
         # Server returns "owner_user_id" for system licenses; plan-based licenses return nil.
         owner_uid = data["owner_user_id"]
         @license_user_id = owner_uid.to_s.strip if owner_uid && !owner_uid.to_s.strip.empty?
+        # Pin the device_id used in this activation request so that future API calls
+        # (e.g. skill_keys, heartbeat) always send the exact same device_id that was
+        # recorded in activated_devices on the server side.
+        # If the server echoes back device_id in the response, prefer that value;
+        # otherwise keep the one we just sent (@device_id is already set above).
+        server_device_id = data["device_id"].to_s.strip
+        @device_id = server_device_id unless server_device_id.empty?
         apply_distribution(data["distribution"])
         save
         { success: true, message: "License activated successfully!", brand_name: @brand_name,
@@ -179,6 +193,8 @@ module Clacky
     # Returns the same { success:, message:, brand_name:, data: } shape as activate!
     def activate_mock!(license_key)
       @license_key = license_key.strip
+      # Pin a stable device_id for this activation. Once set (from a prior load or
+      # a previous call), never regenerate — the same rule as activate!.
       @device_id ||= generate_device_id
 
       # Always derive brand_name fresh from the key in mock mode,
@@ -724,6 +740,9 @@ module Clacky
         product_name:       @product_name,
         logo_url:           @logo_url,
         support_contact:    @support_contact,
+        support_qr_url:     @support_qr_url,
+        theme_color:        @theme_color,
+        homepage_url:       @homepage_url,
         branded:            branded?,
         activated:          activated?,
         expired:            expired?,
@@ -743,6 +762,9 @@ module Clacky
       data["product_name"]           = @product_name           if @product_name
       data["logo_url"]               = @logo_url               if @logo_url
       data["support_contact"]        = @support_contact        if @support_contact
+      data["support_qr_url"]         = @support_qr_url         if @support_qr_url
+      data["theme_color"]            = @theme_color            if @theme_color
+      data["homepage_url"]           = @homepage_url           if @homepage_url
       data["license_key"]            = @license_key            if @license_key
       data["license_activated_at"]   = @license_activated_at.iso8601   if @license_activated_at
       data["license_expires_at"]     = @license_expires_at.iso8601     if @license_expires_at
@@ -772,14 +794,19 @@ module Clacky
     end
 
     # Apply distribution fields from API response.
-    # Updates name, product_name, logo_url, support_contact from the distribution hash.
+    # Updates name, product_name, logo_url, support_contact, support_qr_url,
+    # theme_color, and homepage_url from the distribution hash.
     private def apply_distribution(dist)
       return unless dist.is_a?(Hash)
 
-      @distribution_name = dist["name"]           if dist["name"].to_s.strip != ""
+      @distribution_name = dist["name"]            if dist["name"].to_s.strip != ""
       @product_name      = dist["product_name"]    if dist["product_name"].to_s.strip != ""
       @logo_url          = dist["logo_url"]         if dist["logo_url"].to_s.strip != ""
       @support_contact   = dist["support_contact"]  if dist["support_contact"].to_s.strip != ""
+      # New branding fields returned by the API (logo, QR code, theme, homepage)
+      @support_qr_url    = dist["support_qr_url"]   if dist.key?("support_qr_url")
+      @theme_color       = dist["theme_color"]       if dist.key?("theme_color")
+      @homepage_url      = dist["homepage_url"]      if dist.key?("homepage_url")
     end
 
     # Download a remote URL to a local file path.
@@ -860,6 +887,19 @@ module Clacky
         return cached[:key] if key_valid && within_grace
       end
 
+      # Guard: @device_id must match the value recorded in activated_devices on the
+      # server.  If it is nil (e.g. loaded from a brand.yml that predates the
+      # device_id field), reload from disk as a last-chance recovery — the file
+      # may have been written by a concurrent process or a newer gem version.
+      # If still nil after reload, raise an actionable error rather than sending
+      # an empty device_id that will always be rejected by the server.
+      if @device_id.nil? || @device_id.strip.empty?
+        reloaded = BrandConfig.load
+        @device_id = reloaded.device_id if reloaded.device_id && !reloaded.device_id.strip.empty?
+      end
+      raise "Device ID is missing. Please re-activate your license with `clacky license activate`." \
+        if @device_id.nil? || @device_id.strip.empty?
+
       # Build signed request payload
       user_id   = parse_user_id_from_key(@license_key)
       key_hash  = Digest::SHA256.hexdigest(@license_key)
@@ -918,7 +958,19 @@ module Clacky
       hex[0..7].to_i(16)
     end
 
-    # Generate a stable device ID based on system identifiers.
+    # Generate a one-time stable device ID based on system identifiers.
+    #
+    # IMPORTANT: This method MUST only be called once — during the very first
+    # activation — via `@device_id ||= generate_device_id`.  The result is
+    # immediately persisted to brand.yml by `save`.  All subsequent calls
+    # (heartbeat, skill_keys, etc.) must read @device_id from memory (which was
+    # populated by `initialize` from the stored brand.yml), never call this
+    # method again.
+    #
+    # The generated ID is deterministic for the same environment, but can change
+    # if the hostname, user, or platform changes (e.g. inside a Docker container
+    # with a random hostname).  That is why we pin it to disk immediately and
+    # never regenerate once saved.
     private def generate_device_id
       components = [
         Socket.gethostname,
