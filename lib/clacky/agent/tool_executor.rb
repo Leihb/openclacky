@@ -346,15 +346,17 @@ module Clacky
       # @return [nil] Always returns nil (no errors for write)
       private def show_write_preview(args)
         path = args[:path] || args['path']
+        # Expand ~ to home directory so File.exist? works correctly
+        expanded_path = path&.start_with?("~") ? File.expand_path(path) : path
         new_content = args[:content] || args['content'] || ""
 
-        is_new_file = !(path && File.exist?(path))
+        is_new_file = !(expanded_path && File.exist?(expanded_path))
         @ui&.show_file_write_preview(path, is_new_file: is_new_file)
 
         if is_new_file
           @ui&.show_diff("", new_content, max_lines: 50)
         else
-          old_content = File.read(path)
+          old_content = File.read(expanded_path)
           @ui&.show_diff(old_content, new_content, max_lines: 50)
         end
         nil
@@ -369,14 +371,17 @@ module Clacky
         new_string = args[:new_string] || args['new_string'] || ""
         replace_all = args[:replace_all] || args['replace_all'] || false
 
+        # Expand ~ to home directory so File.exist? and File.read work correctly
+        expanded_path = path&.start_with?("~") ? File.expand_path(path) : path
+
         @ui&.show_file_edit_preview(path)
 
-        if !path || path.empty?
+        if !expanded_path || expanded_path.empty?
           @ui&.show_file_error("No file path provided")
           return { error: "No file path provided for edit operation" }
         end
 
-        unless File.exist?(path)
+        unless File.exist?(expanded_path)
           @ui&.show_file_error("File not found: #{path}")
           return { error: "File not found: #{path}", path: path }
         end
@@ -386,7 +391,7 @@ module Clacky
           return { error: "No old_string provided (nothing to replace)" }
         end
 
-        file_content = File.read(path)
+        file_content = File.read(expanded_path)
 
         # Use the same find_match logic as Edit tool to handle fuzzy matching
         # (trim, unescape, smart line matching) — prevents diff from being blank
