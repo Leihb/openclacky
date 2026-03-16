@@ -922,7 +922,7 @@ module Clacky
       }
 
       response = api_post("/api/v1/licenses/skill_keys", payload)
-      raise "Failed to fetch decryption key: #{response[:error]}" unless response[:success]
+      raise "Brand skill decrypt failed: #{response[:error]}" unless response[:success]
 
       data       = response[:data]
       key_bytes  = [data["decryption_key"]].pack("H*")
@@ -949,7 +949,7 @@ module Clacky
       cipher.auth_tag = Base64.strict_decode64(tag_b64)
       (cipher.update(ciphertext) + cipher.final).force_encoding("UTF-8")
     rescue OpenSSL::Cipher::CipherError => e
-      raise "AES-256-GCM decryption failed: #{e.message}. " \
+      raise "Decryption failed: #{e.message}. " \
             "The file may be corrupted or the license key is incorrect."
     end
 
