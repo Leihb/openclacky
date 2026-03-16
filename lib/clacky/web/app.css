@@ -3307,33 +3307,6 @@ body.setup-mode[data-theme="dark"] {
   font-size: 13px;
 }
 
-/* ── Brand skills prompt (shown after activation) ───────────────────────── */
-.brand-skills-prompt {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  padding: 10px 14px;
-  background: var(--color-accent-subtle, rgba(99, 102, 241, 0.08));
-  border: 1px solid var(--color-accent-border, rgba(99, 102, 241, 0.25));
-  border-radius: 8px;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-}
-.btn-brand-skills-goto {
-  flex-shrink: 0;
-  padding: 4px 12px;
-  background: var(--color-accent, #6366f1);
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: opacity 0.15s;
-}
-.btn-brand-skills-goto:hover { opacity: 0.85; }
 
 /* ── Brand warning bar ───────────────────────────────────────────────────── */
 .brand-warning-bar {
