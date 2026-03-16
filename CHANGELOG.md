@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-03-17
+
+### Added
+- **License activation now navigates directly to Brand Skills tab**: after entering a valid license key, the UI automatically opens the Brand Skills settings tab — no extra steps needed to find and load your skills
+- **Version badge always clickable**: clicking the version number in the sidebar now always works regardless of update state; when already on the latest version, a small "up to date" popover appears and auto-dismisses
+
+### Improved
+- **MessageHistory domain object**: agent message handling is now encapsulated in a dedicated `MessageHistory` class, making the codebase cleaner and message operations (compression, caching, transient marking) more reliable and testable
+- **Brand skill isolation via transient message marking**: brand skill subagent calls no longer spin up a separate isolated agent; instead, messages are marked as transient and stripped after the call — simpler architecture with the same isolation guarantees
+- **License activation flow simplified**: the `activate-license` skill is replaced with direct in-UI navigation and settings highlighting, reducing round-trips and making activation feel more native
+
+### Fixed
+- **Tilde (`~`) in file paths now expanded correctly**: tool preview checks now expand `~` to the home directory before checking file existence, so paths like `~/Documents/file.txt` no longer falsely report as missing
+- **Subagent with empty arguments no longer crashes**: when a skill invocation passes empty arguments, a safe placeholder message is used instead of raising an error
+- **Version popover shows "up to date" state**: clicking the version badge when already on the latest version now shows a friendly confirmation instead of silently falling through to open the settings panel
+
+### More
+- Simplify error messages in brand config decryption
+- Update test matchers to match simplified error messages
+
 ## [0.9.4] - 2026-03-16
 
 ### Fixed
