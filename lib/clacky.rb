@@ -62,5 +62,6 @@ require_relative "clacky/cli"
 module Clacky
   class AgentInterrupted < Exception; end  # Inherit from Exception to bypass rescue StandardError
   class AgentError < StandardError; end
+  class RetryableError < StandardError; end  # Transient errors that should be retried (5xx, HTML response, rate limit)
   class ToolCallError < AgentError; end  # Raised when tool call fails due to invalid parameters
 end

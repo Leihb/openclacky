@@ -112,6 +112,7 @@ module Clacky
       response = anthropic_connection.post("v1/messages") { |r| r.body = body.to_json }
 
       raise_error(response) unless response.status == 200
+      check_html_response(response)
       MessageFormat::Anthropic.parse_response(JSON.parse(response.body))
     end
 
@@ -132,6 +133,7 @@ module Clacky
       response = openai_connection.post("chat/completions") { |r| r.body = body.to_json }
 
       raise_error(response) unless response.status == 200
+      check_html_response(response)
       MessageFormat::OpenAI.parse_response(JSON.parse(response.body))
     end
 
@@ -227,9 +229,17 @@ module Clacky
       when 401 then raise AgentError, "Invalid API key"
       when 403 then raise AgentError, "Access denied: #{error_message}"
       when 404 then raise AgentError, "API endpoint not found: #{error_message}"
-      when 429 then raise AgentError, "Rate limit exceeded"
-      when 500..599 then raise AgentError, "Server error (#{response.status}): #{error_message}"
+      when 429 then raise RetryableError, "Rate limit exceeded, please wait a moment"
+      when 500..599 then raise RetryableError, "LLM service temporarily unavailable (#{response.status}), retrying..."
       else raise AgentError, "Unexpected error (#{response.status}): #{error_message}"
+      end
+    end
+
+    # Raise a friendly error if the response body is HTML (e.g. gateway error page returned with 200)
+    def check_html_response(response)
+      body = response.body.to_s.lstrip
+      if body.start_with?("<!DOCTYPE", "<!doctype", "<html", "<HTML")
+        raise RetryableError, "LLM service temporarily unavailable (received HTML error page), retrying..."
       end
     end
 

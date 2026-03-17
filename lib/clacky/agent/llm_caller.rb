@@ -45,6 +45,17 @@ module Clacky
             @ui&.show_error("Network failed after #{max_retries} retries: #{e.message}")
             raise AgentError, "Network connection failed after #{max_retries} retries: #{e.message}"
           end
+        rescue RetryableError => e
+          @ui&.clear_progress
+          retries += 1
+          if retries <= max_retries
+            @ui&.show_warning("#{e.message} (#{retries}/#{max_retries})")
+            sleep retry_delay
+            retry
+          else
+            @ui&.show_error("LLM service unavailable after #{max_retries} retries. Please try again later.")
+            raise AgentError, "LLM service unavailable after #{max_retries} retries"
+          end
         ensure
           @ui&.clear_progress
         end
