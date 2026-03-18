@@ -327,6 +327,9 @@ module Clacky
             not_found(res)
           end
         end
+      rescue => e
+        $stderr.puts "[HTTP 500] #{e.class}: #{e.message}\n#{e.backtrace.first(3).join("\n")}"
+        json_response(res, 500, { error: e.message })
       end
 
       # ── REST API ──────────────────────────────────────────────────────────────
