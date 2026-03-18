@@ -1,212 +1,240 @@
 # frozen_string_literal: true
 
-require "base64"
+require "tmpdir"
+require "fileutils"
+require "securerandom"
+require "stringio"
+
+require_relative "file_parser/docx_parser"
+require_relative "file_parser/xlsx_parser"
+require_relative "file_parser/pptx_parser"
+require_relative "file_parser/zip_parser"
 
 module Clacky
   module Utils
-    # File processing utilities for binary files, images, and PDFs
-    class FileProcessor
-      # Maximum file size for binary files (512KB) - binary files are base64-encoded and consume significant tokens
-      MAX_FILE_SIZE = 512 * 1024
+  # Unified file processing pipeline.
+  #
+  # For every uploaded file we:
+  #   1. Save the original to disk (so the agent can always access the raw bytes).
+  #   2. Generate a structured preview (Markdown) where possible.
+  #   3. Return a FileRef struct describing both paths.
+  #
+  # The agent prompt receives a concise block like:
+  #
+  #   [File: contract.docx]
+  #   Type: document
+  #   Original: /tmp/clacky-uploads/abc123.docx
+  #   Preview (Markdown): /tmp/clacky-uploads/abc123.docx.preview.md
+  #
+  # This gives the LLM structure-aware content immediately while keeping the
+  # original available for deeper processing via shell tools.
+  module FileProcessor
+    UPLOAD_DIR      = File.join(Dir.tmpdir, "clacky-uploads").freeze
+    MAX_FILE_BYTES  = 32 * 1024 * 1024  # 32 MB
+    MAX_IMAGE_BYTES = 512 * 1024         # 512 KB
 
-      # Supported image formats
-      IMAGE_FORMATS = {
-        "png" => "image/png",
-        "jpg" => "image/jpeg",
-        "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp"
-      }.freeze
+    # Alias used by FileReader tool
+    MAX_FILE_SIZE = MAX_FILE_BYTES
 
-      # Supported document formats
-      DOCUMENT_FORMATS = {
-        "pdf" => "application/pdf"
-      }.freeze
+    BINARY_EXTENSIONS = %w[
+      .png .jpg .jpeg .gif .webp .bmp .tiff .ico .svg
+      .pdf
+      .zip .gz .tar .rar .7z
+      .exe .dll .so .dylib
+      .mp3 .mp4 .avi .mov .mkv .wav .flac
+      .ttf .otf .woff .woff2
+      .db .sqlite .bin .dat
+    ].freeze
 
-      # All supported formats
-      SUPPORTED_FORMATS = IMAGE_FORMATS.merge(DOCUMENT_FORMATS).freeze
+    # Extensions that can be sent to LLM as base64 (images + PDF)
+    LLM_BINARY_EXTENSIONS = %w[.png .jpg .jpeg .gif .webp .pdf].freeze
 
-      # File signatures (magic bytes) for format detection
-      FILE_SIGNATURES = {
-        "\x89PNG\r\n\x1a\n".b => "png",
-        "\xFF\xD8\xFF".b => "jpg",
-        "GIF87a".b => "gif",
-        "GIF89a".b => "gif",
-        "%PDF".b => "pdf"
-      }.freeze
+    MIME_TYPES = {
+      ".png"  => "image/png",
+      ".jpg"  => "image/jpeg",
+      ".jpeg" => "image/jpeg",
+      ".gif"  => "image/gif",
+      ".webp" => "image/webp",
+      ".pdf"  => "application/pdf"
+    }.freeze
 
-      class << self
-        # Convert image file path to base64 data URL
-        # @param path [String] File path to image
-        # @return [String] base64 data URL (e.g., "data:image/png;base64,...")
-        # @raise [ArgumentError] If file not found or unsupported format
-        def image_path_to_data_url(path)
-          unless File.exist?(path)
-            raise ArgumentError, "Image file not found: #{path}"
-          end
-
-          # Check file size
-          file_size = File.size(path)
-          if file_size > MAX_FILE_SIZE
-            raise ArgumentError, "File too large: #{file_size} bytes (max: #{MAX_FILE_SIZE} bytes)"
-          end
-
-          # Read file as binary
-          image_data = File.binread(path)
-
-          # Detect MIME type from file extension or content
-          mime_type = detect_mime_type(path, image_data)
-
-          # Verify it's an image format
-          unless IMAGE_FORMATS.values.include?(mime_type)
-            raise ArgumentError, "Unsupported image format: #{mime_type}"
-          end
-
-          # Encode to base64
-          base64_data = Base64.strict_encode64(image_data)
-
-          "data:#{mime_type};base64,#{base64_data}"
-        end
-
-        # Convert file to base64 with format detection
-        # @param path [String] File path
-        # @return [Hash] Hash with :format, :mime_type, :base64_data, :size_bytes
-        # @raise [ArgumentError] If file not found or too large
-        def file_to_base64(path)
-          unless File.exist?(path)
-            raise ArgumentError, "File not found: #{path}"
-          end
-
-          # Check file size
-          file_size = File.size(path)
-          if file_size > MAX_FILE_SIZE
-            raise ArgumentError, "File too large: #{file_size} bytes (max: #{MAX_FILE_SIZE} bytes)"
-          end
-
-          # Read file as binary
-          file_data = File.binread(path)
-
-          # Detect format and MIME type
-          format = detect_format(path, file_data)
-          mime_type = detect_mime_type(path, file_data)
-
-          # Encode to base64
-          base64_data = Base64.strict_encode64(file_data)
-
-          {
-            format: format,
-            mime_type: mime_type,
-            base64_data: base64_data,
-            size_bytes: file_size
-          }
-        end
-
-        # Detect file format from path and content
-        # @param path [String] File path
-        # @param data [String] Binary file data
-        # @return [String] Format (e.g., "png", "jpg", "pdf")
-        def detect_format(path, data)
-          # Try to detect from file extension first
-          ext = File.extname(path).downcase.delete_prefix(".")
-          return ext if SUPPORTED_FORMATS.key?(ext)
-
-          # Try to detect from file signature (magic bytes)
-          FILE_SIGNATURES.each do |signature, format|
-            return format if data.start_with?(signature)
-          end
-
-          # Special case for WebP (RIFF format)
-          if data.start_with?("RIFF".b) && data[8..11] == "WEBP".b
-            return "webp"
-          end
-
-          nil
-        end
-
-        # Detect MIME type from file path and content
-        # @param path [String] File path
-        # @param data [String] Binary file data
-        # @return [String] MIME type (e.g., "image/png")
-        def detect_mime_type(path, data)
-          format = detect_format(path, data)
-          return SUPPORTED_FORMATS[format] if format && SUPPORTED_FORMATS[format]
-
-          # Default to application/octet-stream for unknown formats
-          "application/octet-stream"
-        end
-
-        # Check if file is a supported binary format
-        # @param path [String] File path
-        # @return [Boolean] True if supported binary format
-        def supported_binary_file?(path)
-          return false unless File.exist?(path)
-
-          ext = File.extname(path).downcase.delete_prefix(".")
-          SUPPORTED_FORMATS.key?(ext)
-        end
-
-        # Check if file is an image
-        # @param path [String] File path
-        # @return [Boolean] True if image format
-        def image_file?(path)
-          return false unless File.exist?(path)
-
-          ext = File.extname(path).downcase.delete_prefix(".")
-          IMAGE_FORMATS.key?(ext)
-        end
-
-        # Check if file is a PDF
-        # @param path [String] File path
-        # @return [Boolean] True if PDF format
-        def pdf_file?(path)
-          return false unless File.exist?(path)
-
-          ext = File.extname(path).downcase.delete_prefix(".")
-          ext == "pdf"
-        end
-
-        # Check if file is binary (not text)
-        # @param data [String] File content (should be read in binary mode, encoding: ASCII-8BIT)
-        # @param sample_size [Integer] Number of bytes to check (default: 8192)
-        # @return [Boolean] True if file appears to be binary
-        #
-        # Strategy: only trust known magic byte signatures.
-        # We intentionally avoid heuristics (byte-ratio, UTF-8 validity, etc.) because
-        # they produce false positives on legitimate text files containing multibyte
-        # characters (e.g. Chinese, Japanese). Occasionally missing an unlabelled binary
-        # is acceptable; misclassifying a real text file is not.
-        def binary_file?(data, sample_size: 8192)
-          sample = data.b[0, sample_size] || ""
-          return false if sample.empty?
-
-          # Check for known binary file signatures (magic bytes)
-          FILE_SIGNATURES.each do |signature, _format|
-            return true if sample.start_with?(signature)
-          end
-
-          # Check for WebP (RIFF....WEBP header)
-          if sample.start_with?("RIFF".b) && sample.bytesize >= 12 && sample[8..11] == "WEBP".b
-            return true
-          end
-
-          false
-        end
-
-        # Check if a file at the given path is binary (not text)
-        # @param path [String] File path
-        # @return [Boolean] True if file appears to be binary
-        def binary_file_path?(path)
-          return false unless File.exist?(path)
-
-          File.open(path, "rb") do |file|
-            sample = file.read(8192) || ""
-            binary_file?(sample)
-          end
-        rescue StandardError
-          # If we can't read the file, assume it's not binary
-          false
-        end
+    # Result struct returned by .process
+    FileRef = Struct.new(:name, :type, :original_path, :preview_path, keyword_init: true) do
+      # Returns a formatted string to inject into the agent prompt.
+      def to_prompt
+        lines = ["[File: #{name}]", "Type: #{type}"]
+        lines << "Original: #{original_path}" if original_path
+        lines << "Preview (Markdown): #{preview_path}" if preview_path
+        lines.join("\n")
       end
     end
+
+    # Process an uploaded file.
+    #
+    # @param body      [String] Raw file bytes
+    # @param filename  [String] Original filename (used for extension detection + display)
+    # @return [FileRef]
+    def self.process(body:, filename:)
+      FileUtils.mkdir_p(UPLOAD_DIR)
+
+      ext       = File.extname(filename.to_s).downcase
+      safe_name = sanitize_filename(filename)
+      file_id   = SecureRandom.hex(8)
+
+      case ext
+      when ".docx", ".doc"
+        process_office(body, file_id, safe_name, :document) { FileParser::DocxParser.parse(body) }
+
+      when ".xlsx", ".xls"
+        process_office(body, file_id, safe_name, :spreadsheet) { FileParser::XlsxParser.parse(body) }
+
+      when ".pptx", ".ppt"
+        process_office(body, file_id, safe_name, :presentation) { FileParser::PptxParser.parse(body) }
+
+      when ".zip"
+        process_zip(body, file_id, safe_name)
+
+      when ".pdf"
+        process_binary(body, file_id, safe_name, :pdf)
+
+      when ".png", ".jpg", ".jpeg", ".gif", ".webp"
+        process_binary(body, file_id, safe_name, :image)
+
+      else
+        process_binary(body, file_id, safe_name, :file)
+      end
+    end
+
+    # --- private ---
+
+    # Save original + generate markdown preview via the given block.
+    def self.process_office(body, file_id, safe_name, type)
+      original_path = save_original(body, file_id, safe_name)
+
+      preview_content = yield
+      preview_path    = save_preview(preview_content, file_id, safe_name)
+
+      FileRef.new(name: safe_name, type: type, original_path: original_path, preview_path: preview_path)
+    rescue => e
+      # If preview generation fails, still return the original path
+      FileRef.new(name: safe_name, type: type, original_path: original_path,
+                  preview_path: nil)
+    end
+
+    # ZIP: save original + generate directory listing as preview.
+    def self.process_zip(body, file_id, safe_name)
+      original_path   = save_original(body, file_id, safe_name)
+      preview_content = FileParser::ZipParser.parse(body)
+      preview_path    = save_preview(preview_content, file_id, safe_name)
+
+      FileRef.new(name: safe_name, type: :zip, original_path: original_path, preview_path: preview_path)
+    end
+
+    # Binary files (PDF, images, unknown): save original only.
+    def self.process_binary(body, file_id, safe_name, type)
+      original_path = save_original(body, file_id, safe_name)
+      FileRef.new(name: safe_name, type: type, original_path: original_path, preview_path: nil)
+    end
+
+    def self.save_original(body, file_id, safe_name)
+      dest = File.join(UPLOAD_DIR, "#{file_id}_#{safe_name}")
+      File.binwrite(dest, body)
+      dest
+    end
+
+    def self.save_preview(content, file_id, safe_name)
+      dest = File.join(UPLOAD_DIR, "#{file_id}_#{safe_name}.preview.md")
+      File.write(dest, content, encoding: "UTF-8")
+      dest
+    end
+
+    def self.sanitize_filename(name)
+      base = File.basename(name.to_s).gsub(/[^\w.\-]/, "_")
+      base.empty? ? "upload" : base
+    end
+
+    # Returns true if the file is binary (non-text).
+    def self.binary_file_path?(path)
+      ext = File.extname(path).downcase
+      return true if BINARY_EXTENSIONS.include?(ext)
+
+      # Fallback: sniff first 512 bytes for null bytes
+      sample = File.binread(path, 512).to_s
+      sample.include?("\x00")
+    rescue
+      false
+    end
+
+    # Returns true if the binary file can be sent to LLM as base64.
+    def self.supported_binary_file?(path)
+      ext = File.extname(path).downcase
+      LLM_BINARY_EXTENSIONS.include?(ext)
+    end
+
+    # Save raw image bytes to disk and return a FileRef.
+    # Used by agent when an image exceeds MAX_IMAGE_BYTES and must be downgraded to a file.
+    # @param body      [String] Raw image bytes
+    # @param mime_type [String] e.g. "image/jpeg"
+    # @param filename  [String] Suggested filename
+    # @return [FileRef]
+    def self.save_image_to_disk(body:, mime_type:, filename: "image.jpg")
+      FileUtils.mkdir_p(UPLOAD_DIR)
+      ext       = File.extname(filename).downcase
+      ext       = ".#{mime_type.split('/').last}" if ext.empty? && mime_type.to_s.start_with?("image/")
+      ext       = ".jpg" if ext.empty?
+      safe_name = sanitize_filename(filename)
+      file_id   = SecureRandom.hex(8)
+      process_binary(body, file_id, safe_name, :image)
+    end
+
+    # Convert a binary file (image/PDF) to base64 for LLM consumption.
+    # @return [Hash] { format:, mime_type:, size_bytes:, base64_data: }
+    def self.file_to_base64(path)
+      require "base64"
+      ext  = File.extname(path).downcase
+      size = File.size(path)
+
+      raise ArgumentError, "File too large: #{path}" if size > MAX_FILE_BYTES
+
+      mime = MIME_TYPES[ext] || "application/octet-stream"
+      data = Base64.strict_encode64(File.binread(path))
+
+      { format: ext[1..], mime_type: mime, size_bytes: size, base64_data: data }
+    end
+
+    # Detect MIME type from file extension (and optionally data bytes).
+    def self.detect_mime_type(path, _data = nil)
+      MIME_TYPES[File.extname(path).downcase] || "application/octet-stream"
+    end
+
+    # Convert a local image file path to a data: URL for vision APIs.
+    # Used by CLI --image flag path → agent format_user_content.
+    #
+    # @param path [String] Local image file path
+    # @return [String] "data:<mime>;base64,<encoded>"
+    def self.image_path_to_data_url(path)
+      raise ArgumentError, "Image file not found: #{path}" unless File.exist?(path)
+
+      size = File.size(path)
+      if size > MAX_IMAGE_BYTES
+        raise ArgumentError, "Image too large (#{size / 1024 / 1024}MB > #{MAX_IMAGE_BYTES / 1024 / 1024}MB): #{path}"
+      end
+
+      require "base64"
+      ext  = File.extname(path).downcase.delete(".")
+      mime = case ext
+             when "jpg", "jpeg" then "image/jpeg"
+             when "png"         then "image/png"
+             when "gif"         then "image/gif"
+             when "webp"        then "image/webp"
+             else "image/#{ext}"
+             end
+
+      "data:#{mime};base64,#{Base64.strict_encode64(File.binread(path))}"
+    end
+
+    private_class_method :process_office, :process_zip, :process_binary,
+                         :save_original, :save_preview, :sanitize_filename
+  end
   end
 end

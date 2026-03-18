@@ -162,64 +162,76 @@ module Clacky
               return unless allowed_users.include?(event[:user_id])
             end
 
-            # Download images and attach as data URLs
+            # Download images and attach as file hashes
+            image_files = []
             if event[:image_keys] && !event[:image_keys].empty?
-              images, errors = download_images(event[:image_keys], event[:message_id])
-              if images.empty? && !errors.empty?
+              image_files, errors = download_images(event[:image_keys], event[:message_id])
+              if image_files.empty? && !errors.empty?
                 @bot.send_text(event[:chat_id], "#{errors.first}", reply_to: event[:message_id])
                 return
               end
-              event = event.merge(images: images)
             end
 
             # Download and process file attachments
+            disk_files = []
             if event[:file_attachments] && !event[:file_attachments].empty?
-              file_text = process_files(event[:file_attachments], event[:message_id])
-              combined = [event[:text], file_text].reject(&:empty?).join("\n\n")
-              event = event.merge(text: combined)
+              disk_files = process_files(event[:file_attachments], event[:message_id])
             end
+
+            all_files = image_files + disk_files
+            event = event.merge(files: all_files) unless all_files.empty?
 
             @on_message&.call(event)
           end
 
-          # Download images from Feishu and return as base64 data URLs
-          # Process file attachments: download and extract content/path for prompt
-          # @param attachments [Array<Hash>] [{key:, name:}]
-          # @param message_id [String]
-          # @return [String] text to inject into prompt
-          def process_files(attachments, message_id)
-            attachments.filter_map do |attachment|
-              result = @bot.download_message_resource(message_id, attachment[:key], type: "file")
-              FileProcessor.process(result[:body], attachment[:name])
-            rescue => e
-              warn "[Feishu] Failed to download file #{attachment[:name]}: #{e.message}"
-              "[Attachment: #{attachment[:name]}]\nDownload failed: #{e.message}"
-            end.join("\n\n")
-          end
+          MAX_IMAGE_BYTES = Clacky::Utils::FileProcessor::MAX_IMAGE_BYTES
 
-          MAX_IMAGE_BYTES = Clacky::FileAttachment::MAX_IMAGE_BYTES
-
+          # Download images from Feishu and return as file hashes.
+          # Images within MAX_IMAGE_BYTES are returned with data_url for vision.
+          # Oversized images are rejected with an error message.
           # @param image_keys [Array<String>]
           # @param message_id [String]
-          # @return [Array<String>, Array<String>] [data_urls, error_messages]
+          # @return [Array<Hash>, Array<String>] [file_hashes, error_messages]
           def download_images(image_keys, message_id)
             require "base64"
-            data_urls = []
+            file_hashes = []
             errors = []
             image_keys.each do |image_key|
               result = @bot.download_message_resource(message_id, image_key, type: "image")
               if result[:body].bytesize > MAX_IMAGE_BYTES
-                errors << "Image too large (#{(result[:body].bytesize / 1024.0 / 1024).round(1)}MB), max #{MAX_IMAGE_BYTES / 1024 / 1024}MB"
+                errors << "Image too large (#{(result[:body].bytesize / 1024.0).round(0).to_i}KB), max #{MAX_IMAGE_BYTES / 1024}KB"
                 next
               end
               mime = result[:content_type]
               mime = "image/jpeg" if mime.nil? || mime.empty? || !mime.start_with?("image/")
-              data_urls << "data:#{mime};base64,#{Base64.strict_encode64(result[:body])}"
+              data_url = "data:#{mime};base64,#{Base64.strict_encode64(result[:body])}"
+              file_hashes << { name: "image.jpg", mime_type: mime, data_url: data_url }
             rescue => e
               warn "[Feishu] Failed to download image #{image_key}: #{e.message}"
               errors << "Image download failed: #{e.message}"
             end
-            [data_urls, errors]
+            [file_hashes, errors]
+          end
+
+          # Download and process file attachments, returning file hashes for agent.
+          # @param attachments [Array<Hash>] [{key:, name:}]
+          # @param message_id [String]
+          # @return [Array<Hash>] file hashes with path/preview_path/name/type/mime_type
+          def process_files(attachments, message_id)
+            attachments.filter_map do |attachment|
+              result   = @bot.download_message_resource(message_id, attachment[:key], type: "file")
+              file_ref = Clacky::Utils::FileProcessor.process(body: result[:body], filename: attachment[:name])
+              {
+                name:         file_ref.name,
+                path:         file_ref.original_path,
+                preview_path: file_ref.preview_path,
+                type:         file_ref.type.to_s,
+                mime_type:    "application/octet-stream"
+              }
+            rescue => e
+              warn "[Feishu] Failed to download file #{attachment[:name]}: #{e.message}"
+              nil
+            end.compact
           end
         end
 

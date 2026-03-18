@@ -124,7 +124,7 @@ module Clacky
         Clacky::Logger.info("[ChannelManager] :#{adapter.platform_id} adapter loop started")
         adapter.start do |event|
           summary = event[:text].to_s.lines.first.to_s.strip[0, 80]
-          summary = "[image]" if summary.empty? && !event[:images].to_a.empty?
+          summary = "[image]" if summary.empty? && !event[:files].to_a.empty?
           Clacky::Logger.info("[ChannelManager] :#{adapter.platform_id} message from #{event[:user_id]} in #{event[:chat_id]}: #{summary}")
           route_message(adapter, event)
         rescue StandardError => e
@@ -141,9 +141,9 @@ module Clacky
       end
 
       def route_message(adapter, event)
-        text = event[:text]&.strip
-        images = event[:images] || []
-        return if (text.nil? || text.empty?) && images.empty?
+        text  = event[:text]&.strip
+        files = event[:files] || []
+        return if (text.nil? || text.empty?) && files.empty?
 
         session_id = resolve_session(event)
         unless session_id
@@ -180,7 +180,7 @@ module Clacky
         task_thread = Thread.new do
           Thread.current.name = "channel-task-#{session_id[0, 8]}"
           @registry.update(session_id, status: :running)
-          agent.run(text, images: images)
+          agent.run(text, files: files)
         rescue StandardError => e
           warn "[ChannelManager] Agent error (#{session_id}): #{e.message}"
           channel_ui.show_error("Agent error: #{e.message}")

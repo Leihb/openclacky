@@ -81,8 +81,8 @@ module Clacky
 
             user_id = raw.dig("from", "userid")
             chat_type = raw["chattype"] == "group" ? :group : :direct
-            text = ""
-            images = []
+            text  = ""
+            files = []
 
             case msgtype
             when "text"
@@ -95,19 +95,27 @@ module Clacky
               result = MediaDownloader.download(url, aeskey)
               mime = MediaDownloader.detect_mime(result[:body])
               if result[:body].bytesize > MAX_IMAGE_BYTES
-                @ws_client.send_message(chat_id, "Image too large (#{(result[:body].bytesize / 1024.0 / 1024).round(1)}MB), max #{MAX_IMAGE_BYTES / 1024 / 1024}MB")
+                @ws_client.send_message(chat_id, "Image too large (#{(result[:body].bytesize / 1024.0).round(0).to_i}KB), max #{MAX_IMAGE_BYTES / 1024}KB")
                 return
               end
               require "base64"
-              images = ["data:#{mime};base64,#{Base64.strict_encode64(result[:body])}"]
+              data_url = "data:#{mime};base64,#{Base64.strict_encode64(result[:body])}"
+              files = [{ name: "image.jpg", mime_type: mime, data_url: data_url }]
             when "file"
               url      = raw.dig("file", "url")
               aeskey   = raw.dig("file", "aeskey")
               return unless url
               filename = raw.dig("file", "name") || raw.dig("file", "filename") || "attachment"
-              result = MediaDownloader.download(url, aeskey)
+              result   = MediaDownloader.download(url, aeskey)
               filename = result[:filename] || filename
-              text = Feishu::FileProcessor.process(result[:body], filename)
+              file_ref = Clacky::Utils::FileProcessor.process(body: result[:body], filename: filename)
+              files = [{
+                name:         file_ref.name,
+                path:         file_ref.original_path,
+                preview_path: file_ref.preview_path,
+                type:         file_ref.type.to_s,
+                mime_type:    "application/octet-stream"
+              }]
             end
 
             event = {
@@ -116,7 +124,7 @@ module Clacky
               chat_id: chat_id,
               user_id: user_id,
               text: text,
-              images: images,
+              files: files,
               message_id: raw["msgid"],
               timestamp: raw["create_time"] ? Time.at(raw["create_time"]) : Time.now,
               chat_type: chat_type,
@@ -133,7 +141,7 @@ module Clacky
             end
           end
 
-          MAX_IMAGE_BYTES = Clacky::FileAttachment::MAX_IMAGE_BYTES
+          MAX_IMAGE_BYTES = Clacky::Utils::FileProcessor::MAX_IMAGE_BYTES
         end
 
         Adapters.register(:wecom, Adapter)

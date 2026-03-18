@@ -6,66 +6,41 @@ RSpec.describe Clacky::Utils::FileProcessor do
   describe ".image_path_to_data_url" do
     it "converts PNG image to data URL" do
       Dir.mktmpdir do |dir|
-        png_file = File.join(dir, "test.png")
-        png_data = "\x89PNG\r\n\x1a\n".b
-        File.binwrite(png_file, png_data)
-
-        data_url = described_class.image_path_to_data_url(png_file)
-
-        expect(data_url).to start_with("data:image/png;base64,")
+        f = File.join(dir, "test.png")
+        File.binwrite(f, "\x89PNG\r\n\x1a\n".b)
+        expect(described_class.image_path_to_data_url(f)).to start_with("data:image/png;base64,")
       end
     end
 
     it "converts JPEG image to data URL" do
       Dir.mktmpdir do |dir|
-        jpeg_file = File.join(dir, "test.jpg")
-        jpeg_data = "\xFF\xD8\xFF".b
-        File.binwrite(jpeg_file, jpeg_data)
-
-        data_url = described_class.image_path_to_data_url(jpeg_file)
-
-        expect(data_url).to start_with("data:image/jpeg;base64,")
+        f = File.join(dir, "test.jpg")
+        File.binwrite(f, "\xFF\xD8\xFF".b)
+        expect(described_class.image_path_to_data_url(f)).to start_with("data:image/jpeg;base64,")
       end
     end
 
-    it "raises error for non-existent file" do
+    it "raises ArgumentError for non-existent file" do
       expect {
         described_class.image_path_to_data_url("/nonexistent/file.png")
       }.to raise_error(ArgumentError, /Image file not found/)
     end
 
-    it "raises error for unsupported format" do
+    it "raises ArgumentError when file exceeds MAX_IMAGE_BYTES" do
       Dir.mktmpdir do |dir|
-        pdf_file = File.join(dir, "test.pdf")
-        pdf_data = "%PDF-1.4".b
-        File.binwrite(pdf_file, pdf_data)
-
+        f = File.join(dir, "large.png")
+        File.binwrite(f, "\x89PNG\r\n\x1a\n".b + "x" * (described_class::MAX_IMAGE_BYTES + 1))
         expect {
-          described_class.image_path_to_data_url(pdf_file)
-        }.to raise_error(ArgumentError, /Unsupported image format/)
+          described_class.image_path_to_data_url(f)
+        }.to raise_error(ArgumentError, /Image too large/)
       end
     end
 
-    it "raises error for file too large" do
+    it "accepts file within MAX_IMAGE_BYTES" do
       Dir.mktmpdir do |dir|
-        large_file = File.join(dir, "large.png")
-        # Create a file larger than MAX_FILE_SIZE (512KB)
-        File.binwrite(large_file, "\x89PNG\r\n\x1a\n".b + "x" * (513 * 1024))
-
-        expect {
-          described_class.image_path_to_data_url(large_file)
-        }.to raise_error(ArgumentError, /File too large/)
-      end
-    end
-
-    it "accepts file within size limit" do
-      Dir.mktmpdir do |dir|
-        small_file = File.join(dir, "small.png")
-        File.binwrite(small_file, "\x89PNG\r\n\x1a\n".b + "x" * (511 * 1024))
-
-        expect {
-          described_class.image_path_to_data_url(small_file)
-        }.not_to raise_error
+        f = File.join(dir, "small.png")
+        File.binwrite(f, "\x89PNG\r\n\x1a\n".b)
+        expect { described_class.image_path_to_data_url(f) }.not_to raise_error
       end
     end
   end
@@ -73,247 +48,142 @@ RSpec.describe Clacky::Utils::FileProcessor do
   describe ".file_to_base64" do
     it "converts PNG to base64 with metadata" do
       Dir.mktmpdir do |dir|
-        png_file = File.join(dir, "test.png")
-        png_data = "\x89PNG\r\n\x1a\n".b
-        File.binwrite(png_file, png_data)
-
-        result = described_class.file_to_base64(png_file)
-
+        f = File.join(dir, "test.png")
+        data = "\x89PNG\r\n\x1a\n".b
+        File.binwrite(f, data)
+        result = described_class.file_to_base64(f)
         expect(result[:format]).to eq("png")
         expect(result[:mime_type]).to eq("image/png")
         expect(result[:base64_data]).to be_a(String)
-        expect(result[:size_bytes]).to eq(png_data.size)
+        expect(result[:size_bytes]).to eq(data.size)
       end
     end
 
     it "converts PDF to base64 with metadata" do
       Dir.mktmpdir do |dir|
-        pdf_file = File.join(dir, "test.pdf")
-        pdf_data = "%PDF-1.4".b
-        File.binwrite(pdf_file, pdf_data)
-
-        result = described_class.file_to_base64(pdf_file)
-
+        f = File.join(dir, "test.pdf")
+        data = "%PDF-1.4".b
+        File.binwrite(f, data)
+        result = described_class.file_to_base64(f)
         expect(result[:format]).to eq("pdf")
         expect(result[:mime_type]).to eq("application/pdf")
         expect(result[:base64_data]).to be_a(String)
-        expect(result[:size_bytes]).to eq(pdf_data.size)
+        expect(result[:size_bytes]).to eq(data.size)
       end
     end
 
-    it "raises error for file too large" do
+    it "raises ArgumentError when file exceeds MAX_FILE_BYTES" do
       Dir.mktmpdir do |dir|
-        large_file = File.join(dir, "large.pdf")
-        # Create a file larger than MAX_FILE_SIZE (512KB)
-        File.binwrite(large_file, "%PDF".b + "x" * (513 * 1024))
-
+        f = File.join(dir, "large.pdf")
+        File.binwrite(f, "%PDF".b + "x" * (described_class::MAX_FILE_BYTES + 1))
         expect {
-          described_class.file_to_base64(large_file)
+          described_class.file_to_base64(f)
         }.to raise_error(ArgumentError, /File too large/)
       end
     end
-
-    it "accepts file within size limit" do
-      Dir.mktmpdir do |dir|
-        small_file = File.join(dir, "small.pdf")
-        File.binwrite(small_file, "%PDF".b + "x" * (511 * 1024))
-
-        expect {
-          described_class.file_to_base64(small_file)
-        }.not_to raise_error
-      end
-    end
   end
 
-  describe ".detect_format" do
-    it "detects PNG from extension" do
+  describe ".binary_file_path?" do
+    it "returns true for PNG by extension" do
       Dir.mktmpdir do |dir|
-        png_file = File.join(dir, "test.png")
-        File.binwrite(png_file, "")
-
-        format = described_class.detect_format(png_file, "")
-        expect(format).to eq("png")
+        f = File.join(dir, "test.png")
+        File.binwrite(f, "\x89PNG".b)
+        expect(described_class.binary_file_path?(f)).to be true
       end
     end
 
-    it "detects PNG from magic bytes" do
-      data = "\x89PNG\r\n\x1a\n".b
-      format = described_class.detect_format("unknown", data)
-      expect(format).to eq("png")
+    it "returns true for PDF by extension" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.pdf")
+        File.binwrite(f, "%PDF".b)
+        expect(described_class.binary_file_path?(f)).to be true
+      end
     end
 
-    it "detects JPEG from magic bytes" do
-      data = "\xFF\xD8\xFF".b
-      format = described_class.detect_format("unknown", data)
-      expect(format).to eq("jpg")
+    it "returns false for plain text files" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.txt")
+        File.write(f, "hello world")
+        expect(described_class.binary_file_path?(f)).to be false
+      end
     end
 
-    it "detects PDF from magic bytes" do
-      data = "%PDF-1.4".b
-      format = described_class.detect_format("unknown", data)
-      expect(format).to eq("pdf")
-    end
-
-    it "detects WebP from magic bytes" do
-      data = "RIFF\x00\x00\x00\x00WEBP".b
-      format = described_class.detect_format("unknown", data)
-      expect(format).to eq("webp")
-    end
-
-    it "returns nil for unknown format" do
-      data = "unknown data".b
-      format = described_class.detect_format("unknown", data)
-      expect(format).to be_nil
-    end
-  end
-
-  describe ".detect_mime_type" do
-    it "detects PNG MIME type" do
-      data = "\x89PNG\r\n\x1a\n".b
-      mime_type = described_class.detect_mime_type("test.png", data)
-      expect(mime_type).to eq("image/png")
-    end
-
-    it "detects JPEG MIME type" do
-      data = "\xFF\xD8\xFF".b
-      mime_type = described_class.detect_mime_type("test.jpg", data)
-      expect(mime_type).to eq("image/jpeg")
-    end
-
-    it "detects PDF MIME type" do
-      data = "%PDF-1.4".b
-      mime_type = described_class.detect_mime_type("test.pdf", data)
-      expect(mime_type).to eq("application/pdf")
-    end
-
-    it "returns octet-stream for unknown format" do
-      data = "unknown".b
-      mime_type = described_class.detect_mime_type("unknown", data)
-      expect(mime_type).to eq("application/octet-stream")
+    it "returns true for files with null bytes (unknown extension)" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.dat")
+        File.binwrite(f, "abc\x00def".b)
+        expect(described_class.binary_file_path?(f)).to be true
+      end
     end
   end
 
   describe ".supported_binary_file?" do
-    it "returns true for PNG files" do
+    it "returns true for image files" do
       Dir.mktmpdir do |dir|
-        png_file = File.join(dir, "test.png")
-        File.binwrite(png_file, "")
-
-        expect(described_class.supported_binary_file?(png_file)).to be true
+        f = File.join(dir, "test.png")
+        File.binwrite(f, "")
+        expect(described_class.supported_binary_file?(f)).to be true
       end
     end
 
     it "returns true for PDF files" do
       Dir.mktmpdir do |dir|
-        pdf_file = File.join(dir, "test.pdf")
-        File.binwrite(pdf_file, "")
-
-        expect(described_class.supported_binary_file?(pdf_file)).to be true
+        f = File.join(dir, "test.pdf")
+        File.binwrite(f, "")
+        expect(described_class.supported_binary_file?(f)).to be true
       end
     end
 
-    it "returns false for unsupported files" do
+    it "returns false for zip files" do
       Dir.mktmpdir do |dir|
-        bin_file = File.join(dir, "test.bin")
-        File.binwrite(bin_file, "")
-
-        expect(described_class.supported_binary_file?(bin_file)).to be false
-      end
-    end
-
-    it "returns false for non-existent files" do
-      expect(described_class.supported_binary_file?("/nonexistent/file.png")).to be false
-    end
-  end
-
-  describe ".image_file?" do
-    it "returns true for PNG files" do
-      Dir.mktmpdir do |dir|
-        png_file = File.join(dir, "test.png")
-        File.binwrite(png_file, "")
-
-        expect(described_class.image_file?(png_file)).to be true
-      end
-    end
-
-    it "returns false for PDF files" do
-      Dir.mktmpdir do |dir|
-        pdf_file = File.join(dir, "test.pdf")
-        File.binwrite(pdf_file, "")
-
-        expect(described_class.image_file?(pdf_file)).to be false
-      end
-    end
-
-    it "returns false for non-existent files" do
-      expect(described_class.image_file?("/nonexistent/file.png")).to be false
-    end
-  end
-
-  describe ".pdf_file?" do
-    it "returns true for PDF files" do
-      Dir.mktmpdir do |dir|
-        pdf_file = File.join(dir, "test.pdf")
-        File.binwrite(pdf_file, "")
-
-        expect(described_class.pdf_file?(pdf_file)).to be true
-      end
-    end
-
-    it "returns false for image files" do
-      Dir.mktmpdir do |dir|
-        png_file = File.join(dir, "test.png")
-        File.binwrite(png_file, "")
-
-        expect(described_class.pdf_file?(png_file)).to be false
+        f = File.join(dir, "test.zip")
+        File.binwrite(f, "")
+        expect(described_class.supported_binary_file?(f)).to be false
       end
     end
   end
 
-  describe ".binary_file?" do
-    # Detection is based solely on known magic byte signatures.
-    # Files without a recognised signature are treated as text to avoid
-    # false positives on multibyte-encoded text (e.g. Chinese, Japanese).
-
-    it "detects PNG via magic bytes" do
-      data = "\x89PNG\r\n\x1a\n".b + "x" * 100
-      expect(described_class.binary_file?(data)).to be true
+  describe ".detect_mime_type" do
+    it "returns image/png for .png" do
+      expect(described_class.detect_mime_type("test.png")).to eq("image/png")
     end
 
-    it "detects JPEG via magic bytes" do
-      data = "\xFF\xD8\xFF".b + "x" * 100
-      expect(described_class.binary_file?(data)).to be true
+    it "returns image/jpeg for .jpg" do
+      expect(described_class.detect_mime_type("test.jpg")).to eq("image/jpeg")
     end
 
-    it "detects PDF via magic bytes" do
-      data = "%PDF-1.4" + "x" * 100
-      expect(described_class.binary_file?(data)).to be true
+    it "returns application/pdf for .pdf" do
+      expect(described_class.detect_mime_type("test.pdf")).to eq("application/pdf")
     end
 
-    it "detects GIF via magic bytes" do
-      data = "GIF89a" + "x" * 100
-      expect(described_class.binary_file?(data)).to be true
+    it "returns application/octet-stream for unknown extension" do
+      expect(described_class.detect_mime_type("test.bin")).to eq("application/octet-stream")
+    end
+  end
+
+  describe ".process" do
+    it "processes a PDF and returns FileRef with original_path" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.pdf")
+        File.binwrite(f, "%PDF-1.4".b)
+        ref = described_class.process(body: File.binread(f), filename: "test.pdf")
+        expect(ref.name).to eq("test.pdf")
+        expect(ref.type).to eq(:pdf)
+        expect(File.exist?(ref.original_path)).to be true
+        expect(ref.preview_path).to be_nil
+      end
     end
 
-    it "returns false for data with non-printable bytes but no magic signature" do
-      # Without a known signature, we do not flag as binary (prefer false negatives)
-      data = "\x00\x01\x02\x03\x04\x05".b * 100
-      expect(described_class.binary_file?(data)).to be false
-    end
-
-    it "returns false for plain text" do
-      data = "This is plain text content\nwith multiple lines\n"
-      expect(described_class.binary_file?(data)).to be false
-    end
-
-    it "returns false for UTF-8 multibyte text (Chinese)" do
-      data = "这是一个中文测试文件。" * 50
-      expect(described_class.binary_file?(data)).to be false
-    end
-
-    it "handles empty data" do
-      data = ""
-      expect(described_class.binary_file?(data)).to be false
+    it "to_prompt includes file name and type" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.pdf")
+        File.binwrite(f, "%PDF-1.4".b)
+        ref = described_class.process(body: File.binread(f), filename: "test.pdf")
+        prompt = ref.to_prompt
+        expect(prompt).to include("[File: test.pdf]")
+        expect(prompt).to include("Type: pdf")
+        expect(prompt).to include("Original:")
+      end
     end
   end
 end

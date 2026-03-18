@@ -39,7 +39,7 @@ RSpec.describe "CLI --message / -i non-interactive mode" do
         allow(agent).to receive(:instance_variable_set)
         allow(agent).to receive(:run)
 
-        expect(agent).to receive(:run).with("describe this", images: [f.path])
+        expect(agent).to receive(:run).with("describe this", files: [{ name: File.basename(f.path), mime_type: "image/png", path: f.path }])
 
         # exit(0) will raise SystemExit — catch it
         expect {
@@ -52,7 +52,7 @@ RSpec.describe "CLI --message / -i non-interactive mode" do
       allow(agent).to receive(:instance_variable_set)
       allow(agent).to receive(:run)
 
-      expect(agent).to receive(:run).with("hello", images: [])
+      expect(agent).to receive(:run).with("hello", files: [])
 
       expect {
         call_run_non_interactive(agent, "hello", [], agent_config, session_manager)

@@ -25,7 +25,7 @@ module Clacky
         ].freeze
 
         attr_accessor :row
-        attr_reader :cursor_position, :line_index, :images, :tips_message, :tips_type
+        attr_reader :cursor_position, :line_index, :files, :tips_message, :tips_type
 
         def initialize(row: 0)
           @row = row
@@ -37,8 +37,7 @@ module Clacky
           @pastel = Pastel.new
           @width = TTY::Screen.width
 
-          @images = []
-          @max_images = 3
+          @files = []
           @paste_counter = 0
           @paste_placeholders = {}
           @last_ctrl_c_time = nil
@@ -98,7 +97,7 @@ module Clacky
           height += 1
           
           # Images
-          height += @images.size
+          height += @files.size
           
           # Calculate height considering wrapped lines
           # Use effective content width (respecting MAX_CONTENT_WIDTH_RATIO)
@@ -288,12 +287,11 @@ module Clacky
           render_separator(current_row)
           current_row += 1
 
-          # Images
-          @images.each_with_index do |img_path, idx|
+          # Files (images / documents)
+          @files.each_with_index do |f, idx|
             move_cursor(current_row, 0)
-            filename = File.basename(img_path)
-            filesize = File.exist?(img_path) ? format_filesize(File.size(img_path)) : "N/A"
-            content = @pastel.dim("[Image #{idx + 1}] #{filename} (#{filesize}) (Ctrl+D to delete)")
+            filename = f[:name] || f["name"] || "file"
+            content = @pastel.dim("[File #{idx + 1}] #{filename} (Ctrl+D to delete)")
             print_with_padding(content)
             current_row += 1
           end
@@ -335,7 +333,7 @@ module Clacky
 
         def position_cursor(start_row)
           # Calculate which wrapped line the cursor is on
-          cursor_row = start_row + 2 + @images.size  # session_bar + separator + images
+          cursor_row = start_row + 2 + @files.size  # session_bar + separator + images
           # Use effective content width (respecting MAX_CONTENT_WIDTH_RATIO)
           content_width = effective_content_width(@width)
           
@@ -407,7 +405,7 @@ module Clacky
             # Clear tips from state and screen
             @tips_message = nil
             # Tips row: start_row + session_bar(1) + separator(1) + images + lines + separator(1)
-            tips_row = @last_render_row + 2 + @images.size + @lines.size + 1
+            tips_row = @last_render_row + 2 + @files.size + @lines.size + 1
             move_cursor(tips_row, 0)
             clear_line
             flush
@@ -493,7 +491,7 @@ module Clacky
           text = expand_placeholders(@lines.join("\n"))
           
           # If both text and images are empty, return empty string
-          return "" if text.empty? && @images.empty?
+          return "" if text.empty? && @files.empty?
 
           # Format user input with color and spacing from theme
           symbol = theme.format_symbol(:user)
@@ -501,12 +499,11 @@ module Clacky
 
           result = "\n#{symbol} #{content}\n"
           
-          # Append image information if present
-          if @images && @images.any?
-            @images.each_with_index do |img_path, idx|
-              filename = File.basename(img_path)
-              filesize = File.exist?(img_path) ? format_filesize(File.size(img_path)) : "N/A"
-              result += @pastel.dim("    [Image #{idx + 1}] #{filename} (#{filesize})") + "\n"
+          # Append file information if present
+          if @files.any?
+            @files.each_with_index do |f, idx|
+              filename = f[:name] || f["name"] || "file"
+              result += @pastel.dim("    [File #{idx + 1}] #{filename}") + "\n"
             end
           end
           
@@ -518,7 +515,7 @@ module Clacky
         end
 
         def empty?
-          @lines.all?(&:empty?) && @images.empty?
+          @lines.all?(&:empty?) && @files.empty?
         end
 
         def multiline?
@@ -526,7 +523,7 @@ module Clacky
         end
 
         def has_images?
-          @images.any?
+          @files.any?
         end
 
         def set_prompt(prompt)
@@ -586,7 +583,7 @@ module Clacky
           @line_index = 0
           @cursor_position = 0
           @history_index = -1
-          @images = []
+          @files = []
           @paste_counter = 0
           @paste_placeholders = {}
           clear_tips
@@ -595,10 +592,10 @@ module Clacky
 
         def submit
           text = current_value
-          imgs = @images.dup
+          files = @files.dup
           add_to_history(text) unless text.empty?
           clear
-          { text: text, images: imgs }
+          { text: text, files: files }
         end
 
         def history_prev
@@ -792,7 +789,7 @@ module Clacky
           # Prepare display content and data BEFORE clearing
           content_to_display = current_content
           result_text = current_value
-          result_images = @images.dup
+          result_files = @files.dup
 
           # Handle commands (with or without slash)
           if text.start_with?('/')
@@ -803,11 +800,11 @@ module Clacky
               when '/clear'
                 add_to_history(result_text) unless result_text.empty?
                 clear
-                return { action: :clear_output, data: { text: result_text, images: result_images, display: content_to_display } }
+                return { action: :clear_output, data: { text: result_text, files: result_files, display: content_to_display } }
               when '/help'
                 add_to_history(result_text) unless result_text.empty?
                 clear
-                return { action: :help, data: { text: result_text, images: result_images, display: content_to_display } }
+                return { action: :help, data: { text: result_text, files: result_files, display: content_to_display } }
               when '/exit', '/quit'
                 return { action: :exit }
               else
@@ -819,19 +816,19 @@ module Clacky
           elsif text == '?'
             add_to_history(result_text) unless result_text.empty?
             clear
-            return { action: :help, data: { text: result_text, images: result_images, display: content_to_display } }
+            return { action: :help, data: { text: result_text, files: result_files, display: content_to_display } }
           elsif text == 'exit' || text == 'quit'
             return { action: :exit }
           end
 
-          if text.empty? && @images.empty?
+          if text.empty? && @files.empty?
             return { action: nil }
           end
 
           add_to_history(result_text) unless result_text.empty?
           clear
 
-          { action: :submit, data: { text: result_text, images: result_images, display: content_to_display } }
+          { action: :submit, data: { text: result_text, files: result_files, display: content_to_display } }
         end
 
         def handle_up_arrow
@@ -864,10 +861,10 @@ module Clacky
 
         def handle_ctrl_d
           if has_images?
-            if @images.size == 1
-              @images.clear
+            if @files.size == 1
+              @files.clear
             else
-              @images.shift
+              @files.shift
             end
             clear_tips
             { action: nil }
@@ -881,12 +878,10 @@ module Clacky
         def handle_paste
           pasted = paste_from_clipboard
           if pasted[:type] == :image
-            if @images.size < @max_images
-              @images << pasted[:path]
-              clear_tips
-            else
-              set_tips("Maximum #{@max_images} images allowed. Delete an image first (Ctrl+D).", type: :warning)
-            end
+            path = pasted[:path]
+            mime_type = pasted[:mime_type] || "image/png"
+            @files << { name: File.basename(path), mime_type: mime_type, path: path }
+            clear_tips
           else
             insert_text(pasted[:text])
             clear_tips

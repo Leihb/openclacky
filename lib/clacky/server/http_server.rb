@@ -15,6 +15,7 @@ require_relative "scheduler"
 require_relative "../brand_config"
 require_relative "channel"
 require_relative "../banner"
+require_relative "../utils/file_processor"
 
 module Clacky
   module Server
@@ -27,10 +28,10 @@ module Clacky
         @events     = events
       end
 
-      def show_user_message(content, created_at: nil, images: [])
+      def show_user_message(content, created_at: nil, files: [])
         ev = { type: "history_user_message", session_id: @session_id, content: content }
         ev[:created_at] = created_at if created_at
-        ev[:images]     = images if images && !images.empty?
+        ev[:files] = files if files && !files.empty?
         @events << ev
       end
 
@@ -771,8 +772,8 @@ module Clacky
 
       # POST /api/upload
       # Accepts a multipart/form-data file upload (field name: "file").
-      # Saves the file to a temporary directory and returns a file_id + absolute path.
-      # The file is NOT read into memory as base64 — only the path is returned.
+      # Runs the file through FileProcessor: saves original + generates structured
+      # preview (Markdown) for Office/ZIP files so the agent can read them directly.
       def api_upload_file(req, res)
         upload = parse_multipart_upload(req, "file")
         unless upload
@@ -780,22 +781,20 @@ module Clacky
           return
         end
 
-        # Sanitize filename and build a unique temp path
-        safe_name = File.basename(upload[:filename].to_s.gsub(/[^\w.\-]/, "_"))
-        safe_name = "upload" if safe_name.empty?
-        file_id   = "#{SecureRandom.hex(8)}_#{safe_name}"
-        upload_dir = File.join(Dir.tmpdir, "clacky-uploads")
-        FileUtils.mkdir_p(upload_dir)
-        dest_path = File.join(upload_dir, file_id)
-
-        File.binwrite(dest_path, upload[:data])
+        ref = Clacky::Utils::FileProcessor.process(
+          body:     upload[:data],
+          filename: upload[:filename].to_s
+        )
 
         json_response(res, 200, {
-          ok:      true,
-          file_id: file_id,
-          name:    upload[:filename].to_s,
-          path:    dest_path
+          ok:           true,
+          name:         ref.name,
+          type:         ref.type.to_s,
+          path:         ref.original_path,
+          preview_path: ref.preview_path
         })
+      rescue => e
+        json_response(res, 500, { ok: false, error: e.message })
       end
 
       # POST /api/channels/:platform
@@ -1451,7 +1450,11 @@ module Clacky
 
         when "message"
           session_id = msg["session_id"] || conn.session_id
-          handle_user_message(session_id, msg["content"].to_s, msg["images"] || [], msg["files"] || [])
+          # Merge legacy images array into files as { data_url:, name:, mime_type: } entries
+          raw_images = (msg["images"] || []).map do |data_url|
+            { "data_url" => data_url, "name" => "image.jpg", "mime_type" => "image/jpeg" }
+          end
+          handle_user_message(session_id, msg["content"].to_s, (msg["files"] || []) + raw_images)
 
         when "confirmation"
           session_id = msg["session_id"] || conn.session_id
@@ -1488,7 +1491,7 @@ module Clacky
 
       # ── Session actions ───────────────────────────────────────────────────────
 
-      def handle_user_message(session_id, content, images, files = [])
+      def handle_user_message(session_id, content, files = [])
         return unless @registry.exist?(session_id)
 
         session = @registry.get(session_id)
@@ -1497,18 +1500,6 @@ module Clacky
         agent = nil
         @registry.with_session(session_id) { |s| agent = s[:agent] }
         return unless agent
-
-        # Append all uploaded file paths to the message text so the agent can read them on demand.
-        # Files are already saved to disk by /api/upload — no need to re-save here.
-        file_refs = (files || []).filter_map do |f|
-          path = f["path"] || f[:path]
-          name = f["name"] || f[:name]
-          mime = f["mime_type"] || f[:mime_type]
-          next unless path && name
-          label = mime == "application/pdf" ? "PDF attached" : "File attached"
-          "[#{label}: #{name} — file path: #{path}]"
-        end
-        content = [content, *file_refs].join("\n") unless file_refs.empty?
 
         # Auto-name the session from the first user message (before agent starts running).
         # Check messages.empty? only — agent.name may already hold a default placeholder
@@ -1520,7 +1511,9 @@ module Clacky
           broadcast(session_id, { type: "session_renamed", session_id: session_id, name: auto_name })
         end
 
-        run_agent_task(session_id, agent) { agent.run(content, images: images, files: []) }
+        # File references are now handled inside agent.run — injected as a system_injected
+        # message after the user message, so replay_history skips them automatically.
+        run_agent_task(session_id, agent) { agent.run(content, files: files) }
       end
 
       def deliver_confirmation(session_id, conf_id, result)

@@ -80,9 +80,13 @@ module Clacky
         # Match patterns: "timeout 30 ...", "timeout 30s ...", etc.
         # Also supports: "cd xxx && timeout 30 command", "export X=Y && timeout 30 command"
         # Supports: timeout N command, timeout Ns command, timeout -s SIGNAL N command
+
+        # Use a UTF-8–safe copy for regex matching only; the original command
+        # bytes are preserved in `command` and returned unchanged.
+        safe_cmd = command.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
         
         # Try to match timeout at the beginning of command
-        match = command.match(/^timeout\s+(?:-s\s+\w+\s+)?(\d+)s?\s+(.+)$/i)
+        match = safe_cmd.match(/^timeout\s+(?:-s\s+\w+\s+)?(\d+)s?\s+(.+)$/i)
         
         if match
           timeout_value = match[1].to_i
@@ -92,7 +96,7 @@ module Clacky
         
         # Try to match timeout after && or ;
         # Pattern: "prefix && timeout 30 command" or "prefix; timeout 30 command"
-        match = command.match(/^(.+?)\s*(&&|;)\s*timeout\s+(?:-s\s+\w+\s+)?(\d+)s?\s+(.+)$/i)
+        match = safe_cmd.match(/^(.+?)\s*(&&|;)\s*timeout\s+(?:-s\s+\w+\s+)?(\d+)s?\s+(.+)$/i)
         
         if match
           prefix = match[1]          # e.g., "cd /tmp"
@@ -310,10 +314,18 @@ module Clacky
       def make_command_safe(command)
         command = command.strip
 
-        case command
+        # Safety checks use a UTF-8–scrubbed copy of the command so that
+        # non-UTF-8 bytes in filenames (e.g. GBK-encoded Chinese paths from
+        # zip archives) don't cause Encoding::InvalidByteSequenceError when
+        # Ruby's regex / String#gsub tries to process them.
+        # The original `command` (with original bytes) is returned unchanged
+        # so the shell receives the exact bytes needed to locate the file.
+        @safe_check_command = command.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+
+        case @safe_check_command
         when /^rm\s+/
           replace_rm_command(command)
-        when /^chmod\s+\+x/
+        when /^chmod\s+x/
           replace_chmod_command(command)
         when /^curl.*\|\s*(sh|bash)/
           replace_curl_pipe_command(command)
@@ -324,7 +336,8 @@ module Clacky
         when /^(mv|cp|mkdir|touch|echo)\s+/
           validate_and_allow(command)
         else
-          validate_general_command(command)
+          validate_general_command(@safe_check_command)
+          command  # validation passed, return original command with original bytes
         end
       end
 
@@ -421,7 +434,9 @@ module Clacky
       end
 
       def validate_general_command(command)
-        # Check general command security
+        # Check general command security.
+        # NOTE: `command` here is always a valid UTF-8 string (scrubbed before
+        # calling this method), so gsub / match will not raise encoding errors.
         # Note: We need to be careful not to match patterns inside quoted strings
         
         # First, remove quoted strings to avoid false positives

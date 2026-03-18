@@ -12,19 +12,19 @@ module Clacky
         #   - :role [String] "user" or "assistant"
         #   - :content [String] Message content
         #   - :timestamp [Time, nil] Optional timestamp
-        #   - :images [Array<String>] Optional image paths (for user messages)
+        #   - :files [Array<Hash>] Optional file hashes (for user messages)
         #   - :prefix_newline [Boolean] Whether to add newline before message (for system messages)
         # @return [String] Rendered message
         def render(data)
           role = data[:role]
           content = data[:content]
           timestamp = data[:timestamp]
-          images = data[:images] || []
+          files = data[:files] || []
           prefix_newline = data.fetch(:prefix_newline, true)
           
           case role
           when "user"
-            render_user_message(content, timestamp, images)
+            render_user_message(content, timestamp, files)
           when "assistant"
             render_assistant_message(content, timestamp)
           else
@@ -37,21 +37,20 @@ module Clacky
         # Render user message
         # @param content [String] Message content
         # @param timestamp [Time, nil] Optional timestamp
-        # @param images [Array<String>] Optional image paths
+        # @param files [Array<Hash>] Optional file hashes { name:, mime_type:, ... }
         # @return [String] Rendered message
-        def render_user_message(content, timestamp = nil, images = [])
+        def render_user_message(content, timestamp = nil, files = [])
           symbol = format_symbol(:user)
           text = format_text(content, :user)
           time_str = timestamp ? @pastel.dim("[#{format_timestamp(timestamp)}]") : ""
 
           result = "\n#{symbol} #{text} #{time_str}".rstrip
 
-          # Append image attachment info if present
-          if images && images.any?
-            images.each_with_index do |img_path, idx|
-              filename = File.basename(img_path)
-              filesize = File.exist?(img_path) ? format_filesize(File.size(img_path)) : "N/A"
-              result += "\n" + @pastel.dim("    [Image #{idx + 1}] #{filename} (#{filesize})")
+          # Append file attachment info if present
+          if files && files.any?
+            files.each_with_index do |f, idx|
+              filename = f[:name] || f["name"] || "file"
+              result += "\n" + @pastel.dim("    [File #{idx + 1}] #{filename}")
             end
           end
 

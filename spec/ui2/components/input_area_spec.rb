@@ -119,7 +119,7 @@ RSpec.describe Clacky::UI2::Components::InputArea do
     it "returns current input value" do
       result = input_area.submit
       expect(result[:text]).to eq("Test input")
-      expect(result[:images]).to eq([])
+      expect(result[:files]).to eq([])
     end
 
     it "clears the buffer" do

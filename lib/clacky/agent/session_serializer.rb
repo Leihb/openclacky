@@ -171,11 +171,12 @@ module Clacky
 
         page.each do |round|
           msg = round[:user_msg]
-          display_text = extract_text_from_content(msg[:content])
+          raw_text = extract_text_from_content(msg[:content])
+          # Strip embedded [File: ...] blocks from display text and return them separately
+          display_text, file_refs = extract_files_from_content(raw_text)
           # Extract image data URLs from multipart content (for history replay rendering)
-          images = extract_images_from_content(msg[:content])
           # Emit user message with its timestamp for dedup on the frontend
-          ui.show_user_message(display_text, created_at: msg[:created_at], images: images)
+          ui.show_user_message(display_text, created_at: msg[:created_at], files: file_refs)
 
           round[:events].each do |ev|
             # Skip system-injected messages (e.g. synthetic skill content, memory prompts)

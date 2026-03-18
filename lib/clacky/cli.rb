@@ -53,7 +53,8 @@ module Clacky
     option :attach, type: :string, aliases: "-a", desc: "Attach to session by number or keyword"
     option :json, type: :boolean, default: false, desc: "Output NDJSON to stdout (for scripting/piping)"
     option :message, type: :string, aliases: "-m", desc: "Run non-interactively with this message and exit"
-    option :image, type: :array, aliases: "-i", desc: "Image file path(s) to attach (use with -m; can be specified multiple times)"
+    option :file,  type: :array, aliases: "-f", desc: "File path(s) to attach (use with -m; supports images and documents)"
+    option :image, type: :array, aliases: "-i", desc: "Image file path(s) to attach (alias for --file, kept for compatibility)"
     option :agent, type: :string, default: "coding", desc: "Agent profile to use: coding, general, or any custom profile name (default: coding)"
     option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
     def agent
@@ -111,7 +112,8 @@ module Clacky
       Dir.chdir(working_dir) if should_chdir
       begin
         if options[:message]
-          run_non_interactive(agent, options[:message], Array(options[:image]), agent_config, session_manager)
+          file_paths = Array(options[:file]) + Array(options[:image])
+          run_non_interactive(agent, options[:message], file_paths, agent_config, session_manager)
         elsif options[:json]
           run_agent_with_json(agent, working_dir, agent_config, session_manager, client, profile: agent_profile)
         else
@@ -446,20 +448,26 @@ module Clacky
       # Run agent non-interactively with a single message, then exit.
       # Forces auto_approve mode so no human confirmation is needed.
       # Output goes directly to stdout; exits with code 0 on success, 1 on error.
-      def run_non_interactive(agent, message, images, agent_config, session_manager)
+      def run_non_interactive(agent, message, file_paths, agent_config, session_manager)
         # Force auto-approve — no one is around to confirm anything
         agent_config.permission_mode = :auto_approve
 
-        # Validate image paths up-front so we fail fast with a clear message
-        images.each do |path|
-          raise ArgumentError, "Image file not found: #{path}" unless File.exist?(path)
+        # Validate paths up-front so we fail fast with a clear message
+        file_paths.each do |path|
+          raise ArgumentError, "File not found: #{path}" unless File.exist?(path)
+        end
+
+        # Convert file paths to file hashes — agent.run decides how to handle each
+        files = file_paths.map do |path|
+          mime = Utils::FileProcessor.detect_mime_type(path) rescue "application/octet-stream"
+          { name: File.basename(path), mime_type: mime, path: path }
         end
 
         # Wire up plain-text stdout UI so all agent output is visible
         plain_ui = Clacky::PlainUIController.new
         agent.instance_variable_set(:@ui, plain_ui)
 
-        agent.run(message, images: images)
+        agent.run(message, files: files)
         session_manager&.save(agent.to_session_data(status: :success))
         exit(0)
       rescue Clacky::AgentInterrupted
@@ -476,7 +484,7 @@ module Clacky
       #
       # Input protocol (one JSON per line on stdin):
       #   {"type":"message","content":"..."}          — run agent with this message
-      #   {"type":"message","content":"...","images":["path"]} — with images
+      #   {"type":"message","content":"...","files":[{"name":"x.jpg","mime_type":"image/jpeg","data_url":"data:..."}]} — with files
       #   {"type":"exit"}                             — graceful shutdown
       #   {"type":"confirmation","id":"conf_1","result":"yes"} — answer to request_confirmation
       #
@@ -522,8 +530,8 @@ module Clacky
               next
             end
 
-            images = input["images"] || []
-            run_json_task(agent, json_ui, session_manager) { agent.run(content, images: images) }
+            files = input["files"] || []
+            run_json_task(agent, json_ui, session_manager) { agent.run(content, files: files) }
           when "exit"
             break
           else
@@ -645,7 +653,7 @@ module Clacky
         end
 
         # Set up input handler
-        ui_controller.on_input do |input, images, display: nil|
+        ui_controller.on_input do |input, files, display: nil|
           # Handle commands
           case input.downcase.strip
           when "/config"
@@ -693,7 +701,7 @@ module Clacky
 
               # Run agent (Agent will call @ui methods directly)
               # Agent internally tracks total_tasks and total_cost
-              result = agent.run(input, images: images)
+              result = agent.run(input, files: files)
 
               # Save session after each task
               if session_manager

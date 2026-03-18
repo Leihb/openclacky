@@ -151,7 +151,7 @@ module Clacky
       @name = new_name.to_s.strip
     end
 
-    def run(user_input, images: [], files: [])
+    def run(user_input, files: [])
       # Start new task for Time Machine
       task_id = start_new_task
 
@@ -178,10 +178,37 @@ module Clacky
       # Inject session context (date + model) if not yet present or date has changed
       inject_session_context_if_needed
 
-      # Format user message with images and files if provided
-      user_content = format_user_content(user_input, images, files)
+      # Split files into vision images and disk files; downgrade oversized images to disk
+      image_files, disk_files = partition_files(Array(files))
+      vision_urls, downgraded  = resolve_vision_images(image_files)
+      all_disk_files = disk_files + downgraded
+
+      # Format user message — text + inline vision images
+      user_content = format_user_content(user_input, vision_urls)
       @history.append({ role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f })
       @total_tasks += 1
+
+      # Inject disk file references as a system_injected message so:
+      #   - LLM sees the file info (system_injected is NOT stripped from to_api)
+      #   - replay_history skips it (next if ev[:system_injected]), keeping the user bubble clean
+      unless all_disk_files.empty?
+        file_prompt = all_disk_files.filter_map do |f|
+          path         = f[:path]         || f["path"]
+          name         = f[:name]         || f["name"]
+          type         = f[:type]         || f["type"]
+          preview_path = f[:preview_path] || f["preview_path"]
+          next unless path && name
+
+          lines = ["[File: #{name}]", "Type: #{type || "file"}"]
+          lines << "Original: #{path}"
+          lines << "Preview (Markdown): #{preview_path}" if preview_path
+          lines.join("\n")
+        end.join("\n\n")
+
+        unless file_prompt.empty?
+          @history.append({ role: "user", content: file_prompt, system_injected: true, task_id: task_id })
+        end
+      end
 
       # If the user typed a slash command targeting a skill with disable-model-invocation: true,
       # inject the skill content as a synthetic assistant message so the LLM can act on it.
@@ -854,24 +881,85 @@ module Clacky
     # @param images [Array<String>] Array of image file paths or data: URLs
     # @param files [Array] Unused — kept for signature compatibility
     # @return [String|Array] String if no images, Array with content blocks otherwise
-    private def format_user_content(text, images, files = [])
-      images ||= []
+    # Partition files array into [image_files, non_image_files].
+    # Image files: have mime_type starting with "image/" OR have data_url present.
+    private def partition_files(files)
+      image_files = []
+      non_image_files = []
+      files.each do |f|
+        mime = f[:mime_type] || f["mime_type"] || ""
+        data_url = f[:data_url] || f["data_url"]
+        if mime.start_with?("image/") || data_url
+          image_files << f
+        else
+          non_image_files << f
+        end
+      end
+      [image_files, non_image_files]
+    end
 
-      return text if images.empty?
+    # Resolve image files to vision data_urls.
+    # Files with data_url: use as-is (already compressed by frontend or adapter).
+    # Files with path: convert to data_url via FileProcessor.
+    # Oversized images (> MAX_IMAGE_BYTES) are downgraded to disk file refs.
+    # @return [Array<String>, Array<Hash>] [vision_urls, downgraded_disk_files]
+    private def resolve_vision_images(image_files)
+      require "base64"
+      max_bytes = Utils::FileProcessor::MAX_IMAGE_BYTES
+      vision_urls = []
+      downgraded  = []
+
+      image_files.each do |f|
+        name     = f[:name]     || f["name"]     || "image.jpg"
+        mime     = f[:mime_type] || f["mime_type"] || "image/jpeg"
+        data_url = f[:data_url]  || f["data_url"]
+        path     = f[:path]      || f["path"]
+
+        if data_url
+          # Strip header to check byte size: "data:image/jpeg;base64,<data>"
+          b64_data = data_url.split(",", 2).last.to_s
+          byte_size = (b64_data.bytesize * 3) / 4
+          if byte_size > max_bytes
+            # Downgrade: save to disk
+            raw      = Base64.decode64(b64_data)
+            file_ref = Utils::FileProcessor.save_image_to_disk(body: raw, mime_type: mime, filename: name)
+            downgraded << { name: name, path: file_ref.original_path, type: "image", mime_type: mime }
+          else
+            vision_urls << data_url
+          end
+        elsif path
+          begin
+            data_url_from_path = Utils::FileProcessor.image_path_to_data_url(path)
+            b64_data = data_url_from_path.split(",", 2).last.to_s
+            byte_size = (b64_data.bytesize * 3) / 4
+            if byte_size > max_bytes
+              raw      = Base64.decode64(b64_data)
+              file_ref = Utils::FileProcessor.save_image_to_disk(body: raw, mime_type: mime, filename: name)
+              downgraded << { name: name, path: file_ref.original_path, type: "image", mime_type: mime }
+            else
+              vision_urls << data_url_from_path
+            end
+          rescue => e
+            @ui&.log("Failed to load image #{name}: #{e.message}", level: :warn)
+          end
+        end
+      end
+
+      [vision_urls, downgraded]
+    end
+
+    # Build user message content for LLM.
+    # Returns plain String when no vision images; Array of content parts otherwise.
+    private def format_user_content(text, vision_urls)
+      vision_urls ||= []
+
+      return text if vision_urls.empty?
 
       content = []
       content << { type: "text", text: text } unless text.nil? || text.empty?
-
-      images.each do |image|
-        # Accept both file paths and pre-encoded data: URLs (e.g. from Web UI)
-        image_url = if image.start_with?("data:")
-                      image
-                    else
-                      Utils::FileProcessor.image_path_to_data_url(image)
-                    end
-        content << { type: "image_url", image_url: { url: image_url } }
+      vision_urls.each do |url|
+        content << { type: "image_url", image_url: { url: url } }
       end
-
       content
     end
 
