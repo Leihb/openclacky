@@ -383,12 +383,8 @@ module Clacky
       # Phase "soul_setup" → key configured, but ~/.clacky/agents/SOUL.md missing
       # needs_onboard: false → fully set up
       def api_onboard_status(res)
-        soul_path = File.expand_path("~/.clacky/agents/SOUL.md")
-
         if !@agent_config.models_configured?
           json_response(res, 200, { needs_onboard: true, phase: "key_setup" })
-        elsif !File.exist?(soul_path)
-          json_response(res, 200, { needs_onboard: true, phase: "soul_setup" })
         else
           json_response(res, 200, { needs_onboard: false })
         end
