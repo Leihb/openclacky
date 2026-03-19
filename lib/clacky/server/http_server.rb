@@ -1061,12 +1061,16 @@ module Clacky
         @skill_loader.load_all  # refresh from disk on each request
         skills = @skill_loader.all_skills.map do |skill|
           source = @skill_loader.loaded_from[skill.identifier]
-          {
+          entry = {
             name:        skill.identifier,
             description: skill.context_description,
             source:      source,
-            enabled:     !skill.disabled?
+            enabled:     !skill.disabled?,
+            invalid:     skill.invalid?,
+            warnings:    skill.warnings
           }
+          entry[:invalid_reason] = skill.invalid_reason if skill.invalid?
+          entry
         end
         json_response(res, 200, { skills: skills })
       end

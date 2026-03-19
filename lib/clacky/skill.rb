@@ -32,10 +32,36 @@ module Clacky
     attr_reader :fork_agent, :model, :forbidden_tools, :auto_summarize
     attr_reader :brand_skill, :brand_config
 
+    # Warnings accumulated during load (e.g. name was invalid and fell back to dir name).
+    # Non-empty means the skill loaded but something was auto-corrected.
+    # @return [Array<String>]
+    attr_reader :warnings
+
+    # When true the skill has an unrecoverable metadata problem (e.g. directory name
+    # is itself an invalid slug).  The skill is still registered so it can be shown
+    # in the UI (greyed-out with an explanation), but it is excluded from the system
+    # prompt and slash command dispatch.
+    # @return [Boolean]
+    attr_reader :invalid
+
+    # Human-readable reason why the skill is invalid (nil when valid).
+    # @return [String, nil]
+    attr_reader :invalid_reason
+
     # Check if this skill is disabled (disable-model-invocation: true)
     # @return [Boolean]
     def disabled?
       @disable_model_invocation == true
+    end
+
+    # @return [Boolean]
+    def invalid?
+      @invalid == true
+    end
+
+    # @return [Boolean]
+    def has_warnings?
+      @warnings&.any?
     end
 
 
@@ -54,6 +80,10 @@ module Clacky
       @brand_skill     = brand_skill
       @brand_config    = brand_config
       @cached_metadata = cached_metadata
+      @encrypted       = false
+      @warnings        = []
+      @invalid         = false
+      @invalid_reason  = nil
 
       load_skill
     end
@@ -215,7 +245,7 @@ module Clacky
     # Returns true when this skill's content is stored encrypted on disk.
     # @return [Boolean]
     def encrypted?
-      @brand_skill == true
+      @encrypted == true
     end
 
     # Decrypt and return the raw skill content.
@@ -258,7 +288,7 @@ module Clacky
       @user_invocable = true if @user_invocable.nil?
       @disable_model_invocation = false if @disable_model_invocation.nil?
 
-      validate_frontmatter
+      sanitize_frontmatter
     end
 
     # Load a plain (unencrypted) skill from SKILL.md
@@ -270,13 +300,7 @@ module Clacky
       end
 
       content = skill_file.read
-
-      if content.start_with?("---")
-        parse_frontmatter(content)
-      else
-        @frontmatter = {}
-        @content = content
-      end
+      parse_frontmatter(content)
     end
 
     # Load a brand (encrypted) skill from SKILL.md.enc.
@@ -286,92 +310,157 @@ module Clacky
     # The full content is decrypted lazily via #decrypted_content when the skill
     # is actually invoked.
     private def load_brand_skill
-      enc_file = @directory.join("SKILL.md.enc")
+      enc_file   = @directory.join("SKILL.md.enc")
+      plain_file = @directory.join("SKILL.md")
+      encrypted  = enc_file.exist?
+      plain      = plain_file.exist?
 
-      unless enc_file.exist?
-        raise Clacky::AgentError, "SKILL.md.enc not found in brand skill directory: #{@directory}"
+      unless encrypted || plain
+        raise Clacky::AgentError, "No SKILL.md or SKILL.md.enc found in brand skill directory: #{@directory}"
       end
 
-      raise "brand_config is required to load brand skill" unless @brand_config
+      if encrypted && !@brand_config
+        raise Clacky::AgentError, "brand_config is required to load encrypted brand skill"
+      end
 
-      # Fast path: use cached metadata from brand_skills.json — no decryption, no network.
+      # Set the encrypted flag based on which file exists.
+      # This is independent of @brand_skill (which just marks this as a brand/proprietary skill).
+      @encrypted = encrypted
+
+      # Fast path: cached_metadata provides name + description from brand_skills.json
+      # (already sanitized to a valid slug by record_installed_skill).
+      # For plain brand skills, also eagerly load the content so it's available at invoke time.
+      # For encrypted brand skills, defer decryption to #decrypted_content (invocation time).
       if @cached_metadata
         @frontmatter = {}
         @name        = @cached_metadata["name"]
         @description = @cached_metadata["description"]
-        @content     = nil
+        @content     = plain ? plain_file.read.then { |raw| extract_content_only(raw) } : nil
         return
       end
 
-      # Slow path (fallback): decrypt to parse frontmatter.
-      # This runs only when brand_skills.json metadata is unavailable (e.g. first
-      # install before record_installed_skill has run, or manual skill placement).
-      raw = @brand_config.decrypt_skill_content(enc_file.to_s)
-
-      if raw.start_with?("---")
+      # Slow path: no cached_metadata — parse frontmatter directly from file.
+      # This runs only on first install before brand_skills.json is written,
+      # or for manually placed brand skills without a registry entry.
+      if encrypted
+        raw = @brand_config.decrypt_skill_content(enc_file.to_s)
         parse_frontmatter(raw)
+        @content = nil  # re-decrypted lazily at invoke time via #decrypted_content
       else
-        @frontmatter = {}
-        @content = raw
+        raw = plain_file.read
+        parse_frontmatter(raw)
+        # Plain brand skill: content is already in memory from parse_frontmatter
       end
-
-      # Clear content from memory — it will be re-decrypted at invoke time
-      # via #decrypted_content so the plain text is never held in a long-lived object.
-      @content = nil
     end
 
-    def parse_frontmatter(content)
-      # Extract frontmatter between first and second "---"
-      frontmatter_match = content.match(/^---\n(.*?)\n---/m)
+    # Extract only the body content from a SKILL.md, stripping YAML frontmatter.
+    # Used so plain brand skills can load content at startup without re-parsing frontmatter.
+    private def extract_content_only(raw)
+      match = raw.match(/\A---\n.*?\n---[ \t]*\n?/m)
+      match ? raw[match.end(0)..].strip : raw.strip
+    end
 
-      unless frontmatter_match
-        raise Clacky::AgentError, "Invalid frontmatter format in SKILL.md: missing closing ---"
+    # Parse content that may or may not have YAML frontmatter.
+    # This method is lenient: bad frontmatter format or YAML errors just produce
+    # warnings rather than raising — the raw text becomes the skill content instead.
+    def parse_frontmatter(content)
+      frontmatter_match = content.match(/\A---\n(.*?)\n---[ \t]*\n?/m)
+
+      if frontmatter_match
+        yaml_content = frontmatter_match[1]
+
+        begin
+          @frontmatter = YAML.safe_load(yaml_content) || {}
+        rescue Psych::Exception => e
+          # Bad YAML — treat whole file as plain content, record warning
+          @warnings << "Could not parse YAML frontmatter: #{e.message}. Treating file as plain content."
+          @frontmatter = {}
+          @content = content
+          extract_fields_from_frontmatter
+          return
+        end
+
+        @content = content[frontmatter_match.end(0)..-1].to_s.strip
+      else
+        # No valid frontmatter block — treat everything as content (no YAML at all,
+        # or an unclosed --- block).  We record a warning only if it looked like the
+        # author tried to write frontmatter but made a mistake.
+        if content.start_with?("---")
+          @warnings << "Frontmatter block started with '---' but no closing '---' was found. Treating file as plain content."
+        end
+        @frontmatter = {}
+        @content = content
       end
 
-      yaml_content = frontmatter_match[1]
-      @frontmatter = YAML.safe_load(yaml_content) || {}
+      extract_fields_from_frontmatter
+    end
 
-      # Extract content after frontmatter
-      @content = content[frontmatter_match.end(0)..-1].to_s.strip
-
-      # Extract fields from frontmatter
-      @name = @frontmatter["name"]
+    # Pull known fields out of @frontmatter into instance variables.
+    private def extract_fields_from_frontmatter
+      @name        = @frontmatter["name"]
       @description = @frontmatter["description"]
       @disable_model_invocation = @frontmatter["disable-model-invocation"]
-      @user_invocable = @frontmatter["user-invocable"]
-      @allowed_tools = @frontmatter["allowed-tools"]
-      @context = @frontmatter["context"]
-      @agent_type = @frontmatter["agent"]
-      @argument_hint = @frontmatter["argument-hint"]
-      @hooks = @frontmatter["hooks"]
-      
-      # Subagent configuration
-      @fork_agent = @frontmatter["fork_agent"]
-      @model = @frontmatter["model"]
+      @user_invocable  = @frontmatter["user-invocable"]
+      @allowed_tools   = @frontmatter["allowed-tools"]
+      @context         = @frontmatter["context"]
+      @agent_type      = @frontmatter["agent"]
+      @argument_hint   = @frontmatter["argument-hint"]
+      @hooks           = @frontmatter["hooks"]
+      @fork_agent      = @frontmatter["fork_agent"]
+      @model           = @frontmatter["model"]
       @forbidden_tools = @frontmatter["forbidden_tools"]
-      @auto_summarize = @frontmatter["auto_summarize"]
+      @auto_summarize  = @frontmatter["auto_summarize"]
     end
 
-    def validate_frontmatter
-      # Validate name if provided
-      if @name
-        unless @name.match?(/^[a-z0-9][a-z0-9-]*$/)
-          raise Clacky::AgentError,
-            "Invalid skill name '#{@name}'. Use lowercase letters, numbers, and hyphens only (max 64 chars)."
+    # Sanitize and auto-correct frontmatter fields instead of raising on bad data.
+    # Skills should always load — invalid fields are corrected with a warning, or
+    # the skill is marked @invalid so the UI can display it greyed-out.
+    def sanitize_frontmatter
+      dir_slug = @directory.basename.to_s
+      valid_slug = ->(s) { s.to_s.match?(/\A[a-z0-9][a-z0-9-]*\z/) }
+
+      # --- name ---
+      # Brand skills loaded via cached_metadata have their name pre-sanitized by
+      # record_installed_skill (brand_config.rb) — skip slug validation for them.
+      # The frontmatter name (e.g. "Antique Identifier") is the human-readable display
+      # name and should not be treated as a slug.
+      if @cached_metadata
+        @name ||= dir_slug
+      elsif @name
+        name_invalid = !valid_slug.call(@name) || @name.length > 64
+
+        if name_invalid
+          if valid_slug.call(dir_slug)
+            # Recoverable: fall back to directory name, record a warning
+            @warnings << "Invalid name '#{@name}' in metadata; using directory name '#{dir_slug}' instead."
+            @name = dir_slug
+          else
+            # Unrecoverable: both name and directory slug are invalid — mark skill as invalid
+            @invalid        = true
+            @invalid_reason = "Invalid skill name '#{@name}' and directory name '#{dir_slug}' is also not a valid slug. " \
+                              "Expected lowercase letters, numbers, and hyphens (e.g. 'my-skill')."
+            @name = nil
+          end
         end
-        if @name.length > 64
-          raise Clacky::AgentError, "Skill name '#{@name}' exceeds 64 characters."
+      else
+        # No name in frontmatter — check the directory slug itself
+        unless valid_slug.call(dir_slug)
+          @invalid        = true
+          @invalid_reason = "Directory name '#{dir_slug}' is not a valid skill slug. " \
+                            "Expected lowercase letters, numbers, and hyphens (e.g. 'my-skill')."
         end
       end
 
-      # Validate forbidden_tools format
+      # --- forbidden_tools ---
       if @forbidden_tools && !@forbidden_tools.is_a?(Array)
-        raise Clacky::AgentError, "forbidden_tools must be an array of tool names"
+        @warnings << "forbidden_tools must be an array; ignoring value: #{@forbidden_tools.inspect}"
+        @forbidden_tools = nil
       end
 
-      # Validate allowed-tools format
+      # --- allowed-tools ---
       if @allowed_tools && !@allowed_tools.is_a?(Array)
-        raise Clacky::AgentError, "allowed-tools must be an array of tool names"
+        @warnings << "allowed-tools must be an array; ignoring value: #{@allowed_tools.inspect}"
+        @allowed_tools = nil
       end
     end
 

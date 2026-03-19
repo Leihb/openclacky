@@ -80,7 +80,10 @@ module Clacky
         next unless encrypted || plain
 
         skill_name      = skill_dir.basename.to_s
-        cached_metadata = encrypted ? installed_metadata[skill_name] : nil
+        # Pass cached_metadata for all brand skills (encrypted or plain).
+        # brand_skills.json stores sanitized slugs, so this prevents sanitize_frontmatter
+        # from flagging human-readable names like "Antique Identifier" as invalid.
+        cached_metadata = installed_metadata[skill_name]
         skill = load_single_brand_skill(skill_dir, skill_name, encrypted: encrypted, cached_metadata: cached_metadata)
         skills << skill if skill
       end
@@ -331,38 +334,12 @@ module Clacky
       skill = Skill.new(
         skill_dir,
         source_path:     skill_dir,
-        brand_skill:     encrypted,
+        brand_skill:     true,
         brand_config:    encrypted ? @brand_config : nil,
         cached_metadata: cached_metadata
       )
 
-      existing = @skills[skill.identifier]
-      if existing
-        existing_source = @loaded_from[skill.identifier]
-        priority_order  = [:default, :global_claude, :global_clacky, :project_claude, :project_clacky, :brand]
-
-        if priority_order.index(:brand) > priority_order.index(existing_source)
-          @skills.delete(existing.identifier)
-          @skills_by_command.delete(existing.slash_command)
-          @loaded_from.delete(existing.identifier)
-        else
-          @errors << "Skipping duplicate brand skill '#{skill.identifier}' at #{skill_dir}"
-          return nil
-        end
-      end
-
-      # Enforce skill count limit
-      if @skills.size >= MAX_SKILLS
-        msg = "Skill limit reached (max #{MAX_SKILLS}): skipping brand skill '#{skill.identifier}' from #{skill_dir}"
-        @errors << msg
-        Clacky::Logger.warn(msg)
-        return nil
-      end
-
-      @skills[skill.identifier]          = skill
-      @skills_by_command[skill.slash_command] = skill
-      @loaded_from[skill.identifier]     = :brand
-
+      register_skill(skill, source: :brand)
       skill
     rescue Clacky::AgentError => e
       @errors << "Error loading brand skill '#{skill_name}' from #{skill_dir}: #{e.message}"
@@ -372,40 +349,9 @@ module Clacky
       nil
     end
 
-    def load_single_skill(skill_dir, source_path, skill_name, source_type)
+    private def load_single_skill(skill_dir, source_path, skill_name, source_type)
       skill = Skill.new(skill_dir, source_path: source_path)
-
-      # Check for duplicate names
-      existing = @skills[skill.identifier]
-      if existing
-        # Skip duplicate (lower priority)
-        existing_source = @loaded_from[skill.identifier]
-        priority_order = [:default, :global_claude, :global_clacky, :project_claude, :project_clacky, :brand]
-
-        if priority_order.index(source_type) > priority_order.index(existing_source)
-          # Replace with higher priority skill
-          @skills.delete(existing.identifier)
-          @skills_by_command.delete(existing.slash_command)
-          @loaded_from.delete(existing.identifier)
-        else
-          @errors << "Skipping duplicate skill '#{skill.identifier}' at #{skill_dir}"
-          return nil
-        end
-      end
-
-      # Enforce skill count limit
-      if @skills.size >= MAX_SKILLS
-        msg = "Skill limit reached (max #{MAX_SKILLS}): skipping '#{skill.identifier}' from #{skill_dir}"
-        @errors << msg
-        Clacky::Logger.warn(msg)
-        return nil
-      end
-
-      # Register skill
-      @skills[skill.identifier] = skill
-      @skills_by_command[skill.slash_command] = skill
-      @loaded_from[skill.identifier] = source_type
-
+      register_skill(skill, source: source_type)
       skill
     rescue Clacky::AgentError => e
       @errors << "Error loading skill '#{skill_name}' from #{skill_dir}: #{e.message}"
@@ -413,6 +359,53 @@ module Clacky
     rescue StandardError => e
       @errors << "Unexpected error loading skill '#{skill_name}' from #{skill_dir}: #{e.message}"
       nil
+    end
+
+    # Register a skill into the internal lookup tables.
+    # - Always adds to @skills (by identifier) so the skill is discoverable in the UI.
+    # - Skips @skills_by_command registration when the skill is invalid (no valid slug
+    #   to form a slash command from).
+    # - Respects priority ordering for duplicates; enforces MAX_SKILLS cap.
+    # @param skill [Skill]
+    # @param source [Symbol] one of :default, :global_claude, :global_clacky,
+    #   :project_claude, :project_clacky, :brand
+    # @return [Skill, nil] nil when the skill was rejected (duplicate/limit)
+    private def register_skill(skill, source:)
+      id             = skill.identifier
+      priority_order = %i[default global_claude global_clacky project_claude project_clacky brand]
+
+      # --- duplicate check ---
+      if (existing = @skills[id])
+        existing_source = @loaded_from[id]
+        if priority_order.index(source) > priority_order.index(existing_source)
+          # Incoming skill has higher priority — evict the existing one
+          @skills.delete(existing.identifier)
+          @skills_by_command.delete(existing.slash_command)
+          @loaded_from.delete(existing.identifier)
+        else
+          @errors << "Skipping duplicate skill '#{id}' (lower priority) from #{skill.directory}"
+          return nil
+        end
+      end
+
+      # --- skill count cap (only count valid/non-invalid skills for the cap) ---
+      if @skills.size >= MAX_SKILLS
+        msg = "Skill limit reached (max #{MAX_SKILLS}): skipping '#{id}' from #{skill.directory}"
+        @errors << msg
+        Clacky::Logger.warn(msg)
+        return nil
+      end
+
+      @skills[id]        = skill
+      @loaded_from[id]   = source
+
+      # Invalid skills have no usable slug — skip slash command registration but
+      # still keep them in @skills so they appear (greyed-out) in the UI.
+      unless skill.invalid?
+        @skills_by_command[skill.slash_command] = skill
+      end
+
+      skill
     end
 
     def build_skill_content(frontmatter, content)

@@ -2232,6 +2232,64 @@ body {
   border: 1px solid var(--color-success-border);
 }
 
+.skill-badge-invalid {
+  background: var(--color-error-bg, #fff0f0);
+  color: var(--color-error, #c0392b);
+  border: 1px solid var(--color-error-border, #f5c6c6);
+}
+
+/* ── Invalid / Warning notices ───────────────────────────────────────────── */
+.skill-card-invalid {
+  opacity: 0.7;
+  border-color: var(--color-error-border, #f5c6c6) !important;
+}
+.skill-notice {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 4px 10px;
+  border-top: 1px solid transparent;
+  border-radius: 0 0 6px 6px;
+}
+.skill-notice-error {
+  background: var(--color-error-bg, #fff0f0);
+  color: var(--color-error, #c0392b);
+  border-top-color: var(--color-error-border, #f5c6c6);
+}
+
+/* ── Warning icon (skill usable but has auto-corrected config issue) ──────── */
+.skill-warn-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--color-warning, #b7791f);
+  cursor: help;
+  flex-shrink: 0;
+}
+.skill-warn-icon::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  width: 260px;
+  background: var(--color-bg-elevated, #fff);
+  color: var(--color-text, #333);
+  border: 1px solid var(--color-border, #e0e0e0);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.skill-warn-icon:hover::after {
+  opacity: 1;
+}
+
 /* ── Toggle Switch ───────────────────────────────────────────────────────── */
 .skill-toggle {
   position: relative;
@@ -2655,6 +2713,21 @@ body {
 .btn-brand-update:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.btn-brand-use {
+  background: transparent;
+  border: 1px solid var(--color-success-border);
+  border-radius: 6px;
+  color: var(--color-success);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  transition: background .15s;
+  white-space: nowrap;
+}
+.btn-brand-use:hover {
+  background: var(--color-success-bg);
 }
 
 /* ── Skills sidebar section ──────────────────────────────────────────────── */

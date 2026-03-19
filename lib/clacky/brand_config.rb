@@ -420,8 +420,10 @@ module Clacky
         # Merge local installed version info into each skill
         installed = installed_brand_skills
         skills = (body["skills"] || []).map do |skill|
-          slug         = skill["slug"] || skill["name"]&.downcase&.gsub(/\s+/, "-")
-          local        = installed[slug]
+          # Normalize name to slug format; prefer the matching local installed dir name
+          normalized   = skill["name"].to_s.downcase.gsub(/[\s_]+/, "-").gsub(/[^a-z0-9-]/, "").gsub(/-+/, "-")
+          name         = installed.keys.find { |k| k == normalized } || normalized
+          local        = installed[name]
           # The authoritative "latest" version lives in latest_version.version when present,
           # falling back to the top-level version field for older API responses.
           latest_ver   = (skill["latest_version"] || {})["version"] || skill["version"]
@@ -429,7 +431,7 @@ module Clacky
           # If local >= latest (e.g. a dev build), suppress the update badge.
           needs_update = local ? version_older?(local["version"], latest_ver) : false
           skill.merge(
-            "slug"              => slug,
+            "name"              => name,
             "installed_version" => local ? local["version"] : nil,
             "needs_update"      => needs_update
           )
@@ -603,7 +605,11 @@ module Clacky
           result = fetch_brand_skills!
           next unless result[:success]
 
-          skills_needing_update = result[:skills].select { |s| s["needs_update"] || s["installed_version"].nil? }
+          # Auto-sync is intentionally limited to skills the user has already
+          # installed and that have a newer version available.
+          # New skills are never auto-installed — the user must click Install/Update
+          # explicitly from the Brand Skills panel.
+          skills_needing_update = result[:skills].select { |s| s["needs_update"] }
           results = skills_needing_update.map do |skill_info|
             install_brand_skill!(skill_info)
           end
@@ -848,18 +854,71 @@ module Clacky
     #
     # description is stored so it can be shown locally even when the remote API
     # is unreachable (e.g. offline or license server down).
+    #
+    # The stored `name` must be a valid skill slug (lowercase letters, numbers,
+    # hyphens only; no leading/trailing hyphens) because it is used as the
+    # slash command identifier (/name).  We sanitize aggressively here so that
+    # bad data from the platform never reaches the local registry:
+    #
+    #   1. name already valid            → use name as-is
+    #   2. name invalid, slug valid      → use slug, log warning
+    #   3. both invalid                  → sanitize (downcase, spaces→hyphens,
+    #                                      strip illegal chars), log warning
+    #   4. still invalid after sanitize  → raise, caller gets { success: false }
     private def record_installed_skill(slug, version, name, description = nil, encrypted: true)
+      safe_name = sanitize_skill_name(name, slug)
+
       FileUtils.mkdir_p(brand_skills_dir)
       path      = File.join(brand_skills_dir, "brand_skills.json")
       installed = installed_brand_skills
       installed[slug] = {
         "version"      => version,
-        "name"         => name,
+        "name"         => safe_name,
         "description"  => description.to_s,
         "encrypted"    => encrypted,
         "installed_at" => Time.now.utc.iso8601
       }
       File.write(path, JSON.generate(installed))
+    end
+
+    # Normalize a skill name to a valid slug, with fallback escalation.
+    # @param name [String, nil] Raw name from platform
+    # @param slug [String] Directory slug from platform (used as fallback)
+    # @return [String] A valid slug
+    # @raise [RuntimeError] When all sanitization attempts still yield an invalid slug
+    private def sanitize_skill_name(name, slug)
+      valid_slug = ->(s) { s.to_s.match?(/\A[a-z0-9][a-z0-9-]*[a-z0-9]\z/) || s.to_s.match?(/\A[a-z0-9]\z/) }
+
+      # 1. name already valid
+      return name if valid_slug.call(name)
+
+      # 2. name invalid — try slug
+      if valid_slug.call(slug)
+        Clacky::Logger.warn(
+          "Brand skill name '#{name}' is not a valid slug; using slug '#{slug}' instead."
+        )
+        return slug
+      end
+
+      # 3. both invalid — sanitize: downcase, spaces/underscores → hyphens, strip illegal chars
+      sanitized = name.to_s
+        .downcase
+        .gsub(/[\s_]+/, "-")
+        .gsub(/[^a-z0-9-]/, "")
+        .gsub(/-+/, "-")
+        .gsub(/\A-+|-+\z/, "")
+
+      if valid_slug.call(sanitized)
+        Clacky::Logger.warn(
+          "Brand skill name '#{name}' and slug '#{slug}' are both invalid slugs; " \
+          "sanitized to '#{sanitized}'."
+        )
+        return sanitized
+      end
+
+      # 4. still invalid — refuse to write garbage into the registry
+      raise "Cannot derive a valid skill slug from name='#{name}' or slug='#{slug}'. " \
+            "Expected lowercase letters, numbers, and hyphens (e.g. 'my-skill')."
     end
 
     # Fetch the AES-256-GCM decryption key for a skill version from the server.
