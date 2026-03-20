@@ -2708,14 +2708,24 @@ body {
   white-space: nowrap;
 }
 .brand-skill-version.installed {
-  background: var(--color-success-bg);
-  color: var(--color-success);
-  border: 1px solid var(--color-success-border);
+  background: #1f3a5f;
+  color: #7eb8f7;
+  border: 1px solid #1d4070;
 }
 .brand-skill-version.latest {
-  background: #1f3a5f;
-  color: var(--color-accent-hover);
+  background: #1f4e9e;
+  color: #bfdbfe;
   border: 1px solid #1d4070;
+}
+[data-theme="light"] .brand-skill-version.installed {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+[data-theme="light"] .brand-skill-version.latest {
+  background: #1d4ed8;
+  color: #ffffff;
+  border: 1px solid #1e40af;
 }
 .brand-skill-update-arrow {
   color: var(--color-text-secondary);
@@ -2759,10 +2769,16 @@ body {
 }
 .btn-brand-update {
   background: #1f4e9e;
-  color: var(--color-accent-hover);
+  color: #bfdbfe;
   border: 1px solid #1d4070;
 }
-.btn-brand-update:hover { background: var(--color-accent-primary); }
+.btn-brand-update:hover { background: #1a3f85; }
+[data-theme="light"] .btn-brand-update {
+  background: #1d4ed8;
+  color: #ffffff;
+  border: 1px solid #1e40af;
+}
+[data-theme="light"] .btn-brand-update:hover { background: #1e40af; }
 .btn-brand-install:disabled,
 .btn-brand-update:disabled {
   opacity: 0.5;
