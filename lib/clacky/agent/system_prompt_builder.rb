@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../utils/workspace_rules"
+
 module Clacky
   class Agent
     # System prompt construction
@@ -49,21 +51,36 @@ module Clacky
       end
 
       private def load_project_rules
-        rules_files = [
-          { path: ".clackyrules", name: ".clackyrules" },
-          { path: ".cursorrules", name: ".cursorrules" },
-          { path: "CLAUDE.md",    name: "CLAUDE.md" }
-        ]
+        main = Utils::WorkspaceRules.find_main(@working_dir)
+        sub_projects = Utils::WorkspaceRules.find_sub_projects(@working_dir)
 
-        rules_files.each do |file_info|
-          full_path = File.join(@working_dir, file_info[:path])
-          next unless File.exist?(full_path)
+        return nil if main.nil? && sub_projects.empty?
 
-          content = File.read(full_path).strip
-          return { content: content, source: file_info[:name] } unless content.empty?
+        combined_content = []
+        combined_content << main[:content] if main
+
+        unless sub_projects.empty?
+          n = Utils::WorkspaceRules::SUB_PROJECT_SUMMARY_LINES
+          summaries = sub_projects.map do |sp|
+            <<~SECTION.strip
+              ### Sub-project: #{sp[:sub_name]}/
+              Summary (first #{n} lines of #{sp[:relative_path]}):
+              #{sp[:summary]}
+              > IMPORTANT: Before working on any files under #{sp[:sub_name]}/, read the full rules file at `#{sp[:relative_path]}` using file_reader.
+            SECTION
+          end
+
+          combined_content << <<~BLOCK.strip
+            ## SUB-PROJECT AGENTS
+            This workspace contains sub-projects, each with their own rules.
+            When working in a sub-project, you MUST read its full .clackyrules first.
+
+            #{summaries.join("\n\n")}
+          BLOCK
         end
 
-        nil
+        source = main ? main[:name] : "sub-projects"
+        { content: combined_content.join("\n\n"), source: source }
       end
 
       private def format_section(title, content, footer: nil)

@@ -3,6 +3,7 @@
 require "pastel"
 require_relative "../../version"
 require_relative "../block_font"
+require_relative "../../utils/workspace_rules"
 
 module Clacky
   module UI2
@@ -85,10 +86,32 @@ module Clacky
           lines << ""
           lines << info_line("Working Directory", working_dir)
           lines << info_line("Permission Mode", mode)
+
+          # Show loaded project rules file if present
+          main = Utils::WorkspaceRules.find_main(working_dir)
+          lines << info_line("Project Rules", "#{main[:name]} ✓") if main
+
           lines << ""
           lines << theme.format_text("[!] Type 'exit' or 'quit' to terminate session", :thinking)
           lines << separator("-")
           lines << ""
+
+          # Show sub-project agents block if any sub-dirs have .clackyrules
+          sub_projects = Utils::WorkspaceRules.find_sub_projects(working_dir)
+          unless sub_projects.empty?
+            lines << @pastel.bright_cyan("[>] SUB-PROJECT AGENT MODE")
+            lines << @pastel.dim("    #{sub_projects.size} sub-project(s) detected with rules:")
+            sub_projects.each do |sp|
+              first_line = sp[:summary].lines.first&.strip&.delete_prefix("#")&.strip
+              label = @pastel.cyan("    • #{sp[:sub_name]}/")
+              desc = first_line && !first_line.empty? ? @pastel.dim(" — #{first_line}") : ""
+              lines << "#{label}#{desc}"
+            end
+            lines << @pastel.dim("    AI will read each sub-project's full .clackyrules before working in it.")
+            lines << separator("-")
+            lines << ""
+          end
+
           lines.join("\n")
         end
 

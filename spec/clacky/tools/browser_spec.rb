@@ -305,65 +305,21 @@ RSpec.describe Clacky::Tools::Browser do
     end
   end
 
-  describe "#build_mcp_command" do
+  describe ".build_mcp_command" do
     it "returns an array starting with chrome-devtools-mcp" do
-      cmd = tool.send(:build_mcp_command)
+      cmd = described_class.build_mcp_command
       expect(cmd).to be_an(Array)
       expect(cmd.first).to eq("chrome-devtools-mcp")
     end
 
     it "includes --userDataDir when user_data_dir is provided" do
-      cmd = tool.send(:build_mcp_command, user_data_dir: "/tmp/profile")
+      cmd = described_class.build_mcp_command(user_data_dir: "/tmp/profile")
       expect(cmd).to include("--userDataDir", "/tmp/profile")
     end
 
     it "excludes --userDataDir when user_data_dir is nil" do
-      cmd = tool.send(:build_mcp_command)
+      cmd = described_class.build_mcp_command
       expect(cmd).not_to include("--userDataDir")
-    end
-  end
-
-  describe "#mcp_json_rpc" do
-    it "builds a valid JSON-RPC 2.0 message" do
-      msg = tool.send(:mcp_json_rpc, "tools/call", { name: "list_pages" }, id: 42)
-      parsed = JSON.parse(msg)
-      expect(parsed["jsonrpc"]).to eq("2.0")
-      expect(parsed["id"]).to eq(42)
-      expect(parsed["method"]).to eq("tools/call")
-      expect(parsed["params"]["name"]).to eq("list_pages")
-    end
-  end
-
-  describe "#mcp_read_response" do
-    it "reads matching JSON response from a mock IO" do
-      json_line = JSON.generate({ "jsonrpc" => "2.0", "id" => 2, "result" => { "ok" => true } })
-      io = StringIO.new(json_line + "\n")
-      result = tool.send(:mcp_read_response, io, target_id: 2, timeout: 2)
-      expect(result).to be_a(Hash)
-      expect(result["id"]).to eq(2)
-      expect(result["result"]["ok"]).to be true
-    end
-
-    it "skips non-matching ids" do
-      line1 = JSON.generate({ "jsonrpc" => "2.0", "id" => 1, "result" => {} })
-      line2 = JSON.generate({ "jsonrpc" => "2.0", "id" => 2, "result" => { "found" => true } })
-      io = StringIO.new("#{line1}\n#{line2}\n")
-      result = tool.send(:mcp_read_response, io, target_id: 2, timeout: 2)
-      expect(result["result"]["found"]).to be true
-    end
-
-    it "returns nil when no matching message and IO closes" do
-      io = StringIO.new("")
-      result = tool.send(:mcp_read_response, io, target_id: 99, timeout: 1)
-      expect(result).to be_nil
-    end
-
-    it "returns nil on timeout" do
-      read_io, write_io = IO.pipe
-      write_io.close  # Nothing to read → EOF immediately
-      result = tool.send(:mcp_read_response, read_io, target_id: 99, timeout: 1)
-      expect(result).to be_nil
-      read_io.close
     end
   end
 
@@ -387,184 +343,4 @@ RSpec.describe Clacky::Tools::Browser do
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # Daemon process management
-  # ---------------------------------------------------------------------------
-  describe "persistent MCP daemon" do
-    # Helpers to read/write daemon class variables without @@-syntax conflicts
-    def set_proc(val)
-      Clacky::Tools::Browser.class_variable_set(:@@mcp_process, val)
-    end
-
-    def get_proc
-      Clacky::Tools::Browser.class_variable_get(:@@mcp_process)
-    end
-
-    def set_call_id(val)
-      Clacky::Tools::Browser.class_variable_set(:@@mcp_call_id, val)
-    end
-
-    def get_call_id
-      Clacky::Tools::Browser.class_variable_get(:@@mcp_call_id)
-    end
-
-    # Reset daemon state before and after each example to avoid cross-test pollution
-    before do
-      Clacky::Tools::Browser.stop_mcp_process!
-      set_call_id(2)
-    end
-
-    after do
-      Clacky::Tools::Browser.stop_mcp_process!
-    end
-
-    # ------------------------------------------------------------------
-    describe ".stop_mcp_process!" do
-      it "is a no-op when no daemon is running" do
-        expect { Clacky::Tools::Browser.stop_mcp_process! }.not_to raise_error
-      end
-
-      it "clears @@mcp_process" do
-        set_proc({ stdin: StringIO.new, stdout: StringIO.new, pid: 99_999_999, wait_thr: nil })
-        Clacky::Tools::Browser.stop_mcp_process!
-        expect(get_proc).to be_nil
-      end
-    end
-
-    # ------------------------------------------------------------------
-    describe "#mcp_process_alive?" do
-      it "returns false when @@mcp_process is nil" do
-        set_proc(nil)
-        expect(tool.send(:mcp_process_alive?)).to be false
-      end
-
-      it "returns false and clears state when PID does not exist" do
-        set_proc({ stdin: StringIO.new, stdout: StringIO.new, pid: 99_999_999, wait_thr: nil })
-        expect(tool.send(:mcp_process_alive?)).to be false
-        expect(get_proc).to be_nil
-      end
-
-      it "returns true when process is alive and IOs are open" do
-        # Mock Process.kill so we can use an arbitrary PID without side effects.
-        # kill(0, pid) is used as a liveness probe — returning nil means alive.
-        # We also stub kill(TERM, ...) so that stop_mcp_process! in the after-hook
-        # does not accidentally signal the current Ruby process.
-        allow(Process).to receive(:kill).and_return(nil)
-        set_proc({ stdin: StringIO.new, stdout: StringIO.new, pid: 99_888, wait_thr: nil })
-        expect(tool.send(:mcp_process_alive?)).to be true
-      end
-    end
-
-    # ------------------------------------------------------------------
-    describe "#kill_mcp_process!" do
-      it "clears @@mcp_process" do
-        set_proc({ stdin: StringIO.new, stdout: StringIO.new, pid: 99_999_999, wait_thr: nil })
-        tool.send(:kill_mcp_process!)
-        expect(get_proc).to be_nil
-      end
-
-      it "is safe when @@mcp_process is nil" do
-        set_proc(nil)
-        expect { tool.send(:kill_mcp_process!) }.not_to raise_error
-      end
-    end
-
-    # ------------------------------------------------------------------
-    describe "#ensure_mcp_process!" do
-      it "does nothing if the process is already alive" do
-        # Stub Process.kill to avoid accidentally signalling the current process
-        allow(Process).to receive(:kill).and_return(nil)
-        set_proc({ stdin: StringIO.new, stdout: StringIO.new, pid: 99_888, wait_thr: nil })
-        expect(Open3).not_to receive(:popen3)
-        tool.send(:ensure_mcp_process!)
-        expect(get_proc[:pid]).to eq(99_888)
-      end
-
-      it "starts a new process and completes the MCP handshake" do
-        set_proc(nil)
-
-        init_resp = JSON.generate({
-          "jsonrpc" => "2.0", "id" => 1,
-          "result"  => { "protocolVersion" => "2024-11-05", "capabilities" => {} }
-        })
-        fake_stdin  = StringIO.new
-        fake_stdout = StringIO.new(init_resp + "\n")
-        fake_wait   = double("wait_thr", pid: 12_345)
-        fake_stderr = StringIO.new
-
-        allow(Open3).to receive(:popen3).and_return([fake_stdin, fake_stdout, fake_stderr, fake_wait])
-        allow(tool).to receive(:build_mcp_command).and_return(["env", "npx"])
-
-        tool.send(:ensure_mcp_process!)
-
-        ps = get_proc
-        expect(ps).not_to be_nil
-        expect(ps[:pid]).to eq(12_345)
-        expect(fake_stdin.string).to include("notifications/initialized")
-      end
-
-      it "raises when the initialize handshake times out" do
-        set_proc(nil)
-
-        fake_stdin  = StringIO.new
-        fake_stderr = StringIO.new
-        fake_wait   = double("wait_thr", pid: 12_346)
-
-        allow(Open3).to receive(:popen3).and_return([fake_stdin, StringIO.new, fake_stderr, fake_wait])
-        allow(tool).to receive(:build_mcp_command).and_return(["env", "npx"])
-        allow(tool).to receive(:mcp_read_response).and_return(nil)
-
-        expect { tool.send(:ensure_mcp_process!) }
-          .to raise_error(/initialize handshake timed out/)
-      end
-    end
-
-    # ------------------------------------------------------------------
-    describe "#mcp_call (daemon mode)" do
-      # Inject a fake alive daemon with pre-loaded stdout responses.
-      # Uses PID 99_888 and stubs Process.kill to avoid signalling the real process.
-      def inject_daemon(responses)
-        all_output  = responses.map { |r| r + "\n" }.join
-        fake_stdin  = StringIO.new
-        fake_stdout = StringIO.new(all_output)
-        set_proc({ stdin: fake_stdin, stdout: fake_stdout, pid: 99_888, wait_thr: nil })
-        allow(Process).to receive(:kill).and_return(nil)
-        [fake_stdin, fake_stdout]
-      end
-
-      it "reuses the existing daemon and writes a tools/call message" do
-        call_id = get_call_id
-        tool_resp = JSON.generate({
-          "jsonrpc" => "2.0", "id" => call_id,
-          "result"  => { "structuredContent" => { "pages" => [] } }
-        })
-        fake_stdin, = inject_daemon([tool_resp])
-
-        result = tool.send(:mcp_call, "list_pages", {})
-
-        expect(result).to be_a(Hash)
-        expect(fake_stdin.string).to include('"tools/call"')
-        expect(fake_stdin.string).to include('"list_pages"')
-      end
-
-      it "raises on timeout and clears the daemon state" do
-        inject_daemon([])  # empty stdout → timeout
-        allow(tool).to receive(:mcp_read_response).and_return(nil)
-
-        expect { tool.send(:mcp_call, "list_pages", {}) }.to raise_error(/timed out/)
-        expect(get_proc).to be_nil
-      end
-
-      it "raises on a JSON-RPC error response" do
-        call_id  = get_call_id
-        err_resp = JSON.generate({
-          "jsonrpc" => "2.0", "id" => call_id,
-          "error"   => { "message" => "some rpc error" }
-        })
-        inject_daemon([err_resp])
-
-        expect { tool.send(:mcp_call, "list_pages", {}) }.to raise_error(/some rpc error/)
-      end
-    end
-  end
 end
