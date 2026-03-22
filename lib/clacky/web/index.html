@@ -54,16 +54,35 @@
     <div id="sidebar-list">
       <!-- Chat Group -->
       <div id="chat-section">
+        <!-- Header: "Sessions" label + [+ ▾] split button -->
         <div class="sidebar-divider">
-          <span data-i18n="sidebar.chat">Chat</span>
-          <button id="btn-new-session-inline" class="btn-new-inline" title="New Session">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-sm">
-              <path d="M5 12h14"/>
-              <path d="M12 5v14"/>
-            </svg>
-          </button>
+          <span data-i18n="sidebar.chat">Sessions</span>
+          <div class="btn-split-wrap">
+            <button id="btn-new-session-inline" class="btn-split-main" title="New Session" data-i18n="sessions.newSession">+ New Session</button>
+            <button id="btn-new-session-arrow" class="btn-split-arrow" title="Choose agent">▾</button>
+            <!-- Dropdown -->
+            <div id="new-session-dropdown" class="new-session-dropdown" hidden>
+              <div class="dropdown-item" data-profile="general">✦ General</div>
+              <div class="dropdown-item" data-profile="coding">👨‍💻 Coding</div>
+            </div>
+          </div>
         </div>
+
+        <!-- Source tabs: Manual / Scheduled / Channel -->
+        <div id="session-tabs" class="session-tabs">
+          <button class="session-tab active" data-tab="manual"    data-i18n="sessions.tab.manual">Manual</button>
+          <button class="session-tab"        data-tab="cron"      data-i18n="sessions.tab.scheduled">Scheduled</button>
+          <button class="session-tab"        data-tab="channel"   data-i18n="sessions.tab.channel">Channel</button>
+        </div>
+
+        <!-- General sessions list (filtered by active tab) -->
         <div id="session-list"></div>
+
+        <!-- Coding agent fixed section -->
+        <div id="coding-section" style="display:none">
+          <div class="coding-section-divider">👨‍💻 Coding</div>
+          <div id="coding-session-list"></div>
+        </div>
       </div>
       
       <!-- Config Group -->
