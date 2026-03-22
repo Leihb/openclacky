@@ -26,7 +26,7 @@ The script handles everything automatically:
 - For URLs: downloads the zip (follows HTTP redirects)
 - For local paths: reads the file directly (no download needed)
 - Extracts and locates all `SKILL.md` files inside
-- Copies skill directories to `.clacky/skills/` in the current project (overwrites existing)
+- Copies skill directories to `~/.clacky/skills/`
 - Reports installed skills with their descriptions
 
 **Do NOT manually download or unzip — the script handles everything.**
@@ -54,7 +54,6 @@ ruby "$SKILL_DIR/scripts/install_from_zip.rb" \
 
 ## Notes
 
-- Skills install to `.clacky/skills/` in the current project
-- Project-level skills override global skills (`~/.clacky/skills/`)
+- Skills install to `~/.clacky/skills/` by default
 - Local paths may be absolute (`/path/to/skill.zip`) or use `~` (`~/Downloads/skill.zip`)
 - If the user doesn't provide a URL or path, ask them for the zip source

@@ -26,7 +26,7 @@ class ZipSkillInstaller
     # If not provided, we try to infer it from the filename in the URL/path, e.g.
     # "ui-ux-pro-max-1.0.0.zip" → "ui-ux-pro-max".
     @skill_name = skill_name || infer_skill_name(zip_source)
-    @target_dir = target_dir || File.join(Dir.pwd, '.clacky', 'skills')
+    @target_dir = target_dir || File.join(Dir.home, '.clacky', 'skills')
     @installed_skills = []
     @errors = []
   end
