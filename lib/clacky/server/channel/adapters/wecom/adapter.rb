@@ -112,14 +112,8 @@ module Clacky
               filename = raw.dig("file", "name") || raw.dig("file", "filename") || "attachment"
               result   = MediaDownloader.download(url, aeskey)
               filename = result[:filename] || filename
-              file_ref = Clacky::Utils::FileProcessor.process(body: result[:body], filename: filename)
-              files = [{
-                name:         file_ref.name,
-                path:         file_ref.original_path,
-                preview_path: file_ref.preview_path,
-                type:         file_ref.type.to_s,
-                mime_type:    "application/octet-stream"
-              }]
+              saved = Clacky::Utils::FileProcessor.save(body: result[:body], filename: filename)
+              files = [saved]
             end
 
             event = {

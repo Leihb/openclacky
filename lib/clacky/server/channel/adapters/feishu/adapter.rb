@@ -284,21 +284,15 @@ module Clacky
             [file_hashes, errors]
           end
 
-          # Download and process file attachments, returning file hashes for agent.
+          # Download and save file attachments, returning file hashes for agent.
+          # Parsing happens inside agent.run, not here.
           # @param attachments [Array<Hash>] [{key:, name:}]
           # @param message_id [String]
-          # @return [Array<Hash>] file hashes with path/preview_path/name/type/mime_type
+          # @return [Array<Hash>] { name:, path: }
           def process_files(attachments, message_id)
             attachments.filter_map do |attachment|
-              result   = @bot.download_message_resource(message_id, attachment[:key], type: "file")
-              file_ref = Clacky::Utils::FileProcessor.process(body: result[:body], filename: attachment[:name])
-              {
-                name:         file_ref.name,
-                path:         file_ref.original_path,
-                preview_path: file_ref.preview_path,
-                type:         file_ref.type.to_s,
-                mime_type:    "application/octet-stream"
-              }
+              result = @bot.download_message_resource(message_id, attachment[:key], type: "file")
+              Clacky::Utils::FileProcessor.save(body: result[:body], filename: attachment[:name])
             rescue => e
               Clacky::Logger.warn("[feishu] Failed to download file #{attachment[:name]}: #{e.message}")
               nil

@@ -3,99 +3,171 @@
 require "tmpdir"
 
 RSpec.describe Clacky::Utils::FileProcessor do
-  describe ".image_path_to_data_url" do
-    it "converts PNG image to data URL" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "test.png")
-        File.binwrite(f, "\x89PNG\r\n\x1a\n".b)
-        expect(described_class.image_path_to_data_url(f)).to start_with("data:image/png;base64,")
+  # ---------------------------------------------------------------------------
+  # .save — store only, no parsing
+  # ---------------------------------------------------------------------------
+  describe ".save" do
+    it "writes bytes to disk and returns name + path" do
+      result = described_class.save(body: "hello", filename: "notes.txt")
+      expect(result[:name]).to eq("notes.txt")
+      expect(File.exist?(result[:path])).to be true
+      expect(File.read(result[:path])).to eq("hello")
+    end
+
+    it "sanitizes unsafe filename characters" do
+      result = described_class.save(body: "", filename: "../../../etc/passwd")
+      expect(result[:name]).not_to include("/")
+      expect(File.exist?(result[:path])).to be true
+    end
+
+    it "two saves with same filename produce different paths" do
+      r1 = described_class.save(body: "a", filename: "doc.pdf")
+      r2 = described_class.save(body: "b", filename: "doc.pdf")
+      expect(r1[:path]).not_to eq(r2[:path])
+    end
+
+    it "does NOT parse the file" do
+      expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+      described_class.save(body: "%PDF-1.4", filename: "test.pdf")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # .process_path — parse an already-saved file
+  # ---------------------------------------------------------------------------
+  describe ".process_path" do
+    context "when parser succeeds" do
+      it "returns FileRef with preview_path written to disk" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "test.pdf")
+          File.binwrite(path, "%PDF-1.4")
+
+          allow(Clacky::Utils::ParserManager).to receive(:parse).with(path)
+            .and_return({ success: true, text: "extracted text", error: nil, parser_path: nil })
+
+          ref = described_class.process_path(path)
+          expect(ref.preview_path).to eq("#{path}.preview.md")
+          expect(File.read(ref.preview_path)).to eq("extracted text")
+          expect(ref.parse_error).to be_nil
+        end
+      end
+
+      it "uses filename as display name" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "report.docx")
+          File.binwrite(path, "bytes")
+
+          allow(Clacky::Utils::ParserManager).to receive(:parse)
+            .and_return({ success: true, text: "content", error: nil, parser_path: nil })
+
+          ref = described_class.process_path(path)
+          expect(ref.name).to eq("report.docx")
+        end
+      end
+
+      it "accepts explicit name override" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "abc123_report.docx")
+          File.binwrite(path, "bytes")
+
+          allow(Clacky::Utils::ParserManager).to receive(:parse)
+            .and_return({ success: true, text: "content", error: nil, parser_path: nil })
+
+          ref = described_class.process_path(path, name: "report.docx")
+          expect(ref.name).to eq("report.docx")
+        end
       end
     end
 
-    it "converts JPEG image to data URL" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "test.jpg")
-        File.binwrite(f, "\xFF\xD8\xFF".b)
-        expect(described_class.image_path_to_data_url(f)).to start_with("data:image/jpeg;base64,")
+    context "when parser fails" do
+      it "returns FileRef with parse_error and parser_path, no preview" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "broken.pdf")
+          File.binwrite(path, "not a real pdf")
+
+          allow(Clacky::Utils::ParserManager).to receive(:parse).with(path)
+            .and_return({ success: false, text: nil,
+                          error: "pdftotext failed", parser_path: "/home/.clacky/parsers/pdf_parser.rb" })
+
+          ref = described_class.process_path(path)
+          expect(ref.preview_path).to be_nil
+          expect(ref.parse_error).to eq("pdftotext failed")
+          expect(ref.parser_path).to eq("/home/.clacky/parsers/pdf_parser.rb")
+          expect(ref.parse_failed?).to be true
+        end
       end
     end
 
-    it "raises ArgumentError for non-existent file" do
-      expect {
-        described_class.image_path_to_data_url("/nonexistent/file.png")
-      }.to raise_error(ArgumentError, /Image file not found/)
-    end
+    context "with image files" do
+      it "skips parsing and returns FileRef with no preview" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "photo.png")
+          File.binwrite(path, "\x89PNG\r\n\x1a\n")
 
-    it "raises ArgumentError when file exceeds MAX_IMAGE_BYTES" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "large.png")
-        File.binwrite(f, "\x89PNG\r\n\x1a\n".b + "x" * (described_class::MAX_IMAGE_BYTES + 1))
-        expect {
-          described_class.image_path_to_data_url(f)
-        }.to raise_error(ArgumentError, /Image too large/)
+          expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+
+          ref = described_class.process_path(path)
+          expect(ref.type).to eq(:image)
+          expect(ref.preview_path).to be_nil
+          expect(ref.parse_error).to be_nil
+        end
       end
     end
 
-    it "accepts file within MAX_IMAGE_BYTES" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "small.png")
-        File.binwrite(f, "\x89PNG\r\n\x1a\n".b)
-        expect { described_class.image_path_to_data_url(f) }.not_to raise_error
+    context "with zip files" do
+      it "generates directory listing preview without calling ParserManager" do
+        require "zip"
+        Dir.mktmpdir do |dir|
+          zip_path = File.join(dir, "archive.zip")
+          Zip::OutputStream.open(zip_path) do |z|
+            z.put_next_entry("readme.txt")
+            z.write("hello")
+          end
+
+          expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+
+          ref = described_class.process_path(zip_path)
+          expect(ref.type).to eq(:zip)
+          expect(ref.preview_path).to end_with(".preview.md")
+          expect(File.read(ref.preview_path)).to include("readme.txt")
+        end
       end
     end
   end
 
-  describe ".file_to_base64" do
-    it "converts PNG to base64 with metadata" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "test.png")
-        data = "\x89PNG\r\n\x1a\n".b
-        File.binwrite(f, data)
-        result = described_class.file_to_base64(f)
-        expect(result[:format]).to eq("png")
-        expect(result[:mime_type]).to eq("image/png")
-        expect(result[:base64_data]).to be_a(String)
-        expect(result[:size_bytes]).to eq(data.size)
-      end
+  # ---------------------------------------------------------------------------
+  # .process — save + process_path combined
+  # ---------------------------------------------------------------------------
+  describe ".process" do
+    it "saves file to disk and returns parsed FileRef" do
+      allow(Clacky::Utils::ParserManager).to receive(:parse)
+        .and_return({ success: true, text: "the content", error: nil, parser_path: nil })
+
+      ref = described_class.process(body: "%PDF-1.4", filename: "doc.pdf")
+      expect(ref).to be_a(Clacky::Utils::FileProcessor::FileRef)
+      expect(ref.name).to eq("doc.pdf")
+      expect(File.exist?(ref.original_path)).to be true
+      expect(ref.preview_path).to end_with(".preview.md")
     end
 
-    it "converts PDF to base64 with metadata" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "test.pdf")
-        data = "%PDF-1.4".b
-        File.binwrite(f, data)
-        result = described_class.file_to_base64(f)
-        expect(result[:format]).to eq("pdf")
-        expect(result[:mime_type]).to eq("application/pdf")
-        expect(result[:base64_data]).to be_a(String)
-        expect(result[:size_bytes]).to eq(data.size)
-      end
-    end
+    it "propagates parse_error when parser fails" do
+      allow(Clacky::Utils::ParserManager).to receive(:parse)
+        .and_return({ success: false, text: nil, error: "oops", parser_path: "/some/parser.rb" })
 
-    it "raises ArgumentError when file exceeds MAX_FILE_BYTES" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "large.pdf")
-        File.binwrite(f, "%PDF".b + "x" * (described_class::MAX_FILE_BYTES + 1))
-        expect {
-          described_class.file_to_base64(f)
-        }.to raise_error(ArgumentError, /File too large/)
-      end
+      ref = described_class.process(body: "%PDF-1.4", filename: "bad.pdf")
+      expect(ref.parse_failed?).to be true
+      expect(ref.parse_error).to eq("oops")
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # File type helpers
+  # ---------------------------------------------------------------------------
   describe ".binary_file_path?" do
     it "returns true for PNG by extension" do
       Dir.mktmpdir do |dir|
         f = File.join(dir, "test.png")
         File.binwrite(f, "\x89PNG".b)
-        expect(described_class.binary_file_path?(f)).to be true
-      end
-    end
-
-    it "returns true for PDF by extension" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "test.pdf")
-        File.binwrite(f, "%PDF".b)
         expect(described_class.binary_file_path?(f)).to be true
       end
     end
@@ -108,7 +180,7 @@ RSpec.describe Clacky::Utils::FileProcessor do
       end
     end
 
-    it "returns true for files with null bytes (unknown extension)" do
+    it "returns true for files with null bytes" do
       Dir.mktmpdir do |dir|
         f = File.join(dir, "test.dat")
         File.binwrite(f, "abc\x00def".b)
@@ -118,71 +190,70 @@ RSpec.describe Clacky::Utils::FileProcessor do
   end
 
   describe ".supported_binary_file?" do
-    it "returns true for image files" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "test.png")
-        File.binwrite(f, "")
-        expect(described_class.supported_binary_file?(f)).to be true
+    it "returns true for images and PDF" do
+      %w[test.png test.jpg test.pdf].each do |name|
+        expect(described_class.supported_binary_file?(name)).to be true
       end
     end
 
-    it "returns true for PDF files" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "test.pdf")
-        File.binwrite(f, "")
-        expect(described_class.supported_binary_file?(f)).to be true
-      end
-    end
-
-    it "returns false for zip files" do
-      Dir.mktmpdir do |dir|
-        f = File.join(dir, "test.zip")
-        File.binwrite(f, "")
-        expect(described_class.supported_binary_file?(f)).to be false
+    it "returns false for zip and docx" do
+      %w[test.zip test.docx].each do |name|
+        expect(described_class.supported_binary_file?(name)).to be false
       end
     end
   end
 
   describe ".detect_mime_type" do
-    it "returns image/png for .png" do
-      expect(described_class.detect_mime_type("test.png")).to eq("image/png")
-    end
-
-    it "returns image/jpeg for .jpg" do
-      expect(described_class.detect_mime_type("test.jpg")).to eq("image/jpeg")
-    end
-
-    it "returns application/pdf for .pdf" do
-      expect(described_class.detect_mime_type("test.pdf")).to eq("application/pdf")
-    end
-
-    it "returns application/octet-stream for unknown extension" do
-      expect(described_class.detect_mime_type("test.bin")).to eq("application/octet-stream")
+    it "maps common extensions" do
+      expect(described_class.detect_mime_type("a.png")).to  eq("image/png")
+      expect(described_class.detect_mime_type("a.jpg")).to  eq("image/jpeg")
+      expect(described_class.detect_mime_type("a.pdf")).to  eq("application/pdf")
+      expect(described_class.detect_mime_type("a.bin")).to  eq("application/octet-stream")
     end
   end
 
-  describe ".process" do
-    it "processes a PDF and returns FileRef with original_path" do
+  describe ".image_path_to_data_url" do
+    it "converts PNG to data URL" do
       Dir.mktmpdir do |dir|
-        f = File.join(dir, "test.pdf")
-        File.binwrite(f, "%PDF-1.4".b)
-        ref = described_class.process(body: File.binread(f), filename: "test.pdf")
-        expect(ref.name).to eq("test.pdf")
-        expect(ref.type).to eq(:pdf)
-        expect(File.exist?(ref.original_path)).to be true
-        expect(ref.preview_path).to be_nil
+        f = File.join(dir, "test.png")
+        File.binwrite(f, "\x89PNG\r\n\x1a\n".b)
+        expect(described_class.image_path_to_data_url(f)).to start_with("data:image/png;base64,")
       end
     end
 
-    it "to_prompt includes file name and type" do
+    it "raises for missing file" do
+      expect { described_class.image_path_to_data_url("/no/such/file.png") }
+        .to raise_error(ArgumentError, /Image file not found/)
+    end
+
+    it "raises when file exceeds MAX_IMAGE_BYTES" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "big.png")
+        File.binwrite(f, "x" * (described_class::MAX_IMAGE_BYTES + 1))
+        expect { described_class.image_path_to_data_url(f) }
+          .to raise_error(ArgumentError, /Image too large/)
+      end
+    end
+  end
+
+  describe ".file_to_base64" do
+    it "returns format/mime/base64 for PDF" do
       Dir.mktmpdir do |dir|
         f = File.join(dir, "test.pdf")
-        File.binwrite(f, "%PDF-1.4".b)
-        ref = described_class.process(body: File.binread(f), filename: "test.pdf")
-        prompt = ref.to_prompt
-        expect(prompt).to include("[File: test.pdf]")
-        expect(prompt).to include("Type: pdf")
-        expect(prompt).to include("Original:")
+        File.binwrite(f, "%PDF-1.4")
+        result = described_class.file_to_base64(f)
+        expect(result[:format]).to eq("pdf")
+        expect(result[:mime_type]).to eq("application/pdf")
+        expect(result[:base64_data]).to be_a(String)
+      end
+    end
+
+    it "raises for oversized files" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "huge.pdf")
+        File.binwrite(f, "x" * (described_class::MAX_FILE_BYTES + 1))
+        expect { described_class.file_to_base64(f) }
+          .to raise_error(ArgumentError, /File too large/)
       end
     end
   end

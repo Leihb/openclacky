@@ -149,9 +149,6 @@ module Clacky
         # Version cache: { latest: "x.y.z", checked_at: Time }
         @version_cache   = nil
         @version_mutex   = Mutex.new
-        # Version cache: { latest: "x.y.z", checked_at: Time }
-        @version_cache   = nil
-        @version_mutex   = Mutex.new
         @scheduler       = Scheduler.new(
           session_registry: @registry,
           session_builder:  method(:build_session)
@@ -840,18 +837,12 @@ module Clacky
           return
         end
 
-        ref = Clacky::Utils::FileProcessor.process(
+        saved = Clacky::Utils::FileProcessor.save(
           body:     upload[:data],
           filename: upload[:filename].to_s
         )
 
-        json_response(res, 200, {
-          ok:           true,
-          name:         ref.name,
-          type:         ref.type.to_s,
-          path:         ref.original_path,
-          preview_path: ref.preview_path
-        })
+        json_response(res, 200, { ok: true, name: saved[:name], path: saved[:path] })
       rescue => e
         json_response(res, 500, { ok: false, error: e.message })
       end

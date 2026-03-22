@@ -93,6 +93,9 @@ module Clacky
 
       # Register built-in tools
       register_builtin_tools
+
+      # Ensure user-space parsers are in place (~/.clacky/parsers/)
+      Utils::ParserManager.setup!
     end
 
     # Restore from a saved session
@@ -188,6 +191,17 @@ module Clacky
       # Format user message — text + inline vision images
       user_content = format_user_content(user_input, vision_images.map { |v| v[:url] })
 
+      # Parse disk files — agent's responsibility, not the upload layer.
+      # process_path runs the parser script and returns a FileRef with preview_path or parse_error.
+      all_disk_files = all_disk_files.map do |f|
+        path = f[:path] || f["path"]
+        name = f[:name] || f["name"]
+        next f unless path && File.exist?(path.to_s)
+        ref = Utils::FileProcessor.process_path(path, name: name)
+        { name: ref.name, type: ref.type.to_s, path: ref.original_path,
+          preview_path: ref.preview_path, parse_error: ref.parse_error, parser_path: ref.parser_path }
+      end
+
       # Build display_files for replay: lightweight metadata so the UI can reconstruct
       # file badges (PDF, doc, etc.) on page refresh. Images are NOT stored here — they
       # are recovered from the image_url blocks in user_content by extract_image_files_from_content.
@@ -218,6 +232,8 @@ module Clacky
           path         = f[:path]         || f["path"]
           preview_path = f[:preview_path] || f["preview_path"]
           size_bytes   = f[:size_bytes]   || f["size_bytes"]
+          parse_error  = f[:parse_error]  || f["parse_error"]
+          parser_path  = f[:parser_path]  || f["parser_path"]
 
           next unless name
 
@@ -225,6 +241,18 @@ module Clacky
           lines << "Size: #{format_size(size_bytes)}" if size_bytes
           lines << "Original: #{path}" if path
           lines << "Preview (Markdown): #{preview_path}" if preview_path
+
+          # Parser failed — instruct LLM to fix and re-run
+          if preview_path.nil? && parse_error
+            lines << "Parse failed: #{parse_error}"
+            if parser_path
+              expected_preview = "#{path}.preview.md"
+              lines << "Action required: fix the parser at #{parser_path}, then run:"
+              lines << "  ruby #{parser_path} #{path} > #{expected_preview}"
+              lines << "Once done, read #{expected_preview} to continue helping the user."
+            end
+          end
+
           lines.join("\n")
         end.join("\n\n")
 
