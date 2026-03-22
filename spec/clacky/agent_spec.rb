@@ -13,7 +13,7 @@ RSpec.describe Clacky::Agent do
       permission_mode: :auto_approve
     )
   end
-  let(:agent) { described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
+  let(:agent) { described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id, source: :manual) }
 
   describe "#initialize" do
     it "sets initial state" do
@@ -385,7 +385,7 @@ RSpec.describe Clacky::Agent do
         keep_recent_messages: 5
       )
     end
-    let(:compression_agent) { described_class.new(client, compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
+    let(:compression_agent) { described_class.new(client, compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id, source: :manual) }
 
     before do
       # Mock send_messages for LLM compression
@@ -457,7 +457,7 @@ RSpec.describe Clacky::Agent do
         enable_compression: false,
         keep_recent_messages: 5
       )
-      no_compression_agent = described_class.new(client, no_compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id)
+      no_compression_agent = described_class.new(client, no_compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id, source: :manual)
 
       # Add many messages (enough to normally trigger compression)
       100.times do |i|
@@ -718,7 +718,7 @@ RSpec.describe Clacky::Agent do
         hook_data = nil
         
         # Create a new agent to add the hook
-        agent_with_hook = described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id)
+        agent_with_hook = described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id, source: :manual)
         agent_with_hook.add_hook(:session_rollback) do |data|
           hook_data = data
         end
@@ -925,7 +925,8 @@ RSpec.describe Clacky::Agent do
         working_dir: tmpdir,
         ui: nil,
         profile: "general",
-        session_id: Clacky::SessionManager.generate_id
+        session_id: Clacky::SessionManager.generate_id,
+        source: :manual
       )
     end
 
@@ -1225,7 +1226,8 @@ RSpec.describe Clacky::Agent do
           brand_agent = described_class.new(
             client, config,
             working_dir: tmp, ui: nil, profile: "general",
-            session_id: Clacky::SessionManager.generate_id
+            session_id: Clacky::SessionManager.generate_id,
+            source: :manual
           )
           skill = brand_agent.instance_variable_get(:@skill_loader).find_by_name(name)
           yield brand_agent, skill, tmp
@@ -1462,7 +1464,8 @@ RSpec.describe Clacky::Agent do
             plain_agent = described_class.new(
               client, config,
               working_dir: tmp, ui: nil, profile: "general",
-              session_id: Clacky::SessionManager.generate_id
+              session_id: Clacky::SessionManager.generate_id,
+              source: :manual
             )
             allow(client).to receive(:send_messages_with_tools)
               .and_return(mock_api_response(content: "Done."))

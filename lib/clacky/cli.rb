@@ -379,8 +379,13 @@ module Clacky
           return nil
         end
 
+        # Prefer the agent_profile stored in the session; only fall back to the
+        # CLI --agent flag when the session predates the agent_profile field.
+        restored_profile = session_data[:agent_profile].to_s
+        resolved_profile = restored_profile.empty? ? profile : restored_profile
+
         # Don't print message here - will be shown by UI after banner
-        Clacky::Agent.from_session(client, agent_config, session_data, profile: profile)
+        Clacky::Agent.from_session(client, agent_config, session_data, profile: resolved_profile)
       end
 
       def load_session_by_number(client, agent_config, session_manager, working_dir, identifier, profile:)
@@ -426,8 +431,13 @@ module Clacky
           end
         end
 
+        # Prefer the agent_profile stored in the session; fall back to CLI --agent flag
+        # for sessions that predate the agent_profile field.
+        restored_profile = session_data[:agent_profile].to_s
+        resolved_profile = restored_profile.empty? ? profile : restored_profile
+
         # Don't print message here - will be shown by UI after banner
-        Clacky::Agent.from_session(client, agent_config, session_data, profile: profile)
+        Clacky::Agent.from_session(client, agent_config, session_data, profile: resolved_profile)
       end
 
       # Handle agent error/interrupt with cleanup

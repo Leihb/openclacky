@@ -31,9 +31,9 @@ module Clacky
 
       @last_saved_path = filepath
 
-      # Keep only the most recent 10 sessions (best-effort, never block save)
+      # Keep only the most recent 200 sessions (best-effort, never block save)
       begin
-        cleanup_by_count(keep: 10)
+        cleanup_by_count(keep: 200)
       rescue Exception # rubocop:disable Lint/RescueException
         # Cleanup is non-critical; swallow all errors (including AgentInterrupted)
         # so that the session file is always saved successfully
@@ -45,6 +45,19 @@ module Clacky
     # Get the path of the last saved session
     def last_saved_path
       @last_saved_path
+    end
+
+    # Delete a session by ID (physical delete — removes disk file + chunks).
+    # Returns true if a file was found and deleted, false if not found.
+    def delete(session_id)
+      sessions = all_sessions
+      session  = sessions.find { |s| s[:session_id].to_s.start_with?(session_id.to_s) }
+      return false unless session
+
+      filename = generate_filename(session[:session_id], session[:created_at])
+      filepath = File.join(@sessions_dir, filename)
+      delete_session_with_chunks(filepath)
+      true
     end
 
     # Load a specific session by ID
@@ -84,8 +97,10 @@ module Clacky
       end
     end
 
-    # Delete old sessions (older than days)
-    def cleanup(days: 30)
+    # Delete sessions not accessed within the given number of days.
+    # Defaults to 90 days — sessions older than this are considered stale.
+    # Returns the number of sessions deleted.
+    def cleanup(days: 90)
       cutoff_time = Time.now - (days * 24 * 60 * 60)
       deleted_count = 0
 

@@ -292,7 +292,7 @@ module Clacky
         platform = event[:platform].to_s
         count    = @mutex.synchronize { @session_counters[platform] += 1 }
         name     = "#{platform}-#{count}"
-        session_id = @session_builder.call(name: name, working_dir: Dir.home)
+        session_id = @session_builder.call(name: name, working_dir: Dir.home, source: :channel)
         bind_key_to_session(key, session_id)
 
         # Create a long-lived ChannelUIController for this session and subscribe it

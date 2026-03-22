@@ -16,7 +16,7 @@ RSpec.describe "Time Machine Tools" do
     )
   end
 
-  let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
+  let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id, source: :manual) }
 
   describe Clacky::Tools::UndoTask do
     let(:tool) { described_class.new }

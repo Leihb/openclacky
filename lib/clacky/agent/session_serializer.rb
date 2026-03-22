@@ -17,6 +17,8 @@ module Clacky
         @working_dir = session_data[:working_dir]
         @created_at = session_data[:created_at]
         @total_tasks = session_data.dig(:stats, :total_tasks) || 0
+        # Restore source; fall back to :manual for sessions saved before this field existed
+        @source = (session_data[:source] || "manual").to_sym
 
         # Restore cache statistics if available
         @cache_stats = session_data.dig(:stats, :cache_stats) || {
@@ -83,6 +85,8 @@ module Clacky
           created_at: @created_at,
           updated_at: Time.now.iso8601,
           working_dir: @working_dir,
+          source: @source.to_s,                      # "manual" | "cron" | "channel"
+          agent_profile: @agent_profile&.name || "", # "general" | "coding" | custom
           todos: @todos,  # Include todos in session data
           time_machine: {  # Include Time Machine state
             task_parents: @task_parents || {},

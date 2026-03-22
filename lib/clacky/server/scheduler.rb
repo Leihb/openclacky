@@ -168,7 +168,7 @@ module Clacky
         FileUtils.mkdir_p(working_dir)
 
         # Scheduled tasks run unattended — use auto_approve so request_user_feedback doesn't block.
-        session_id = @session_builder.call(name: name, working_dir: working_dir, permission_mode: :auto_approve)
+        session_id = @session_builder.call(name: name, working_dir: working_dir, permission_mode: :auto_approve, source: :cron)
 
         Clacky::Logger.info("scheduler_task_fired", task: task_name, session: session_id)
 

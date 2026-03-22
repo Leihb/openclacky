@@ -15,7 +15,8 @@ RSpec.describe "Agent file processing" do
     Clacky::Agent.new(client, config,
       working_dir: Dir.pwd, ui: nil,
       profile: "coding",
-      session_id: Clacky::SessionManager.generate_id)
+      session_id: Clacky::SessionManager.generate_id,
+      source: :manual)
   end
 
   # Stub the LLM so agent.run returns after one iteration

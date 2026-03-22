@@ -12,7 +12,8 @@ RSpec.describe "Agent#inject_session_context_if_needed" do
 
   def build_agent(tmpdir)
     agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil,
-                              profile: "general", session_id: Clacky::SessionManager.generate_id)
+                              profile: "general", session_id: Clacky::SessionManager.generate_id,
+                              source: :manual)
     allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
     allow(agent).to receive(:inject_memory_prompt!).and_return(false)
     agent

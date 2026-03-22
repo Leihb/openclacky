@@ -25,7 +25,8 @@ RSpec.describe Clacky::Tools::InvokeSkill do
     config = Clacky::AgentConfig.new(model: "gpt-3.5-turbo", permission_mode: :auto_approve)
     agent  = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil,
                                profile: "general",
-                               session_id: Clacky::SessionManager.generate_id)
+                               session_id: Clacky::SessionManager.generate_id,
+                               source: :manual)
     allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
     allow(agent).to receive(:inject_memory_prompt!).and_return(false)
     agent
