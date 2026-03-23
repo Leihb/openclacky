@@ -73,7 +73,7 @@ Ask:
 
 Run the setup script (full path is available in the supporting files list above):
 ```bash
-ruby "$SKILL_DIR/feishu_setup.rb"
+ruby "SKILL_DIR/feishu_setup.rb"
 ```
 
 **If exit code is 0:**
@@ -193,7 +193,7 @@ Weixin uses a QR code login — no app_id/app_secret needed. The token from the 
 Run the script in `--fetch-qr` mode to get the QR URL without blocking:
 
 ```bash
-QR_JSON=$(ruby "$SKILL_DIR/weixin_setup.rb" --fetch-qr 2>/dev/null)
+QR_JSON=$(ruby "SKILL_DIR/weixin_setup.rb" --fetch-qr 2>/dev/null)
 echo "$QR_JSON"
 ```
 
@@ -220,7 +220,7 @@ Do NOT open the raw `qrcode_url` directly — that page shows "请使用微信�
 Once the browser shows the QR page, immediately run the polling script in the background:
 
 ```bash
-ruby "$SKILL_DIR/weixin_setup.rb" --qrcode-id "$QRCODE_ID"
+ruby "SKILL_DIR/weixin_setup.rb" --qrcode-id "$QRCODE_ID"
 ```
 
 Where `$QRCODE_ID` is the `qrcode_id` from Step 2's JSON output.

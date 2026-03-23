@@ -117,62 +117,6 @@ RSpec.describe Clacky::Skill do
   end
 
   describe "#process_content" do
-    it "replaces $ARGUMENTS placeholder with arguments" do
-      skill_dir = File.join(temp_dir, "arg-skill")
-      FileUtils.mkdir_p(skill_dir)
-      arg_content = <<~CONTENT
-        ---
-        name: arg-skill
-        description: Skill with arguments
-        ---
-        Please process: $ARGUMENTS
-        End of skill.
-      CONTENT
-      File.write(File.join(skill_dir, "SKILL.md"), arg_content)
-
-      skill = described_class.new(skill_dir)
-      result = skill.process_content("hello world")
-
-      expect(result).to include("Please process: hello world")
-      expect(result).to include("End of skill.")
-    end
-
-    it "replaces $N shorthand with individual arguments" do
-      skill_dir = File.join(temp_dir, "n-skill")
-      FileUtils.mkdir_p(skill_dir)
-      n_content = <<~CONTENT
-        ---
-        name: n-skill
-        description: Skill with $N placeholders
-        ---
-        First: $0, Second: $1
-      CONTENT
-      File.write(File.join(skill_dir, "SKILL.md"), n_content)
-
-      skill = described_class.new(skill_dir)
-      result = skill.process_content("one two three")
-
-      expect(result).to include("First: one, Second: two")
-    end
-
-    it "handles no arguments gracefully" do
-      skill_dir = File.join(temp_dir, "noarg-skill")
-      FileUtils.mkdir_p(skill_dir)
-      noarg_content = <<~CONTENT
-        ---
-        name: noarg-skill
-        description: Skill without args
-        ---
-        No arguments here: $0
-      CONTENT
-      File.write(File.join(skill_dir, "SKILL.md"), noarg_content)
-
-      skill = described_class.new(skill_dir)
-      result = skill.process_content("")
-
-      expect(result).to include("No arguments here: ")
-    end
-
     it "expands <%= key %> templates via ERB with string values" do
       skill_dir = File.join(temp_dir, "erb-skill")
       FileUtils.mkdir_p(skill_dir)
@@ -187,7 +131,7 @@ RSpec.describe Clacky::Skill do
       CONTENT
 
       skill = described_class.new(skill_dir)
-      result = skill.process_content("", template_context: { "memories_meta" => "- topic: foo" })
+      result = skill.process_content(template_context: { "memories_meta" => "- topic: foo" })
 
       expect(result).to include("- topic: foo")
       expect(result).to include("End.")
@@ -206,7 +150,7 @@ RSpec.describe Clacky::Skill do
 
       call_count = 0
       skill = described_class.new(skill_dir)
-      result = skill.process_content("", template_context: {
+      result = skill.process_content(template_context: {
         "computed" => -> { call_count += 1; "lazy_result" }
       })
 
@@ -227,10 +171,199 @@ RSpec.describe Clacky::Skill do
 
       skill = described_class.new(skill_dir)
       # ERB will raise NameError for unknown variable; expand_templates rescues and returns content as-is
-      result = skill.process_content("", template_context: {})
+      result = skill.process_content(template_context: {})
 
       # Should not crash; content returned in some form
       expect(result).to be_a(String)
+    end
+
+    context "Supporting Files injection (plain skill)" do
+      def make_skill_with_scripts(base_dir, name: "script-skill")
+        dir = File.join(base_dir, name)
+        FileUtils.mkdir_p(File.join(dir, "scripts"))
+        File.write(File.join(dir, "SKILL.md"), <<~MD)
+          ---
+          name: #{name}
+          description: Skill with supporting scripts
+          ---
+          Do the thing.
+        MD
+        File.write(File.join(dir, "scripts", "run.rb"), "puts 'hello'")
+        File.write(File.join(dir, "scripts", "helper.rb"), "def help; end")
+        dir
+      end
+
+      it "appends Supporting Files block with directory path and relative filenames" do
+        dir = make_skill_with_scripts(temp_dir)
+        skill = described_class.new(dir)
+
+        result = skill.process_content
+
+        expect(result).to include("## Supporting Files")
+        expect(result).to include("`#{dir}`")
+        # supporting_files is recursive — individual files, not directories
+        expect(result).to include("- `scripts/helper.rb`")
+        expect(result).to include("- `scripts/run.rb`")
+      end
+
+      it "excludes .git and other ignored directories from Supporting Files" do
+        dir = make_skill_with_scripts(temp_dir)
+        skill = described_class.new(dir)
+
+        # Simulate user accidentally placing .git, node_modules, tmp inside skill dir
+        FileUtils.mkdir_p(File.join(dir, ".git", "objects"))
+        File.write(File.join(dir, ".git", "HEAD"), "ref: refs/heads/main")
+        FileUtils.mkdir_p(File.join(dir, "node_modules", "lodash"))
+        File.write(File.join(dir, "node_modules", "lodash", "index.js"), "module.exports = {}")
+        FileUtils.mkdir_p(File.join(dir, "tmp"))
+        File.write(File.join(dir, "tmp", "cache.bin"), "junk")
+
+        result = skill.process_content
+
+        expect(result).to include("- `scripts/run.rb`")
+        expect(result).not_to include(".git")
+        expect(result).not_to include("node_modules")
+        expect(result).not_to include("tmp/cache.bin")
+      end
+
+      it "does NOT append Supporting Files block when no supporting files exist" do
+        dir = File.join(temp_dir, "bare-skill")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "SKILL.md"), <<~MD)
+          ---
+          name: bare-skill
+          description: No scripts
+          ---
+          Just content.
+        MD
+        skill = described_class.new(dir)
+
+        result = skill.process_content
+
+        expect(result).not_to include("## Supporting Files")
+      end
+
+      it "uses script_dir path in Supporting Files block when script_dir is given" do
+        dir = make_skill_with_scripts(temp_dir)
+        skill = described_class.new(dir)
+
+        Dir.mktmpdir("clacky-test-") do |tmpdir|
+          # Simulate what SkillManager does: copy decrypted scripts to tmpdir
+          FileUtils.mkdir_p(File.join(tmpdir, "scripts"))
+          File.write(File.join(tmpdir, "scripts", "run.rb"), "puts 'decrypted'")
+
+          result = skill.process_content(script_dir: tmpdir)
+
+          # Directory label must be the tmpdir, not the original skill dir
+          expect(result).to include("`#{tmpdir}`")
+          expect(result).not_to include("`#{dir}`")
+          # Filenames are relative to tmpdir
+          expect(result).to include("- `scripts/run.rb`")
+        end
+      end
+
+      it "falls back to supporting_files listing when script_dir does not exist" do
+        dir = make_skill_with_scripts(temp_dir)
+        skill = described_class.new(dir)
+
+        # script_dir is set but doesn't exist — effective_dir still uses script_dir
+        # but effective_files falls back to supporting_files (recursive)
+        result = skill.process_content(script_dir: "/nonexistent/path")
+
+        expect(result).to include("## Supporting Files")
+        expect(result).to include("`/nonexistent/path`")
+        expect(result).to include("- `scripts/run.rb`")
+        expect(result).to include("- `scripts/helper.rb`")
+      end
+    end
+
+    context "Supporting Files injection (encrypted brand skill)" do
+      def activated_brand_config
+        Clacky::BrandConfig.new(
+          "brand_name"           => "TestBrand",
+          "license_key"          => "0000002A-00000007-DEADBEEF-CAFEBABE-A1B2C3D4",
+          "license_activated_at" => Time.now.utc.iso8601,
+          "license_expires_at"   => (Time.now.utc + 86_400).iso8601,
+          "device_id"            => "testdevice"
+        )
+      end
+
+      def make_encrypted_skill_dir(base_dir, slug: "enc-skill")
+        dir = File.join(base_dir, slug)
+        FileUtils.mkdir_p(dir)
+        # SKILL.md.enc — "decrypted" by mock brand_config (just reads file as-is)
+        File.binwrite(File.join(dir, "SKILL.md.enc"), <<~CONTENT)
+          ---
+          name: #{slug}
+          description: Encrypted skill
+          ---
+          Secret instructions.
+        CONTENT
+        # Encrypted supporting scripts
+        FileUtils.mkdir_p(File.join(dir, "scripts"))
+        File.binwrite(File.join(dir, "scripts", "analyze.rb.enc"), "encrypted bytes")
+        dir
+      end
+
+      it "has_supporting_files? returns true when .enc scripts exist" do
+        dir = make_encrypted_skill_dir(temp_dir)
+        config = activated_brand_config
+        skill = Clacky::Skill.new(dir, brand_skill: true, brand_config: config)
+
+        expect(skill.has_supporting_files?).to be true
+      end
+
+      it "has_supporting_files? returns false when only SKILL.md.enc exists" do
+        dir = File.join(temp_dir, "enc-only")
+        FileUtils.mkdir_p(dir)
+        File.binwrite(File.join(dir, "SKILL.md.enc"), "---\nname: enc-only\ndescription: x\n---\ncontent")
+        config = activated_brand_config
+        skill = Clacky::Skill.new(dir, brand_skill: true, brand_config: config)
+
+        expect(skill.has_supporting_files?).to be false
+      end
+
+      it "supporting_files returns [] for encrypted skills (never leak .enc paths)" do
+        dir = make_encrypted_skill_dir(temp_dir)
+        config = activated_brand_config
+        skill = Clacky::Skill.new(dir, brand_skill: true, brand_config: config)
+
+        expect(skill.supporting_files).to eq([])
+      end
+
+      it "process_content with script_dir shows tmpdir paths, not encrypted dir" do
+        dir = make_encrypted_skill_dir(temp_dir)
+        config = activated_brand_config
+        skill = Clacky::Skill.new(dir, brand_skill: true, brand_config: config)
+
+        Dir.mktmpdir("clacky-enc-test-") do |tmpdir|
+          # Simulate SkillManager: decrypt scripts into tmpdir
+          FileUtils.mkdir_p(File.join(tmpdir, "scripts"))
+          File.write(File.join(tmpdir, "scripts", "analyze.rb"), "puts 'decrypted analyze'")
+
+          result = skill.process_content(script_dir: tmpdir)
+
+          expect(result).to include("## Supporting Files")
+          expect(result).to include("`#{tmpdir}`")
+          # Must NOT expose the original encrypted directory
+          expect(result).not_to include(dir)
+          expect(result).to include("- `scripts/analyze.rb`")
+        end
+      end
+
+      it "process_content without script_dir does NOT append Supporting Files block" do
+        dir = make_encrypted_skill_dir(temp_dir)
+        config = activated_brand_config
+        skill = Clacky::Skill.new(dir, brand_skill: true, brand_config: config)
+
+        # No script_dir → script_dir is nil → effective_files falls back to
+        # supporting_files which returns [] for encrypted skills
+        result = skill.process_content
+
+        expect(result).not_to include("## Supporting Files")
+        # Encrypted dir path must never appear
+        expect(result).not_to include(dir)
+      end
     end
   end
 

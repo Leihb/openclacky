@@ -17,12 +17,21 @@ module Clacky
   #   chrome_version: "146" — detected Chrome version (set by browser-setup skill)
   #   configured_at: date   — when setup was last run
   #
+  # Liveness check strategy:
+  #   process_alive? sends an MCP `ping` (standard in MCP spec 2024-11-05) and
+  #   waits up to 3s for a response.  If the ping succeeds the daemon is healthy.
+  #   If it times out or raises an IO error the daemon is truly dead — kill it so
+  #   ensure_process! will spawn a fresh one on the next call.
+  #
+  #   Chrome connection problems (e.g. Chrome closed) surface only during the
+  #   actual mcp_call and are reported back to the caller; they do NOT trigger a
+  #   daemon restart.
+  #
   # Browser tool (browser.rb) delegates daemon access here instead of using
   # class-level @@mcp_process variables directly.  BrowserManager holds the
   # single mutable state; the mutex lives here too.
   class BrowserManager
-    BROWSER_CONFIG_PATH   = File.expand_path("~/.clacky/browser.yml").freeze
-    DAEMON_RESTART_COOLDOWN = 600 # seconds — don't restart daemon more than once per 10 minutes
+    BROWSER_CONFIG_PATH = File.expand_path("~/.clacky/browser.yml").freeze
 
     class << self
       def instance
@@ -31,11 +40,10 @@ module Clacky
     end
 
     def initialize
-      @process         = nil   # { stdin:, stdout:, pid:, wait_thr: }
-      @mutex           = Mutex.new
-      @call_id         = 2     # 1 reserved for MCP initialize handshake
-      @config          = {}    # last successfully read browser.yml content
-      @last_restart_at = nil   # Time of last daemon restart (cooldown guard)
+      @process = nil   # { stdin:, stdout:, pid:, wait_thr: }
+      @mutex   = Mutex.new
+      @call_id = 2     # 1 reserved for MCP initialize handshake
+      @config  = {}    # last successfully read browser.yml content
     end
 
     # ---------------------------------------------------------------------------
@@ -69,8 +77,7 @@ module Clacky
 
     # Hot-reload: stop existing daemon, re-read yml, restart if enabled.
     # Called by HttpServer after browser-setup writes a new browser.yml.
-    # @param force [Boolean] skip cooldown check (use when triggered by explicit user action)
-    def reload(force: false)
+    def reload
       Clacky::Logger.info("[BrowserManager] Reloading...")
       @mutex.synchronize { kill_process! }
 
@@ -81,7 +88,7 @@ module Clacky
         Clacky::Logger.info("[BrowserManager] Browser enabled, restarting daemon")
         Thread.new do
           Thread.current.name = "browser-manager-reload"
-          @mutex.synchronize { ensure_process!(force: force) }
+          @mutex.synchronize { ensure_process! }
         rescue StandardError => e
           Clacky::Logger.warn("[BrowserManager] Reload start failed: #{e.message}")
         end
@@ -114,7 +121,7 @@ module Clacky
       cfg["enabled"] = new_enabled
       File.write(BROWSER_CONFIG_PATH, cfg.to_yaml)
       @config = cfg
-      reload(force: true)  # user-initiated — skip cooldown
+      reload
       new_enabled
     end
 
@@ -179,17 +186,8 @@ module Clacky
     end
 
     # Must be called inside @mutex
-    # @param force [Boolean] skip cooldown check (user-initiated restarts)
-    def ensure_process!(force: false)
+    def ensure_process!
       return if process_alive?
-
-      unless force
-        if @last_restart_at && (Time.now - @last_restart_at) < DAEMON_RESTART_COOLDOWN
-          remaining = (DAEMON_RESTART_COOLDOWN - (Time.now - @last_restart_at)).ceil
-          raise "Chrome MCP daemon restart is on cooldown (#{remaining}s remaining). " \
-                "If Chrome is unresponsive, please restart Chrome and try again."
-        end
-      end
 
       cmd = Clacky::Tools::Browser.build_mcp_command
       stdin, stdout, stderr_io, wait_thr = Open3.popen3(*cmd)
@@ -221,19 +219,30 @@ module Clacky
       stdin.write(notify_msg + "\n")
       stdin.flush
 
-      @process         = { stdin: stdin, stdout: stdout, pid: wait_thr.pid, wait_thr: wait_thr }
-      @call_id         = 2
-      @last_restart_at = Time.now  # record only on successful start
+      @process = { stdin: stdin, stdout: stdout, pid: wait_thr.pid, wait_thr: wait_thr }
+      @call_id = 2
       Clacky::Logger.info("[BrowserManager] MCP daemon started (pid=#{wait_thr.pid})")
     end
 
-    # Must be called inside @mutex
+    # Must be called inside @mutex.
+    # Sends an MCP `ping` (MCP spec 2024-11-05) and waits up to 3s for a pong.
+    # A successful ping means the MCP daemon process is alive and responsive.
+    # Chrome connection health is NOT checked here — Chrome problems surface only
+    # during the actual mcp_call and are reported back to the caller.
     def process_alive?
       return false if @process.nil?
 
-      Process.kill(0, @process[:pid])
-      !@process[:stdin].closed? && !@process[:stdout].closed?
-    rescue Errno::ESRCH, Errno::EPERM
+      ping_id = 0
+      msg = json_rpc("ping", {}, id: ping_id)
+      @process[:stdin].write(msg + "\n")
+      @process[:stdin].flush
+      resp = read_response(@process[:stdout], target_id: ping_id, timeout: 3)
+      if resp.nil?
+        kill_process!
+        return false
+      end
+      true
+    rescue StandardError
       kill_process!
       false
     end

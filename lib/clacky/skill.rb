@@ -2,6 +2,8 @@
 
 require "yaml"
 require "pathname"
+require_relative "utils/file_ignore_helper"
+require_relative "utils/gitignore_parser"
 
 module Clacky
   # Represents a skill with its metadata and content.
@@ -169,33 +171,60 @@ module Clacky
 
     # Get all supporting files in the skill directory (excluding SKILL.md)
     # @return [Array<Pathname>]
+    # Return plain-text supporting files for this skill (non-encrypted skills only).
+    # For encrypted skills this always returns [] — the decrypted files live in a
+    # tmpdir created by SkillManager at invoke time (see has_supporting_scripts?).
+    # @return [Array<Pathname>]
     def supporting_files
       return [] unless @directory.exist?
+      return [] if encrypted?
 
-      @directory.children.reject { |p| p.basename.to_s == "SKILL.md" }
+      dir = @directory.to_s
+      gitignore_path = Utils::FileIgnoreHelper.find_gitignore(dir)
+      gitignore = gitignore_path ? GitignoreParser.new(gitignore_path) : nil
+
+      Dir.glob(File.join(dir, "**", "*"))
+         .reject { |f| File.directory?(f) }
+         .reject { |f| File.basename(f) == "SKILL.md" }
+         .reject { |f| Utils::FileIgnoreHelper.should_ignore_file?(f, dir, gitignore) }
+         .map { |f| Pathname.new(f) }
+         .sort
     end
 
-    # Check if this skill has supporting files
+    # Check if this skill has any supporting files/scripts beyond SKILL.md.
+    # For encrypted skills, checks for .enc files that are not SKILL.md.enc or the manifest.
+    # For plain skills, checks for any files other than SKILL.md.
     # @return [Boolean]
     def has_supporting_files?
-      supporting_files.any?
+      return false unless @directory.exist?
+
+      if encrypted?
+        Dir.glob(File.join(@directory.to_s, "**", "*.enc")).any? do |f|
+          base = File.basename(f)
+          base != "SKILL.md.enc" && base != "MANIFEST.enc.json"
+        end
+      else
+        supporting_files.any?
+      end
     end
+
+
 
     # Process the skill content with argument substitution and template expansion
     # @param arguments [String] Arguments passed to the skill
     # @param shell_output [Hash] Shell command outputs for !command` syntax (optional)
     # @param template_context [Hash] Named values for <%= key %> template expansion (optional)
+    # @param script_dir [String, nil] When provided, the Supporting Files block uses this
+    #   directory instead of @directory. Used by SkillManager to point the LLM at the
+    #   tmpdir containing decrypted scripts for encrypted brand skills.
     # @return [String] Processed content
-    def process_content(arguments = "", shell_output: {}, template_context: {})
+    def process_content(shell_output: {}, template_context: {}, script_dir: nil)
       # For brand skills, decrypt content in memory at invoke time.
       # For plain skills, use the already-loaded @content.
       processed_content = decrypted_content.dup
 
-      # Expand <%= key %> templates before argument substitution
+      # Expand <%= key %> templates
       processed_content = expand_templates(processed_content, template_context)
-
-      # Replace argument placeholders
-      processed_content = substitute_arguments(processed_content, arguments)
 
       # Replace shell command outputs
       shell_output.each do |command, output|
@@ -203,12 +232,35 @@ module Clacky
         processed_content.gsub!(placeholder, output.to_s)
       end
 
-      # Append supporting files list if any exist
-      if has_supporting_files?
+      # Append supporting files list if any exist.
+      # When script_dir is given (encrypted skill with decrypted tmpdir), use that
+      # directory for both the path label and the file listing so the LLM sees real
+      # paths it can actually execute.
+      effective_dir = script_dir || @directory.to_s
+      effective_files = if script_dir && Dir.exist?(script_dir)
+        gitignore_path = Utils::FileIgnoreHelper.find_gitignore(script_dir)
+        gitignore = gitignore_path ? GitignoreParser.new(gitignore_path) : nil
+        Dir.glob(File.join(script_dir, "**", "*"))
+           .reject { |f| File.directory?(f) }
+           .reject { |f| Utils::FileIgnoreHelper.should_ignore_file?(f, script_dir, gitignore) }
+           .map { |f| f.sub("#{script_dir}/", "") }
+           .sort
+      else
+        supporting_files.map { |p| p.relative_path_from(@directory).to_s }
+      end
+
+      if effective_files.any?
+        max_files = 20
+        truncated = effective_files.length > max_files
+        listed_files = effective_files.first(max_files)
+
         processed_content += "\n\n## Supporting Files\n\n"
-        processed_content += "The following files are available in this skill's directory (`#{@directory}`):\n\n"
-        supporting_files.each do |file|
+        processed_content += "The following files are available in this skill's directory (`#{effective_dir}`):\n\n"
+        listed_files.each do |file|
           processed_content += "- `#{file}`\n"
+        end
+        if truncated
+          processed_content += "\n_(#{effective_files.length - max_files} more files not shown)_\n"
         end
       end
 
@@ -492,36 +544,6 @@ module Clacky
       content
     end
 
-    def substitute_arguments(content, arguments)
-      # Split arguments by whitespace for indexed access ($0, $1, $ARGUMENTS[N]).
-      # Skill arguments are natural language, not shell commands — shellsplit is
-      # intentionally avoided here to prevent errors on apostrophes and other
-      # characters that have special meaning in shell but not in plain text.
-      args_array = arguments.split
 
-      # Replace $SKILL_DIR with the absolute path of this skill's directory.
-      # Allows SKILL.md files to reference bundled scripts without runtime `find`.
-      result = content.gsub("$SKILL_DIR", @directory.to_s)
-
-      # Replace $ARGUMENTS with all arguments
-      result = result.gsub("$ARGUMENTS", arguments.to_s)
-
-      # Replace $ARGUMENTS[N] with specific argument
-      result.gsub!(/\$ARGUMENTS\[(\d+)\]/) do
-        index = $1.to_i
-        args_array[index] || ""
-      end
-
-      # Replace $N shorthand ($0, $1, etc.)
-      result.gsub!(/\$([0-9]+)/) do
-        index = $1.to_i
-        args_array[index] || ""
-      end
-
-      # Replace ${CLAUDE_SESSION_ID} with empty string (session not available in current context)
-      result.gsub!(/\${CLAUDE_SESSION_ID}/, "")
-
-      result
-    end
   end
 end

@@ -70,7 +70,8 @@ module Clacky
       @interrupted = false  # Flag for user interrupt
       @ui = ui  # UIController for direct UI interaction
       @debug_logs = []  # Debug logs for troubleshooting
-      @pending_injections = []  # Pending inline skill injections to flush after observe()
+      @pending_injections = []     # Pending inline skill injections to flush after observe()
+      @pending_script_tmpdirs = [] # Decrypted-script tmpdirs to shred when agent.run completes
 
       # Compression tracking
       @compression_level = 0  # Tracks how many times we've compressed (for progressive summarization)
@@ -412,6 +413,11 @@ module Clacky
       ensure
         # Always clean up memory update messages, even if interrupted or error occurred
         cleanup_memory_messages
+
+        # Shred any decrypted-script tmpdirs created during this run for encrypted brand skills.
+        # This covers the inline-injection path; the subagent path shreds immediately after
+        # subagent.run returns (see execute_skill_with_subagent).
+        shred_script_tmpdirs
       end
     end
 
@@ -579,7 +585,7 @@ module Clacky
 
         # Special handling for request_user_feedback: don't show as tool call
         unless call[:name] == "request_user_feedback"
-          @ui&.show_tool_call(call[:name], call[:arguments])
+          @ui&.show_tool_call(call[:name], redact_tool_args(call[:arguments]))
         end
 
         # Execute tool
@@ -731,6 +737,38 @@ module Clacky
       @pending_injections << { skill: skill, task: task }
     end
 
+    # Register a tmpdir that contains decrypted brand skill scripts.
+    # SkillManager calls this after decrypt_all_scripts so agent.run's ensure block
+    # can shred it when the run completes.
+    # @param dir [String] Absolute path to the tmpdir
+    def register_script_tmpdir(dir)
+      @pending_script_tmpdirs << dir
+    end
+
+    # Redact volatile tmpdir paths from tool call arguments before showing in UI.
+    # Replaces each registered path with <SKILL_DIR> so encrypted skill locations
+    # are never exposed to the user.
+    # @param args [String, Hash, nil] Raw tool arguments
+    # @return [String, Hash, nil] Redacted arguments (same type as input)
+    def redact_tool_args(args)
+      return args if @pending_script_tmpdirs.empty?
+
+      redact_value(args)
+    end
+
+    def redact_value(obj)
+      case obj
+      when String
+        @pending_script_tmpdirs.map(&:to_s).sort_by { |p| -p.length }.reduce(obj) { |s, path| s.gsub(path, "<SKILL_DIR>") }
+      when Hash
+        obj.transform_values { |v| redact_value(v) }
+      when Array
+        obj.map { |v| redact_value(v) }
+      else
+        obj
+      end
+    end
+
     # Flush all pending inline skill injections into history.
     # Must be called AFTER observe() so toolResult is appended before skill instructions,
     # producing the correct message sequence for all API providers (especially Bedrock).
@@ -741,6 +779,17 @@ module Clacky
         inject_skill_as_assistant_message(entry[:skill], entry[:task], @current_task_id)
       end
       @pending_injections.clear
+    end
+
+    # Shred all decrypted-script tmpdirs registered during this run.
+    # Called from agent.run's ensure block to guarantee cleanup even on error/interrupt.
+    # Overwrites each file with zeros before unlinking to hinder recovery.
+    # Delegates to SkillManager#shred_directory (available via include SkillManager).
+    private def shred_script_tmpdirs
+      return if @pending_script_tmpdirs.empty?
+
+      @pending_script_tmpdirs.each { |dir| shred_directory(dir) }
+      @pending_script_tmpdirs.clear
     end
 
     # Check if agent is currently running

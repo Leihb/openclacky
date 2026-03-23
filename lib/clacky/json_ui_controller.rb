@@ -97,6 +97,10 @@ module Clacky
       emit("info", message: message)
     end
 
+    def show_idle_status(phase:, message:)
+      emit("idle_status", phase: phase.to_s, message: message)
+    end
+
     def show_warning(message)
       emit("warning", message: message)
     end
@@ -189,5 +193,6 @@ module Clacky
     def stop
       # no-op
     end
+
   end
 end

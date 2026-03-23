@@ -17,9 +17,9 @@ module Clacky
       def trigger_idle_compression
         # Check if we should compress (force mode)
         compression_context = compress_messages_if_needed(force: true)
-        @ui&.show_info("Idle detected. Compressing conversation to optimize costs...")
+        @ui&.show_idle_status(phase: :start, message: "Idle detected. Compressing conversation to optimize costs...")
         if compression_context.nil?
-          @ui&.show_info("Idle skipped.")
+          @ui&.show_idle_status(phase: :end, message: "Idle skipped.")
           return false
         end
 

@@ -231,17 +231,6 @@ RSpec.describe "Brand Skill system" do
       end
     end
 
-    it "substitutes $ARGUMENTS in process_content" do
-      with_temp_config_dir do |tmp|
-        config = activated_brand_config(tmp)
-        dir    = make_brand_skill_dir(tmp)
-        skill  = Clacky::Skill.new(dir, brand_skill: true, brand_config: config)
-
-        result = skill.process_content("hello world")
-        expect(result).to include("hello world")
-      end
-    end
-
     it "raises when neither SKILL.md nor SKILL.md.enc is present" do
       with_temp_config_dir do |tmp|
         config    = activated_brand_config(tmp)

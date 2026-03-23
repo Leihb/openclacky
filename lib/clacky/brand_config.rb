@@ -690,6 +690,77 @@ module Clacky
       raise "Invalid MANIFEST.enc.json: #{e.message}"
     end
 
+    # Decrypt all supporting script files for a skill into a temporary directory.
+    #
+    # Scans `skill_dir` recursively for `*.enc` files, skipping SKILL.md.enc and
+    # MANIFEST.enc.json.  Each file is decrypted in memory and written to the
+    # corresponding relative path under `dest_dir`.  The decryption key is fetched
+    # once (cached) for all files belonging to the same skill version.
+    #
+    # For mock/plain skills (no MANIFEST.enc.json) the raw bytes are used as-is.
+    #
+    # @param skill_dir [String] Absolute path to the installed brand skill directory
+    # @param dest_dir  [String] Absolute path to the destination directory (tmpdir)
+    # @return [Array<String>] Relative paths of all files written to dest_dir
+    # @raise [RuntimeError] If license is not activated or decryption fails
+    def decrypt_all_scripts(skill_dir, dest_dir)
+      raise "License not activated — cannot decrypt brand skill" unless activated?
+
+      manifest_path = File.join(skill_dir, "MANIFEST.enc.json")
+      manifest      = File.exist?(manifest_path) ? JSON.parse(File.read(manifest_path)) : nil
+
+      written = []
+
+      # Find all .enc files that are not SKILL.md.enc or the manifest itself
+      Dir.glob(File.join(skill_dir, "**", "*.enc")).each do |enc_path|
+        basename = File.basename(enc_path)
+        next if basename == "SKILL.md.enc"
+        next if basename == "MANIFEST.enc.json"
+
+        # Relative path from skill_dir, stripping the .enc suffix
+        rel_enc  = enc_path.sub("#{skill_dir}/", "")  # e.g. "scripts/analyze.rb.enc"
+        rel_plain = rel_enc.sub(/\.enc\z/, "")          # e.g. "scripts/analyze.rb"
+
+        plaintext = if manifest
+          # Read manifest entry using the relative plain path
+          file_meta = manifest["files"] && manifest["files"][rel_plain]
+          raise "File '#{rel_plain}' not found in MANIFEST.enc.json" unless file_meta
+
+          skill_id         = manifest["skill_id"]
+          skill_version_id = manifest["skill_version_id"]
+          key = fetch_decryption_key(skill_id: skill_id, skill_version_id: skill_version_id)
+
+          ciphertext = File.binread(enc_path)
+          pt         = aes_gcm_decrypt(key, ciphertext, file_meta["iv"], file_meta["tag"])
+
+          # Integrity check
+          actual   = Digest::SHA256.hexdigest(pt)
+          expected = file_meta["original_checksum"]
+          if expected && actual != expected
+            raise "Checksum mismatch for #{rel_plain}: expected #{expected}, got #{actual}"
+          end
+
+          pt
+        else
+          # Mock/plain skill: raw bytes
+          File.binread(enc_path).force_encoding("UTF-8")
+        end
+
+        out_path = File.join(dest_dir, rel_plain)
+        FileUtils.mkdir_p(File.dirname(out_path))
+        File.write(out_path, plaintext)
+        # Preserve executable permission hint from extension
+        File.chmod(0o700, out_path)
+        written << rel_plain
+      end
+
+      written
+    rescue Errno::ENOENT => e
+      raise "Brand skill file not found: #{e.message}"
+    rescue JSON::ParserError => e
+      raise "Invalid MANIFEST.enc.json: #{e.message}"
+    end
+
     # Read the local brand_skills.json metadata, cross-validated against the
     # actual file system.  A skill is only considered installed when:
     #   1. It has an entry in brand_skills.json, AND

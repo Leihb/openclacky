@@ -151,13 +151,13 @@ end
 puts result  # stdout is the output
 ```
 
-Invoke from SKILL.md using the built-in `$SKILL_DIR` variable — it expands to the skill's absolute directory path at runtime, so the script reference always works regardless of where the skill is installed (user-level, project-level, or shipped with the gem):
+Invoke from SKILL.md by referencing the script via the Supporting Files block — at runtime, the AI receives the full absolute path of every supporting file. Refer to it as `SKILL_DIR` in instructions so the AI substitutes the correct path from the Supporting Files list:
 
 ```bash
-ruby "$SKILL_DIR/scripts/do_something.rb" "argument"
+ruby "SKILL_DIR/scripts/do_something.rb" "argument"
 ```
 
-Never hardcode paths like `~/.clacky/skills/my-skill/scripts/...` — they break when the skill is installed at a different location. Never use `find` to locate scripts — `$SKILL_DIR` is always correct and requires no shell command.
+Never hardcode paths like `~/.clacky/skills/my-skill/scripts/...` — they break when the skill is installed at a different location. Never use `find` to locate scripts — the Supporting Files block always provides the correct absolute paths.
 
 Ruby standard library covers most needs (`net/http`, `json`, `fileutils`, `uri`, `time`). No gems needed for basic API calls.
 

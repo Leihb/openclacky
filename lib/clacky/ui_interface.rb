@@ -38,6 +38,12 @@ module Clacky
     def set_working_status; end
     def set_idle_status; end
 
+    # === Idle compression status ===
+    # Emits a two-phase idle compression status update.
+    # phase: :start  → show "Idle detected. Compressing..." (with spinner)
+    # phase: :end    → update same element with final result (skipped / compressed)
+    def show_idle_status(phase:, message:); end
+
     # === Blocking interaction ===
     def request_confirmation(message, default: true); end
 
@@ -45,6 +51,7 @@ module Clacky
     def clear_input; end
     def set_input_tips(message, type: :info); end
 
+    # === Path redaction (for encrypted brand skill tmpdirs) ===
     # === Lifecycle ===
     def stop; end
   end

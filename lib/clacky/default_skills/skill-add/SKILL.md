@@ -11,12 +11,12 @@ Installs a skill from a zip URL **or a local zip file path** using the bundled `
 
 ## How to Install
 
-The script path is available as `$SKILL_DIR/scripts/install_from_zip.rb` — use it directly, no `find` needed.
+The script path is listed in the Supporting Files above (`scripts/install_from_zip.rb`) — use the full path directly, no `find` needed.
 
 The script accepts **either a remote URL or a local file path**:
 
 ```bash
-ruby "$SKILL_DIR/scripts/install_from_zip.rb" <zip_url_or_path> [slug]
+ruby "SKILL_DIR/scripts/install_from_zip.rb" <zip_url_or_path> [slug]
 ```
 
 - `<zip_url_or_path>` — a remote `https://` URL **or** an absolute/relative local path to a `.zip` file
@@ -38,7 +38,7 @@ The script handles everything automatically:
 /skill-add https://store.clacky.ai/skills/canvas-design-1.2.0.zip
 ```
 ```bash
-ruby "$SKILL_DIR/scripts/install_from_zip.rb" \
+ruby "SKILL_DIR/scripts/install_from_zip.rb" \
   "https://store.clacky.ai/skills/canvas-design-1.2.0.zip" \
   "canvas-design"
 ```
@@ -48,7 +48,7 @@ ruby "$SKILL_DIR/scripts/install_from_zip.rb" \
 /skill-add /Users/alice/Downloads/my-skill-1.0.0.zip
 ```
 ```bash
-ruby "$SKILL_DIR/scripts/install_from_zip.rb" \
+ruby "SKILL_DIR/scripts/install_from_zip.rb" \
   "/Users/alice/Downloads/my-skill-1.0.0.zip"
 ```
 

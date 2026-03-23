@@ -591,6 +591,14 @@ module Clacky
         append_output(output)
       end
 
+      # Show idle compression status (two-phase: start → end).
+      # In terminal mode, only the final state is printed.
+      def show_idle_status(phase:, message:)
+        return unless phase.to_s == "end"
+        output = @renderer.render_system_message(message)
+        append_output(output)
+      end
+
       # Show warning message
       # @param message [String] Warning message
       def show_warning(message)

@@ -87,6 +87,11 @@ module Clacky
       puts_line("[info] #{message}")
     end
 
+    def show_idle_status(phase:, message:)
+      # In plain mode, just print the final state
+      puts_line("[info] #{message}") if phase.to_s == "end"
+    end
+
     def show_warning(message)
       puts_line("[warn] #{message}")
     end

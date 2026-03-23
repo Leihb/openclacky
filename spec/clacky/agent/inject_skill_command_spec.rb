@@ -68,21 +68,6 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
     end
   end
 
-  it "passes arguments as part of the expanded skill content" do
-    Dir.mktmpdir do |tmpdir|
-      create_skill(tmpdir, name: "onboard", disable_model_invocation: true, content: "Task: \$ARGUMENTS")
-
-      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general", session_id: Clacky::SessionManager.generate_id, source: :manual)
-      allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
-      allow(agent).to receive(:inject_memory_prompt!).and_return(false)
-
-      agent.run("/onboard hello world")
-
-      injected = agent.history.to_a.find { |m| m[:role] == "assistant" && m[:system_injected] }
-      expect(injected[:content]).to include("hello world")
-    end
-  end
-
   it "also injects for skills that are model-invocable (slash command is always direct)" do
     Dir.mktmpdir do |tmpdir|
       # No disable-model-invocation: true => model_invocation_allowed? == true
@@ -203,19 +188,6 @@ RSpec.describe "Agent#inject_skill_as_assistant_message" do
     end
   end
 
-  it "substitutes arguments in skill content" do
-    Dir.mktmpdir do |tmpdir|
-      create_skill(tmpdir, name: "my-skill", content: "Task: $ARGUMENTS")
-      agent = build_agent(tmpdir)
-      skill = agent.instance_variable_get(:@skill_loader).find_by_name("my-skill")
-
-      agent.send(:inject_skill_as_assistant_message, skill, "hello world", 1)
-
-      injected = agent.history.to_a.find { |m| m[:role] == "assistant" && m[:system_injected] }
-      expect(injected[:content]).to include("hello world")
-    end
-  end
-
   it "does NOT mark injected messages as transient for plain skills" do
     Dir.mktmpdir do |tmpdir|
       create_skill(tmpdir, name: "my-skill", content: "Plain content.")
@@ -283,6 +255,70 @@ RSpec.describe "Agent#inject_skill_as_assistant_message" do
       injected = raw_messages.select { |m| m[:system_injected] && !m[:session_context] }
       expect(injected.size).to eq(2)
       expect(injected).to all(satisfy { |m| m[:transient] == true })
+    end
+  end
+
+  it "encrypted skill with supporting scripts: injected content contains tmpdir paths, not encrypted dir" do
+    with_brand_skill(name: "enc-script-skill", content: "Run the script.") do |tmpdir, brand_config|
+      # Add an encrypted supporting script
+      skill_dir = File.join(tmpdir, "brand_skills", "enc-script-skill")
+      FileUtils.mkdir_p(File.join(skill_dir, "scripts"))
+      File.binwrite(File.join(skill_dir, "scripts", "run.rb.enc"), "encrypted bytes")
+
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil,
+                                profile: "general",
+                                session_id: Clacky::SessionManager.generate_id,
+                                source: :manual)
+      allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
+      allow(agent).to receive(:inject_memory_prompt!).and_return(false)
+
+      skill = agent.instance_variable_get(:@skill_loader).find_by_name("enc-script-skill")
+      expect(skill.has_supporting_files?).to be true
+
+      # Stub decrypt_all_scripts to simulate decryption: write plain file into tmpdir
+      allow(brand_config).to receive(:decrypt_all_scripts) do |_src, dest|
+        FileUtils.mkdir_p(File.join(dest, "scripts"))
+        File.write(File.join(dest, "scripts", "run.rb"), "puts 'hello from decrypted script'")
+      end
+
+      agent.send(:inject_skill_as_assistant_message, skill, "", 1)
+
+      raw_messages = agent.history.instance_variable_get(:@messages)
+      injected_content = raw_messages.find { |m| m[:role] == "assistant" && m[:system_injected] }[:content]
+
+      # Supporting Files block must be present
+      expect(injected_content).to include("## Supporting Files")
+
+      # Path shown must be the tmpdir (real executable path), NOT the encrypted dir
+      expect(injected_content).not_to include(skill_dir)
+      expect(injected_content).to include("scripts/run.rb")
+
+      # decrypt_all_scripts must have been called
+      expect(brand_config).to have_received(:decrypt_all_scripts)
+    end
+  end
+
+  it "encrypted skill without supporting scripts: no Supporting Files block injected" do
+    with_brand_skill(name: "no-scripts-skill", content: "Plain brand instructions.") do |tmpdir, brand_config|
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil,
+                                profile: "general",
+                                session_id: Clacky::SessionManager.generate_id,
+                                source: :manual)
+      allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
+      allow(agent).to receive(:inject_memory_prompt!).and_return(false)
+
+      skill = agent.instance_variable_get(:@skill_loader).find_by_name("no-scripts-skill")
+      expect(skill.has_supporting_files?).to be false
+
+      # decrypt_all_scripts should never be called
+      expect(brand_config).not_to receive(:decrypt_all_scripts)
+
+      agent.send(:inject_skill_as_assistant_message, skill, "", 1)
+
+      raw_messages = agent.history.instance_variable_get(:@messages)
+      injected_content = raw_messages.find { |m| m[:role] == "assistant" && m[:system_injected] }[:content]
+
+      expect(injected_content).not_to include("## Supporting Files")
     end
   end
 
