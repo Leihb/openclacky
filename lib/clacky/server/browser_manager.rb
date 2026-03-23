@@ -110,6 +110,21 @@ module Clacky
       }
     end
 
+    # Write browser.yml with the given config and reload the daemon.
+    # Called by HttpServer POST /api/browser/configure.
+    # @param chrome_version [String] detected Chrome major version
+    def configure(chrome_version:)
+      cfg = {
+        "enabled"        => true,
+        "browser"        => "chrome",
+        "chrome_version" => chrome_version.to_s,
+        "configured_at"  => Date.today.to_s
+      }
+      FileUtils.mkdir_p(File.dirname(BROWSER_CONFIG_PATH))
+      File.write(BROWSER_CONFIG_PATH, cfg.to_yaml)
+      reload
+    end
+
     # Toggle the browser tool on/off by flipping `enabled` in browser.yml.
     # Raises if browser.yml doesn't exist (not yet set up).
     # @return [Boolean] new enabled state

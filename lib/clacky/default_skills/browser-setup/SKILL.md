@@ -4,9 +4,9 @@ description: |
   Configure the browser tool for Clacky. Guides the user through Chrome setup,
   verifies the connection, and writes ~/.clacky/browser.yml.
   Trigger on: "browser setup", "setup browser", "配置浏览器", "browser config",
-  "browser reconfigure", "重新配置浏览器", "browser doctor", "browser status".
-  Subcommands: setup, status, reconfigure, doctor.
-argument-hint: "setup | status | reconfigure | doctor"
+  "browser doctor".
+  Subcommands: setup, doctor.
+argument-hint: "setup | doctor"
 allowed-tools:
   - Bash
   - Read
@@ -23,65 +23,13 @@ Configure the browser tool for Clacky. Config is stored at `~/.clacky/browser.ym
 | User says | Subcommand |
 |---|---|
 | `browser setup`, `配置浏览器`, `setup browser` | setup |
-| `browser status`, `浏览器状态` | status |
-| `browser reconfigure`, `重新配置浏览器` | reconfigure |
 | `browser doctor` | doctor |
 
 If no subcommand is clear, default to `setup`.
 
 ---
 
-## `status`
-
-Read `~/.clacky/browser.yml` and display current configuration:
-
-```
-Browser Configuration
-─────────────────────
-Status:        ✅ Enabled  /  ⏸ Disabled  /  ❌ Not configured
-Browser:       Chrome
-Chrome:        v148
-Configured at: 2026-03-21
-```
-
-- If `~/.clacky/browser.yml` does not exist:
-  ```
-  ❌ Browser not configured. Run `/browser-setup` to configure.
-  ```
-- If file exists and `enabled: false`:
-  ```
-  ⏸ Browser is configured but disabled. Run "browser setup" to re-enable.
-  ```
-- If file exists and `enabled: true`: show full config above.
-
----
-
-## `reconfigure`
-
-Skip directly to Step 1 of the setup flow below. Ignore any existing configuration.
-
----
-
 ## `setup`
-
-### Step 0 — Check if browser is already configured but disabled
-
-Before starting the full setup flow, call the status API:
-```bash
-curl -s http://localhost:7070/api/browser/status
-```
-
-- If `enabled` is `null` / missing → not yet set up, proceed to Step 1.
-- If `enabled` is `true` → already active. Tell the user:
-  > ✅ Browser is already configured and running. Nothing to do!
-  Stop here.
-- If `enabled` is `false` → previously disabled. Re-enable directly:
-  ```bash
-  curl -s -X POST http://localhost:7070/api/browser/toggle
-  ```
-  Tell the user:
-  > ✅ Browser re-enabled! Your existing configuration is still intact.
-  Stop here. Do **not** run the full setup flow.
 
 ### Step 1 — Check Node.js & install chrome-devtools-mcp
 
@@ -90,115 +38,87 @@ Run:
 node --version
 ```
 
-If Node.js is missing or version < 20, let the user know:
+If Node.js is missing or version < 20, tell the user and stop:
 
-> The browser tool requires Node.js 20+.
+> ❌ The browser tool requires Node.js 20+.
 > Please install it first: https://nodejs.org/
 > Let me know when done and I'll retry.
-
-Stop here.
 
 Then install/update `chrome-devtools-mcp`:
 ```bash
 npm install -g chrome-devtools-mcp@latest
 ```
 
-If this fails, warn the user but continue (it may already be installed from a previous setup):
+If this fails, stop and tell the user:
 
-> chrome-devtools-mcp update failed — will use the existing installed version.
+> ❌ Failed to install chrome-devtools-mcp. Please run manually:
+> ```
+> npm install -g chrome-devtools-mcp@latest
+> ```
+> Let me know when done.
 
-### Step 2 — Guide Chrome remote debugging
+### Step 2 — Try to connect to Chrome
 
-Ask the user to open Chrome and enable remote debugging:
+Immediately attempt to connect — do **not** ask the user anything first:
 
-> To connect to your browser, please do the following in Chrome:
->
-> 1. Open Chrome (version 146 or higher required)
->    Check your version at: `chrome://version`
->
-> 2. Go to: `chrome://inspect/#remote-debugging`
->
-> 3. Click **"Allow remote debugging for this browser instance"**
->
-> Let me know when you're done and I'll verify the connection.
-
-Wait for the user to confirm before continuing.
-
-### Step 3 — Detect Chrome version
-
-Use the browser tool:
 ```
 browser(action="act", kind="evaluate", js="navigator.userAgentData?.brands?.find(b => b.brand === 'Google Chrome')?.version || navigator.userAgent.match(/Chrome\\/([\\d]+)/)?.[1] || 'unknown'")
 ```
 
-If this fails (connection error), let the user know:
+**If connection succeeds** → parse the Chrome version and jump to Step 3.
 
-> Could not connect to Chrome. Please check:
-> - Chrome is open
-> - You visited `chrome://inspect/#remote-debugging`
-> - You clicked **"Allow remote debugging for this browser instance"**
->
-> Retrying...
+**If connection fails** → inspect the error message from the evaluate result to diagnose:
 
-Retry once. If still failing, stop and ask the user to re-check.
+**Case A — error contains `"timed out"`**: The MCP daemon failed to start — Chrome is not running or remote debugging is not enabled. Try to open the page for the user:
 
-Parse the version number from the result:
+```bash
+open "chrome://inspect/#remote-debugging"
+```
+
+Tell the user:
+
+> I've opened `chrome://inspect/#remote-debugging` in Chrome.
+> Please click **"Allow remote debugging for this browser instance"** and let me know when done.
+
+If `open` fails, fall back to:
+
+> Please open this URL in Chrome:
+> `chrome://inspect/#remote-debugging`
+> Then click **"Allow remote debugging for this browser instance"** and let me know when done.
+
+Wait for the user to confirm, then retry the connection once. If still failing, stop:
+
+> ❌ Could not connect to Chrome. Please make sure Chrome is open and remote debugging is enabled, then run `/browser-setup` again.
+
+**Case B — error contains `"Chrome MCP error:"`**: The MCP daemon is alive but Chrome's CDP connection is broken — this is a known Chrome issue after long sessions. Tell the user:
+
+> Chrome's remote debugging connection is unstable.
+> Please restart Chrome and let me know when done.
+
+Wait for the user to confirm, then retry once. If still failing, stop with the same error message as Case A.
+
+### Step 3 — Check Chrome version
+
+Parse the version number from Step 2:
 - version >= 146 → proceed
 - version 144–145 → warn but proceed:
-  > Your Chrome version is vXXX. Version 146+ is recommended for the best experience. Continuing anyway...
-- version < 144 or unknown → let the user know:
-  > Chrome version vXXX is too old. Please upgrade to Chrome 146+: https://www.google.com/chrome/
+  > ⚠️ Your Chrome version is vXXX. Version 146+ is recommended. Continuing anyway...
+- version < 144 or unknown → stop:
+  > ❌ Chrome vXXX is too old. Please upgrade to Chrome 146+: https://www.google.com/chrome/
   > Let me know when you've upgraded and I'll retry.
 
-  Stop here.
-
-### Step 4 — Verify connection
-
-Run:
-```
-browser(action="status")
-```
-
-If successful, proceed. If failed, show error and stop.
-
-### Step 5 — Write config
-
-Write `~/.clacky/browser.yml`:
-
-```yaml
-# Clacky browser configuration
-# Generated by browser-setup skill. Do not edit manually.
-version: 1
-enabled: true
-browser: chrome
-chrome_version: <detected version>
-configured_at: <today's date YYYY-MM-DD>
-```
-
-Use Bash to write:
-```bash
-cat > ~/.clacky/browser.yml << 'EOF'
-version: 1
-enabled: true
-browser: chrome
-chrome_version: <VERSION>
-configured_at: <DATE>
-EOF
-```
-
-### Step 6 — Hot-reload daemon
-
-Notify the server to reload the browser MCP daemon with the new config:
+### Step 4 — Save config and start daemon
 
 ```bash
-curl -s -X POST http://localhost:7070/api/browser/reload
+curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/browser/configure \
+  -H "Content-Type: application/json" \
+  -d '{"chrome_version":"<VERSION>"}'
 ```
 
+This writes `~/.clacky/browser.yml` and hot-reloads the daemon in one step.
 If this fails (server not running), skip silently — the daemon will start lazily on next use.
 
-### Step 7 — Done
-
-Let the user know setup is complete:
+### Step 5 — Done
 
 > ✅ Browser configured.
 >
@@ -224,15 +144,15 @@ For any ❌ item, show the fix inline.
 
 Steps:
 1. Check `~/.clacky/browser.yml`:
-   - File missing → ❌ Not configured. Stop doctor here and suggest running `/browser-setup`.
-   - File exists, `enabled: false` → ⏸ Configured but disabled. Warn the user; continue checking other items.
+   - File missing → ❌ Not configured. Stop and suggest running `/browser-setup`.
+   - File exists, `enabled: false` → ⏸ Configured but disabled. Suggest running `/browser-setup` to re-enable.
    - File exists, `enabled: true` → ✅ Continue.
-2. Run `node --version` via Bash
-3. Run `chrome-devtools-mcp --version` via Bash; if missing, suggest `npm install -g chrome-devtools-mcp`
-4. Run `browser(action="status")`
-   - If failed, run `lsof -i :9222 | grep LISTEN` to distinguish the cause:
-     - **No output** (port not listening) → Chrome is not running or remote debugging not enabled. Fix: open Chrome, go to `chrome://inspect/#remote-debugging`, click **"Allow remote debugging for this browser instance"**.
-     - **Has output** (port listening but MCP can't connect) → CDP connection became unstable after long Chrome session. Fix: restart Chrome.
-5. If step 4 succeeded, run evaluate to get Chrome version
+2. Run `node --version` via Bash.
+3. Run `chrome-devtools-mcp --version` via Bash; if missing, suggest `npm install -g chrome-devtools-mcp`.
+4. Run `browser(action="status")`:
+   - If failed, inspect the error message to distinguish the cause:
+     - error contains `"timed out"` → MCP daemon failed to start; Chrome not running or remote debugging not enabled. Fix: open `chrome://inspect/#remote-debugging`, click **"Allow remote debugging for this browser instance"**.
+     - error contains `"Chrome MCP error:"` → daemon alive but CDP connection broken after long session. Fix: restart Chrome.
+5. If step 4 succeeded, run evaluate to get Chrome version.
 
 Report all results together at the end.

@@ -292,6 +292,7 @@ module Clacky
         when ["GET",    "/api/providers"]     then api_list_providers(res)
         when ["GET",    "/api/onboard/status"]    then api_onboard_status(res)
         when ["GET",    "/api/browser/status"]    then api_browser_status(res)
+        when ["POST",   "/api/browser/configure"]  then api_browser_configure(req, res)
         when ["POST",   "/api/browser/reload"]    then api_browser_reload(res)
         when ["POST",   "/api/browser/toggle"]    then api_browser_toggle(res)
         when ["POST",   "/api/onboard/complete"]  then api_onboard_complete(req, res)
@@ -431,6 +432,20 @@ module Clacky
       # Returns real daemon liveness from BrowserManager (not just yml read).
       def api_browser_status(res)
         json_response(res, 200, @browser_manager.status)
+      end
+
+      # POST /api/browser/configure
+      # Called by browser-setup skill to write browser.yml and hot-reload the daemon.
+      # Body: { chrome_version: "146" }
+      def api_browser_configure(req, res)
+        body          = JSON.parse(req.body.to_s) rescue {}
+        chrome_version = body["chrome_version"].to_s.strip
+        return json_response(res, 422, { ok: false, error: "chrome_version is required" }) if chrome_version.empty?
+
+        @browser_manager.configure(chrome_version: chrome_version)
+        json_response(res, 200, { ok: true })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
       end
 
       # POST /api/browser/reload
