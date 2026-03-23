@@ -577,13 +577,15 @@ RSpec.describe Clacky::Server::HttpServer do
           context_description:  "Recall memories",
           user_invocable?:      true,
           disabled?:            false,
-          allowed_for_agent?:   true
+          allowed_for_agent?:   true,
+          encrypted?:           false
         )
         allow(mock_skill).to receive(:allowed_for_agent?).with(anything).and_return(true)
 
         mock_loader = instance_double(Clacky::SkillLoader,
           load_all:              nil,
-          user_invocable_skills: [mock_skill]
+          user_invocable_skills: [mock_skill],
+          loaded_from:           { "recall-memory" => "user" }
         )
         allow(agent).to receive(:skill_loader).and_return(mock_loader)
 
