@@ -1890,12 +1890,6 @@ module Clacky
       def build_session_from_data(session_data, permission_mode: :confirm_all)
         original_id = session_data[:session_id]
 
-        # Skip if this session is already registered (e.g., restored by a previous call)
-        return nil if @registry.exist?(original_id)
-
-        # Register with the original session_id so frontend hashes stay valid
-        @registry.create(session_id: original_id)
-
         client = @client_factory.call
         config = @agent_config.deep_copy
         config.permission_mode = permission_mode
@@ -1908,6 +1902,10 @@ module Clacky
         agent = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: profile)
         idle_timer = build_idle_timer(original_id, agent)
 
+        # Register session atomically with a fully-built agent so no concurrent
+        # caller ever sees agent=nil for this session. The duplicate-restore guard
+        # is handled upstream by SessionRegistry#ensure via @restoring.
+        @registry.create(session_id: original_id)
         @registry.with_session(original_id) do |s|
           s[:agent]      = agent
           s[:ui]         = ui

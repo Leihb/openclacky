@@ -152,8 +152,8 @@ module Clacky
       MIN_CHROME_MAJOR = 146
 
       # MCP handshake/call timeout (seconds)
-      MCP_HANDSHAKE_TIMEOUT = 5
-      MCP_CALL_TIMEOUT      = 10
+      MCP_HANDSHAKE_TIMEOUT = 10
+      MCP_CALL_TIMEOUT      = 60
 
       # Minimum Node.js major version required by chrome-devtools-mcp
       MIN_NODE_MAJOR = 20

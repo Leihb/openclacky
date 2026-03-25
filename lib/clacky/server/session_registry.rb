@@ -25,6 +25,11 @@ module Clacky
         @mutex            = Mutex.new
         @session_manager  = session_manager
         @session_restorer = session_restorer
+        # Tracks sessions currently being restored from disk.
+        # Other threads calling ensure() for the same id will wait via @restore_cond
+        # instead of seeing a half-built session (agent=nil).
+        @restoring        = {}
+        @restore_cond     = ConditionVariable.new
       end
 
       # Create a new (empty) session entry and return its id.
@@ -51,15 +56,44 @@ module Clacky
 
       # Ensure a session is in the registry, loading from disk if necessary.
       # Returns true if the session is now available, false if not found anywhere.
+      #
+      # Thread-safe: if two threads race on the same session_id, the second one
+      # waits for the first to finish restoring (including agent construction) rather
+      # than seeing a half-built entry with agent=nil.
       def ensure(session_id)
-        return true if exist?(session_id)
-        return false unless @session_manager && @session_restorer
+        session_data = nil
 
-        session_data = @session_manager.load(session_id)
-        return false unless session_data
+        @mutex.synchronize do
+          # Already fully ready — fast path.
+          return true if @sessions.key?(session_id)
 
-        @session_restorer.call(session_data)
-        exist?(session_id)
+          # Another thread is currently restoring this session — wait for it.
+          if @restoring[session_id]
+            @restore_cond.wait(@mutex) until !@restoring[session_id]
+            return @sessions.key?(session_id)
+          end
+
+          return false unless @session_manager && @session_restorer
+
+          session_data = @session_manager.load(session_id)
+          return false unless session_data
+
+          # Mark as "restore in progress" so concurrent callers wait.
+          @restoring[session_id] = true
+        end
+
+        # Run the (potentially slow) restore outside the mutex so other sessions
+        # are not blocked during agent construction.
+        begin
+          @session_restorer.call(session_data)
+        ensure
+          @mutex.synchronize do
+            @restoring.delete(session_id)
+            @restore_cond.broadcast
+          end
+        end
+
+        @sessions.key?(session_id)
       end
 
       # Restore all sessions from disk (up to n per source type) into the registry.
@@ -115,7 +149,10 @@ module Clacky
         return [] unless @session_manager
 
         live = @mutex.synchronize do
-          @sessions.transform_values { |s| { status: s[:status], error: s[:error] } }
+          @sessions.transform_values do |s|
+            model_info = s[:agent]&.current_model_info
+            { status: s[:status], error: s[:error], model: model_info&.dig(:model) }
+          end
         end
 
         all = @session_manager.all_sessions  # already sorted newest-first
@@ -138,6 +175,7 @@ module Clacky
             name:          s[:name] || "",
             status:        ls ? ls[:status].to_s : "idle",
             error:         ls ? ls[:error] : nil,
+            model:         ls&.dig(:model),
             source:        s_source(s),
             agent_profile: (s[:agent_profile] || "general").to_s,
             working_dir:   s[:working_dir],

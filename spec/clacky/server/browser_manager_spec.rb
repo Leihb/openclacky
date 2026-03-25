@@ -34,16 +34,18 @@ RSpec.describe Clacky::BrowserManager do
 
   # Inject a fake live daemon into the manager's @process ivar.
   # Stubs process_alive? to return true so callers don't need to pre-fill
-  # ping/pong responses in fake_stdout.
+  # responses in fake_stdout.
   def inject_process(responses = [])
-    all_output  = responses.map { |r| r + "\n" }.join
-    fake_stdin  = StringIO.new
-    fake_stdout = StringIO.new(all_output)
+    all_output   = responses.map { |r| r + "\n" }.join
+    fake_stdin   = StringIO.new
+    fake_stdout  = StringIO.new(all_output)
+    fake_wait    = double("wait_thr", alive?: true, pid: 99_888)
+    allow(fake_wait).to receive(:join).and_return(fake_wait)
     manager.instance_variable_set(:@process, {
       stdin:    fake_stdin,
       stdout:   fake_stdout,
       pid:      99_888,
-      wait_thr: nil
+      wait_thr: fake_wait
     })
     allow(manager).to receive(:process_alive?).and_return(true)
     [fake_stdin, fake_stdout]
@@ -199,27 +201,30 @@ RSpec.describe Clacky::BrowserManager do
       expect(manager.send(:process_alive?)).to be false
     end
 
-    it "returns false and clears @process when ping gets no response (daemon dead)" do
-      fake_stdin  = StringIO.new
-      fake_stdout = StringIO.new("")   # empty — ping gets no pong
-      fake_wait   = double("wait_thr", pid: 99_999)
+    it "returns false when wait_thr reports the process has exited" do
+      fake_wait = double("wait_thr", alive?: false)
       manager.instance_variable_set(:@process, {
-        stdin: fake_stdin, stdout: fake_stdout, pid: 99_999, wait_thr: fake_wait
+        stdin: StringIO.new, stdout: StringIO.new, pid: 99_999, wait_thr: fake_wait
       })
-      allow(Process).to receive(:kill).with("TERM", 99_999).and_return(nil)
       expect(manager.send(:process_alive?)).to be false
-      expect(manager.instance_variable_get(:@process)).to be_nil
     end
 
-    it "returns true when MCP ping succeeds" do
-      ping_pong   = json_rpc_response(id: 0, result: {})
-      fake_stdin  = StringIO.new
-      fake_stdout = StringIO.new(ping_pong + "\n")
+    it "returns false when wait_thr is nil (process not tracked)" do
       manager.instance_variable_set(:@process, {
-        stdin: fake_stdin, stdout: fake_stdout, pid: 99_888, wait_thr: nil
+        stdin: StringIO.new, stdout: StringIO.new, pid: 99_999, wait_thr: nil
+      })
+      expect(manager.send(:process_alive?)).to be false
+    end
+
+    it "returns true when wait_thr is alive and IO handles are open" do
+      fake_wait = double("wait_thr", alive?: true)
+      manager.instance_variable_set(:@process, {
+        stdin: StringIO.new, stdout: StringIO.new, pid: 99_888, wait_thr: fake_wait
       })
       expect(manager.send(:process_alive?)).to be true
     end
+
+
   end
 
   # ---------------------------------------------------------------------------
@@ -365,12 +370,13 @@ RSpec.describe Clacky::BrowserManager do
       expect(manager.instance_variable_get(:@call_id)).to eq(id1 + 2)
     end
 
-    it "raises and clears daemon on timeout" do
+    it "raises on timeout but keeps the daemon alive" do
       inject_process([])  # empty stdout → no response
       allow(manager).to receive(:read_response).and_return(nil)
 
       expect { manager.mcp_call("list_pages", {}) }.to raise_error(/timed out/)
-      expect(manager.instance_variable_get(:@process)).to be_nil
+      # Process must NOT be killed — it may still be healthy
+      expect(manager.instance_variable_get(:@process)).not_to be_nil
     end
 
     it "raises on JSON-RPC error response" do

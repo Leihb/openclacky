@@ -36,22 +36,17 @@ module Clacky
         @current_task_id = session_data.dig(:time_machine, :current_task_id) || 0
         @active_task_id = session_data.dig(:time_machine, :active_task_id) || 0
 
-        # Check if the session ended with an error
+        # Check if the session ended with an error.
+        # We record the rollback intent here but do NOT truncate history immediately —
+        # truncating at restore time causes the history replay to return empty results,
+        # leaving the chat panel blank on first open.
+        # Instead, the rollback is deferred: history is trimmed lazily when the user
+        # actually sends the next message (see run() / handle_user_message).
         last_status = session_data.dig(:stats, :last_status)
         last_error = session_data.dig(:stats, :last_error)
 
         if last_status == "error" && last_error
-          # Trim back to just before the last real user message that caused the error
-          last_user_index = @history.last_real_user_index
-          if last_user_index
-            @history.truncate_from(last_user_index)
-
-            @hooks.trigger(:session_rollback, {
-              reason: "Previous session ended with error",
-              error_message: last_error,
-              rolled_back_message_index: last_user_index
-            })
-          end
+          @pending_error_rollback = true
         end
 
         # Rebuild and refresh the system prompt so any newly installed skills

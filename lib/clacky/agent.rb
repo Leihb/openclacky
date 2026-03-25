@@ -72,6 +72,7 @@ module Clacky
       @debug_logs = []  # Debug logs for troubleshooting
       @pending_injections = []     # Pending inline skill injections to flush after observe()
       @pending_script_tmpdirs = [] # Decrypted-script tmpdirs to shred when agent.run completes
+      @pending_error_rollback = false  # Deferred rollback flag set by restore_session on error
 
       # Compression tracking
       @compression_level = 0  # Tracks how many times we've compressed (for progressive summarization)
@@ -179,6 +180,22 @@ module Clacky
         total_requests: 0,
         cache_hit_requests: 0
       }
+
+      # Deferred error rollback: if the previous session ended with an error,
+      # trim history back to just before that failed user message now — at the
+      # point the user actually sends a new message, not at restore time.
+      # (Trimming at restore time caused replay_history to return empty results.)
+      if @pending_error_rollback
+        @pending_error_rollback = false
+        last_user_index = @history.last_real_user_index
+        if last_user_index
+          @history.truncate_from(last_user_index)
+          @hooks.trigger(:session_rollback, {
+            reason: "Previous session ended with error — rolling back before new message",
+            rolled_back_message_index: last_user_index
+          })
+        end
+      end
 
       # Add system prompt as the first message if this is the first run
       if @history.empty?

@@ -98,14 +98,15 @@ module Clacky
     end
 
     # Returns a status hash with real daemon liveness.
+    # Uses wait_thr.alive? for a lightweight check — no ping, no mutex needed.
     # @return [Hash] { enabled: bool, daemon_running: bool, chrome_version: String|nil }
     def status
       cfg     = load_config
       enabled = cfg["enabled"] == true
-      running = @mutex.synchronize { process_alive? }
+      running = @process && @process[:wait_thr]&.alive?
       {
         enabled:        enabled,
-        daemon_running: running,
+        daemon_running: !!running,
         chrome_version: cfg["chrome_version"]
       }
     end
@@ -167,7 +168,6 @@ module Clacky
                                   timeout: Clacky::Tools::Browser::MCP_CALL_TIMEOUT)
 
         unless call_resp
-          kill_process!
           raise "Chrome MCP tools/call '#{tool_name}' timed out after #{Clacky::Tools::Browser::MCP_CALL_TIMEOUT}s"
         end
 
@@ -240,38 +240,42 @@ module Clacky
     end
 
     # Must be called inside @mutex.
-    # Sends an MCP `ping` (MCP spec 2024-11-05) and waits up to 3s for a pong.
-    # A successful ping means the MCP daemon process is alive and responsive.
-    # Chrome connection health is NOT checked here — Chrome problems surface only
-    # during the actual mcp_call and are reported back to the caller.
+    # Uses wait_thr.alive? as the primary liveness check — fast and reliable.
+    # Only falls back to an MCP ping if the thread is alive but we want to
+    # verify the protocol layer is responsive (currently skipped for simplicity).
+    # Kills the process only when the OS thread confirms it has actually exited.
     def process_alive?
       return false if @process.nil?
 
-      ping_id = 0
-      msg = json_rpc("ping", {}, id: ping_id)
-      @process[:stdin].write(msg + "\n")
-      @process[:stdin].flush
-      resp = read_response(@process[:stdout], target_id: ping_id, timeout: 3)
-      if resp.nil?
-        kill_process!
-        return false
-      end
-      true
-    rescue StandardError
-      kill_process!
-      false
+      @process[:wait_thr]&.alive? == true
     end
 
-    # Must be called inside @mutex
+    # Must be called inside @mutex.
+    # Clears @process immediately so other threads see it as gone, then
+    # closes IO handles and sends TERM. Uses wait_thr.join(2) in a background
+    # thread to reap the child and avoid zombie processes; escalates to KILL
+    # if the process doesn't exit within the grace period.
     def kill_process!
       ps = @process
       return unless ps
 
-      Process.kill("TERM", ps[:pid]) rescue nil
+      @process = nil  # Clear first — prevents other threads from re-entering
+
       ps[:stdin].close  rescue nil
       ps[:stdout].close rescue nil
-      @process = nil
-      Clacky::Logger.info("[BrowserManager] MCP daemon killed")
+      Process.kill("TERM", ps[:pid]) rescue nil
+
+      # Reap the child process asynchronously to avoid zombies
+      Thread.new do
+        Thread.current.name = "browser-manager-reap"
+        unless ps[:wait_thr].join(5)
+          Process.kill("KILL", ps[:pid]) rescue nil
+        end
+      rescue StandardError
+        nil
+      end
+
+      Clacky::Logger.info("[BrowserManager] MCP daemon killed (pid=#{ps[:pid]})")
     end
 
     def json_rpc(method, params, id:)
