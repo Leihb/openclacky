@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.11] - 2026-03-25
+
+### Added
+- **Network-aware installer mirrors**: the install script now automatically detects whether you're in China and picks the fastest mirror (RubyGems China mirror, GitHub, etc.) — no manual configuration needed
+- **Shell rc-file loading**: the shell tool now sources your `.zshrc` / `.bashrc` so commands that depend on environment variables or aliases set in your shell profile work correctly
+
+### Improved
+- **Browser tool `evaluate` targets active page**: JavaScript evaluation now automatically targets the currently active browser tab instead of the last opened one, so `evaluate` always runs in the right context
+- **Browser MCP process cleaned up on server shutdown**: the `chrome-devtools-mcp` node process is now stopped when the server shuts down, preventing orphaned processes that held onto port 7070
+- **Server worker process isolation**: workers are now spawned in their own process group, ensuring grandchild processes (e.g. browser MCP) are fully cleaned up during zero-downtime restarts
+- **Channel status via live API**: `channel status` now queries the running server API instead of reading `~/.clacky/channels.yml` directly, so it reflects the actual runtime state
+- **Idle compression timer race fix**: the compression thread is now registered inside a mutex before starting, eliminating a race where `cancel()` could miss an in-flight compression and leave history in an inconsistent state
+- **Compression token display accuracy**: the post-compression token count now uses the rebuilt history estimate instead of the stale pre-compression API count
+- **Shell process group signals**: `SIGTERM`/`SIGKILL` are now sent to the entire process group (`-pgid`) instead of just the child PID, ensuring backgrounded subprocesses are also killed on timeout
+
+### Fixed
+- **Task error session save**: sessions are now correctly saved to disk even when a task ends with an error, preventing session loss on agent failures
+- **History load and model load bugs**: fixed crashes when loading sessions with missing or malformed history/model fields
+- **Default model updated to Claude claude-sonnet-4-6**: bumped the default Gemini model reference from `gemini-2.5-flash` → `gemini-2.7-flash`
+
+### More
+- Renamed gem references from `open-clacky` to `openclacky` across docs, gemspec, and scripts
+
 ## [0.9.10] - 2026-03-24
 
 ### Added
