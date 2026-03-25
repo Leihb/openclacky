@@ -144,9 +144,9 @@ module Clacky
           chunk_path: chunk_path
         }
 
-        # Show compression info (@previous_total_tokens updated by call_llm with actual API token count)
+        # Show compression info (use estimated tokens from rebuilt history)
         @ui&.show_info(
-          "History compressed (~#{compression_context[:original_token_count]} -> ~#{@previous_total_tokens} tokens, " \
+          "History compressed (~#{compression_context[:original_token_count]} -> ~#{@history.estimate_tokens} tokens, " \
           "level #{compression_context[:compression_level]})"
         )
       end

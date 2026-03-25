@@ -63,7 +63,7 @@ module Clacky
           @adapters.each { |adapter| safe_stop_adapter(adapter) }
           @adapters.clear
         end
-        @adapter_threads.each { |t| t.join(5) }
+        @adapter_threads.each { |t| t.join(1) }
         @adapter_threads.clear
       end
 

@@ -212,16 +212,23 @@ module Clacky
         server = WEBrick::HTTPServer.new(**webrick_opts)
 
         # Override WEBrick's signal traps now that `server` is available.
-        # On INT/TERM: call server.shutdown (graceful), with a 3s hard-kill fallback.
+        # On INT/TERM: call server.shutdown (graceful), with a 1s hard-kill fallback.
+        # Also stop BrowserManager so the chrome-devtools-mcp node process is killed
+        # before this worker exits — otherwise it becomes an orphan and holds port 7070.
         shutdown_once = false
         shutdown_proc = proc do
           next if shutdown_once
           shutdown_once = true
           Thread.new do
-            sleep 1
+            sleep 2
             Clacky::Logger.warn("[HttpServer] Forced exit after graceful shutdown timeout.")
             exit!(0)
           end
+          # Stop channel and browser managers in parallel to minimize shutdown time.
+          t1 = Thread.new { @channel_manager.stop rescue nil }
+          t2 = Thread.new { Clacky::BrowserManager.instance.stop rescue nil }
+          t1.join(1.5)
+          t2.join(1.5)
           server.shutdown rescue nil
         end
         trap("INT")  { shutdown_proc.call }

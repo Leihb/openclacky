@@ -268,7 +268,7 @@ module Clacky
       # Reap the child process asynchronously to avoid zombies
       Thread.new do
         Thread.current.name = "browser-manager-reap"
-        unless ps[:wait_thr].join(5)
+        unless ps[:wait_thr].join(1)
           Process.kill("KILL", ps[:pid]) rescue nil
         end
       rescue StandardError

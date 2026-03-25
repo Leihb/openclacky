@@ -374,8 +374,13 @@ module Clacky
           end
 
         when "evaluate"
-          js     = opts[:js] || opts["js"] || ""
-          result = mcp_call("evaluate_script", { function: "() => { return (#{js}) }" })
+          js      = opts[:js] || opts["js"] || ""
+          pages   = extract_pages(mcp_call("list_pages"))
+          sel     = pages.find { |p| p[:selected] }
+          page_id = sel ? sel[:id] : (pages.first && pages.first[:id])
+          eval_args = { function: "() => { return (#{js}) }" }
+          eval_args[:pageId] = page_id if page_id
+          result = mcp_call("evaluate_script", eval_args)
           return { action: "act", success: true, profile: "user", output: extract_message(result).to_s }
 
         when "click_at"

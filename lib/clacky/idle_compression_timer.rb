@@ -41,27 +41,42 @@ module Clacky
         Thread.current.name = "idle-compression-timer"
         sleep IDLE_DELAY
 
-        # Kick off compression in a separate thread so it can be interrupted
-        compress_thread = Thread.new do
-          Thread.current.name = "idle-compression-work"
-          run_compression
+        # Register @compress_thread inside the mutex BEFORE the thread starts running,
+        # so cancel() can always find and interrupt it even if it fires immediately.
+        compress_thread = nil
+        @mutex.synchronize do
+          compress_thread = Thread.new do
+            Thread.current.name = "idle-compression-work"
+            run_compression
+          end
+          @compress_thread = compress_thread
         end
 
-        @mutex.synchronize { @compress_thread = compress_thread }
         compress_thread.join
         @mutex.synchronize { @compress_thread = nil; @timer_thread = nil }
       end
     end
 
     # Cancel the timer and any in-progress compression.
-    # Safe to call even if the timer is not running.
+    # Raises AgentInterrupted on the compress thread and waits for it to fully exit,
+    # ensuring history rollback completes before the caller starts a new agent.run.
     def cancel
+      compress_thread_to_join = nil
+
       @mutex.synchronize do
         @timer_thread&.kill
-        @compress_thread&.raise(Clacky::AgentInterrupted, "Idle timer cancelled")
+        if @compress_thread&.alive?
+          @compress_thread.raise(Clacky::AgentInterrupted, "Idle timer cancelled")
+          compress_thread_to_join = @compress_thread
+        end
         @timer_thread    = nil
         @compress_thread = nil
       end
+
+      # Join outside the mutex to avoid deadlock.
+      # This blocks until the compress thread has finished rolling back history,
+      # so the subsequent agent.run sees a clean, consistent history.
+      compress_thread_to_join&.join(5)
     end
 
     # True if the timer or compression is currently active.

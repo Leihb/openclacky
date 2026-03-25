@@ -121,33 +121,24 @@ end
 # ---------------------------------------------------------------------------
 
 class BrowserSession
-  attr_reader :target_id
-
   def initialize(client)
-    @client    = client
-    @target_id = nil
+    @client = client
   end
 
   def navigate(url)
-    if @target_id
-      @client.call("navigate", target_id: @target_id, url: url)
-    else
-      result = @client.call("open", url: url)
-      @target_id = result["targetId"]
-    end
+    @client.call("open", url: url)
     sleep 2
     snapshot
   end
 
   def snapshot(interactive: true, compact: true)
-    result = @client.call("snapshot",
-      target_id: @target_id, interactive: interactive, compact: compact)
+    result = @client.call("snapshot", interactive: interactive, compact: compact)
     result["output"].to_s
   end
 
   # Run JavaScript in the page context and return the raw output string.
   def evaluate(js)
-    result = @client.call("act", target_id: @target_id, kind: "evaluate", js: js)
+    result = @client.call("act", kind: "evaluate", js: js)
     result["output"].to_s
   end
 
@@ -155,7 +146,6 @@ class BrowserSession
   # The browser evaluate output may be wrapped in MCP markdown — parse it out.
   def cookies
     result = @client.call("act",
-      target_id: @target_id,
       kind: "evaluate",
       js: "document.cookie")
     raw = result["output"].to_s
@@ -173,7 +163,6 @@ class BrowserSession
 
     # Try lark_oapi_csrf_token specifically via JS
     result = @client.call("act",
-      target_id: @target_id,
       kind: "evaluate",
       js: "document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('lark_oapi_csrf_token='))?.split('=')[1] || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('lgw_csrf_token='))?.split('=')[1] || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('swp_csrf_token='))?.split('=')[1] || ''")
     token = extract_string_value(result["output"].to_s)
@@ -181,7 +170,6 @@ class BrowserSession
 
     # Try from window object
     result = @client.call("act",
-      target_id: @target_id,
       kind: "evaluate",
       js: "window.csrfToken || ''")
     extract_string_value(result["output"].to_s)

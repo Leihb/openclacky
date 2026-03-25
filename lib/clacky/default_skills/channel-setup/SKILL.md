@@ -19,7 +19,7 @@ allowed-tools:
 
 # Channel Setup Skill
 
-Configure IM platform channels for openclacky. Config is stored at `~/.clacky/channels.yml`.
+Configure IM platform channels for openclacky.
 
 ---
 
@@ -38,21 +38,38 @@ Configure IM platform channels for openclacky. Config is stored at `~/.clacky/ch
 
 ## `status`
 
-Read `~/.clacky/channels.yml` and display:
+Call the server API:
+
+```bash
+curl -s http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/channels
+```
+
+Response shape (example):
+```json
+{"channels":[
+  {"platform":"feishu","enabled":true,"running":true,"has_config":true,"app_id":"cli_xxx","domain":"https://open.feishu.cn","allowed_users":[]},
+  {"platform":"wecom","enabled":false,"running":false,"has_config":false,"bot_id":""},
+  {"platform":"weixin","enabled":true,"running":true,"has_config":true,"has_token":true,"base_url":"https://ilinkai.weixin.qq.com","allowed_users":[]}
+]}
+```
+
+Display the result:
 
 ```
 Channel Status
 ─────────────────────────────────────────────────────
-Platform   Enabled   Details
-feishu     ✅ yes    app_id: cli_xxx...  domain: feishu.cn
-wecom      ❌ no     (not configured)
-weixin     ✅ yes    2 account(s) logged in
+Platform   Enabled   Running   Details
+feishu     ✅ yes    ✅ yes    app_id: cli_xxx...
+wecom      ❌ no     ❌ no     (not configured)
+weixin     ✅ yes    ✅ yes    has_token: true
 ─────────────────────────────────────────────────────
 ```
 
-For Weixin, show `has_token: true/false` from the channels.yml entry (token is never displayed).
+- Feishu: show `app_id` (truncated to 12 chars)
+- WeCom: show `bot_id` if present
+- Weixin: show `has_token: true/false` (token value is never displayed)
 
-If the file doesn't exist: "No channels configured yet. Run `/channel-setup setup` to get started."
+If the API is unreachable or returns an empty list: "No channels configured yet. Run `/channel-setup setup` to get started."
 
 ---
 
@@ -140,6 +157,7 @@ Only reach here if the automated script failed.
       -H "Content-Type: application/json" \
       -d '{"app_id":"<APP_ID>","app_secret":"<APP_SECRET>","domain":"https://open.feishu.cn"}'
     ```
+    **CRITICAL: This curl call is the ONLY way to save credentials. NEVER write `~/.clacky/channels.yml` or any file under `~/.clacky/channels/` directly. The server API handles persistence and hot-reload.**
 11. **Wait for connection** — Poll until log shows `[feishu-ws] WebSocket connected ✅`:
     ```bash
     for i in $(seq 1 20); do
@@ -238,29 +256,39 @@ Tell the user while waiting:
 
 ## `enable`
 
-Read `~/.clacky/channels.yml`, set `channels.<platform>.enabled: true`, write back.
+Call the server API to re-enable the platform (this reads from disk, sets enabled, saves, and hot-reloads):
 
-If the platform has no credentials, redirect to `setup`.
+```bash
+curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/channels/<platform> \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
 
-Say: "✅ `<platform>` channel enabled. Restart `clacky server` to activate."
+If the platform has no credentials (404 or error), redirect to `setup`.
+
+Say: "✅ `<platform>` channel enabled."
 
 ---
 
 ## `disable`
 
-Read `~/.clacky/channels.yml`, set `channels.<platform>.enabled: false`, write back.
+Call the server API to disable the platform:
 
-Say: "❌ `<platform>` channel disabled. Restart `clacky server` to deactivate."
+```bash
+curl -s -X DELETE http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/channels/<platform>
+```
+
+Say: "❌ `<platform>` channel disabled."
 
 ---
 
 ## `reconfigure`
 
-1. Show current config (mask secrets).
+1. Show current config via `GET /api/channels` (mask secrets — show last 4 chars only).
 2. Ask: update credentials / change allowed users / add a new platform / enable or disable a platform.
-3. For credential updates, re-run the relevant setup flow.
-4. Write atomically: write to `~/.clacky/channels.yml.tmp` then rename to `~/.clacky/channels.yml`.
-5. Say: "Restart `clacky server` to apply changes."
+3. For credential updates, re-run the relevant setup flow (which calls `POST /api/channels/<platform>`).
+4. **NEVER write `~/.clacky/channels.yml` directly** — always use the server API.
+5. Say: "Channel reconfigured."
 
 ---
 

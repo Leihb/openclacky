@@ -162,6 +162,13 @@ module Clacky
       @messages.empty?
     end
 
+    # Estimate total token count for all messages.
+    # Uses the ~4 chars/token heuristic (works well for English/code).
+    # Handles string content, array content blocks, and tool_calls.
+    def estimate_tokens
+      @messages.sum { |m| estimate_message_tokens(m) }
+    end
+
     # ─────────────────────────────────────────────
     # Output
     # ─────────────────────────────────────────────
@@ -178,6 +185,40 @@ module Clacky
     # For serialization, compression, and cloning.
     def to_a
       @messages.reject { |m| m[:transient] }.dup
+    end
+
+    # Estimate token count for a single message (role overhead + content).
+    private def estimate_message_tokens(message)
+      # ~4 tokens of overhead per message (role, formatting)
+      tokens = 4
+      tokens += estimate_content_tokens(message[:content])
+
+      # tool_calls: each call adds name + arguments chars
+      if message[:tool_calls].is_a?(Array)
+        message[:tool_calls].each do |tc|
+          tokens += estimate_content_tokens(tc.dig(:function, :name))
+          tokens += estimate_content_tokens(tc.dig(:function, :arguments))
+        end
+      end
+
+      tokens
+    end
+
+    # Estimate tokens from a content value (string, array of blocks, or nil).
+    # Heuristic: ASCII/code ~4 chars/token; CJK/multibyte ~1.5 chars/token.
+    private def estimate_content_tokens(content)
+      case content
+      when String
+        ascii_chars = content.scan(/[ -~]/).length
+        multibyte_chars = content.length - ascii_chars
+        ((ascii_chars / 4.0) + (multibyte_chars / 1.5)).ceil
+      when Array
+        content.sum do |block|
+          block.is_a?(Hash) ? estimate_content_tokens(block[:text] || block["text"]) : 0
+        end
+      else
+        0
+      end
     end
 
     # Drop the trailing assistant message if it has tool_calls with no subsequent

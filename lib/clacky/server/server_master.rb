@@ -128,8 +128,12 @@ module Clacky
 
         Clacky::Logger.info("[Master PID=#{Process.pid}] spawn: #{ruby} #{script} #{worker_argv.join(' ')}")
         Clacky::Logger.info("[Master PID=#{Process.pid}] env: #{env.inspect}")
-        pid = spawn(env, ruby, script, *worker_argv)
-        Clacky::Logger.info("[Master PID=#{Process.pid}] Spawned worker PID=#{pid}")
+        # pgroup: 0 puts worker in its own process group.
+        # This lets Master send TERM/KILL to the entire group (-pid) on shutdown,
+        # ensuring grandchildren (e.g. chrome-devtools-mcp node process) are also
+        # cleaned up even if the worker is force-killed before its shutdown_proc runs.
+        pid = spawn(env, ruby, script, *worker_argv, pgroup: 0)
+        Clacky::Logger.info("[Master PID=#{Process.pid}] Spawned worker PID=#{pid} pgroup=#{pid}")
         pid
       end
 
@@ -144,9 +148,10 @@ module Clacky
         # Give the new worker time to bind and start serving
         sleep NEW_WORKER_BOOT_WAIT
 
-        # Gracefully stop old worker
+        # Gracefully stop old worker — TERM the whole process group first so
+        # grandchildren (node MCP, etc.) also get a chance to shut down cleanly.
         begin
-          Process.kill("TERM", old_pid)
+          Process.kill("TERM", -old_pid)
           # Reap it (non-blocking loop so we don't block the monitor)
           deadline = Time.now + 5
           loop do
@@ -155,7 +160,7 @@ module Clacky
             break if Time.now > deadline
             sleep 0.1
           end
-          Process.kill("KILL", old_pid) rescue nil  # force-kill if still alive
+          Process.kill("KILL", -old_pid) rescue nil  # force-kill entire group if still alive
         rescue Errno::ESRCH
           # already gone — fine
         end
@@ -167,15 +172,17 @@ module Clacky
         Clacky::Logger.info("[Master] Shutting down (worker PID=#{@worker_pid})...")
         if @worker_pid
           begin
-            Process.kill("TERM", @worker_pid)
-            # Wait up to 2s for worker graceful exit, then KILL
-            deadline = Time.now + 2
+            # TERM the entire worker process group so grandchildren (node MCP, etc.)
+            # are also signalled and can clean up before we force-kill.
+            Process.kill("TERM", -@worker_pid)
+            # Wait up to 2s for worker graceful exit, then KILL the whole group
+            deadline = Time.now + 3
             loop do
               pid, = Process.waitpid2(@worker_pid, Process::WNOHANG)
               break if pid
               if Time.now > deadline
                 Clacky::Logger.warn("[Master] Worker did not exit in time, sending KILL...")
-                Process.kill("KILL", @worker_pid) rescue nil
+                Process.kill("KILL", -@worker_pid) rescue nil
                 break
               end
               sleep 0.1
@@ -236,8 +243,8 @@ module Clacky
           Process.kill("TERM", pid)
           Clacky::Logger.info("[Master] Sent TERM to existing master (PID=#{pid}), waiting up to 3s...")
 
-          unless port_free_within?(3)
-            Clacky::Logger.warn("[Master] Port #{@port} still in use after 3s, sending KILL to PID=#{pid}...")
+          unless port_free_within?(5)
+            Clacky::Logger.warn("[Master] Port #{@port} still in use after 5s, sending KILL to PID=#{pid}...")
             Process.kill("KILL", pid) rescue Errno::ESRCH
             unless port_free_within?(2)
               Clacky::Logger.error("[Master] Port #{@port} still in use after KILL, giving up.")

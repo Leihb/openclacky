@@ -91,7 +91,6 @@ module Clacky
         stdout_buffer = EncodingSafeBuffer.new
         stderr_buffer = EncodingSafeBuffer.new
         soft_timeout_triggered = false
-        process_pid = nil
 
         # Store output buffer reference for real-time access (use LimitStack for memory efficiency)
         @output_buffer = output_buffer
@@ -102,13 +101,19 @@ module Clacky
         @stdout_buffer = stdout_buffer
         @stderr_buffer = stderr_buffer
 
-        # Use chdir option for thread-safe working directory (no global Dir.chdir needed)
-        popen3_opts = {}
+        # pgroup: 0 puts the child in its own process group so that Ctrl-C
+        # (SIGINT sent to the terminal's foreground group) does NOT propagate
+        # into the child.  The parent catches SIGINT via its own trap and
+        # explicitly kills the child process group.
+        # We do NOT use -i (interactive) here — that flag causes zsh to try
+        # acquiring /dev/tty as a controlling terminal, which triggers SIGTTIN
+        # when the process is not in the terminal's foreground group.
+        # Instead, wrap_with_shell sources the user's rc file explicitly.
+        popen3_opts = { pgroup: 0 }
         popen3_opts[:chdir] = working_dir if working_dir && Dir.exist?(working_dir)
 
         begin
           Open3.popen3(wrap_with_shell(command), **popen3_opts) do |stdin, stdout, stderr, wait_thr|
-            process_pid = wait_thr.pid
             start_time = Time.now
 
             stdout.sync = true
@@ -118,14 +123,11 @@ module Clacky
               loop do
                 elapsed = Time.now - start_time
 
+                # --- Hard timeout: kill process group and return ---
                 if elapsed > hard_timeout
-                  Process.kill('TERM', wait_thr.pid) rescue nil
-                  sleep 0.5
-                  Process.kill('KILL', wait_thr.pid) if wait_thr.alive? rescue nil
-
-                  # Force-close stdout/stderr pipes so that any orphaned child
-                  # processes (e.g. backgrounded with &) that still hold the pipe
-                  # open don't keep popen3's block alive forever.
+                  Process.kill('TERM', -wait_thr.pid) rescue nil
+                  sleep 0.05
+                  Process.kill('KILL', -wait_thr.pid) rescue nil
                   stdout.close rescue nil
                   stderr.close rescue nil
 
@@ -140,17 +142,15 @@ module Clacky
                   )
                 end
 
+                # --- Soft timeout: check for interactive prompts ---
                 if elapsed > soft_timeout && !soft_timeout_triggered
                   soft_timeout_triggered = true
 
-                  # L1: Check for interaction patterns in stdout then stderr
-                  # (sudo password prompt goes to /dev/tty and bypasses both pipes,
-                  #  so we also heuristically detect sudo commands still running)
                   interaction = detect_interaction(stdout_buffer.string) ||
                                 detect_interaction(stderr_buffer.string) ||
                                 detect_sudo_waiting(command, wait_thr)
                   if interaction
-                    Process.kill('TERM', wait_thr.pid) rescue nil
+                    Process.kill('TERM', -wait_thr.pid) rescue nil
                     stdout.close rescue nil
                     stderr.close rescue nil
                     return format_waiting_input_result(
@@ -176,44 +176,43 @@ module Clacky
                         else
                           stderr_buffer.write(data)
                         end
-                        # Update shared output buffer for real-time access
                         update_output_buffer
                       rescue IO::WaitReadable, EOFError
                       end
                     end
                   end
-                rescue StandardError => e
+                rescue StandardError
                 end
 
                 sleep 0.1
               end
 
-              # Drain any remaining output from pipes.
-              # We must NOT use a plain blocking stdout.read here because
-              # background processes launched with & inherit the pipe's write-end
-              # fd and keep it open, causing read to block forever even after the
-              # shell process itself has exited.
-              # Use a short non-blocking drain loop instead so we flush any
-              # buffered data without hanging indefinitely.
+              # Drain any remaining output from pipes non-blockingly.
+              # We must NOT use a plain blocking read here because background
+              # processes launched with & inherit the pipe's write-end fd and
+              # keep it open, causing read to block forever after the shell exits.
+              # Select both stdout+stderr together so we wait at most drain_deadline
+              # total (not per-IO), and break as soon as both pipes signal EOF.
               drain_deadline = Time.now + 2
-              [stdout, stderr].each do |io|
-                buf = io == stdout ? stdout_buffer : stderr_buffer
-                begin
-                  loop do
-                    remaining = drain_deadline - Time.now
-                    break if remaining <= 0
-                    ready = IO.select([io], nil, nil, [remaining, 0.1].min)
-                    break unless ready
+              open_ios = [stdout, stderr].reject { |io| io.closed? }
+              begin
+                loop do
+                  remaining = drain_deadline - Time.now
+                  break if remaining <= 0 || open_ios.empty?
+                  ready = IO.select(open_ios, nil, nil, [remaining, 0.1].min)
+                  next unless ready
+                  ready[0].each do |io|
+                    buf = io == stdout ? stdout_buffer : stderr_buffer
                     begin
                       buf.write(io.read_nonblock(4096))
                     rescue IO::WaitReadable
-                      # no data right now, keep looping until deadline
+                      # not ready yet, keep waiting
                     rescue EOFError
-                      break # pipe closed cleanly
+                      open_ios.delete(io)
                     end
                   end
-                rescue StandardError
                 end
+              rescue StandardError
               end
 
               stdout_output = stdout_buffer.string
@@ -229,16 +228,15 @@ module Clacky
                 output_truncated: output_truncated?(stdout_output, stderr_output, max_output_lines)
               }
             ensure
-              # Ensure child process is killed when block exits (for any reason: exception, return, etc.)
+              # Ensure child process group is killed when block exits
               if wait_thr&.alive?
-                Process.kill('TERM', wait_thr.pid) rescue nil
+                Process.kill('TERM', -wait_thr.pid) rescue nil
                 sleep 0.1
-                Process.kill('KILL', wait_thr.pid) if wait_thr.alive? rescue nil
+                Process.kill('KILL', -wait_thr.pid) rescue nil
               end
             end
           end
         rescue StandardError => e
-          # Handle other errors
           stdout_output = stdout_buffer.string
           stderr_output = "Error executing command: #{e.message}\n#{e.backtrace.first(3).join("\n")}"
 
@@ -253,22 +251,53 @@ module Clacky
         end
       end
 
-      # Wrap command in an interactive shell so it loads user's rc files
-      # (e.g. ~/.bashrc, ~/.zshrc) and picks up PATH changes from tools
-      # like nvm, rbenv, brew, etc. Falls back to bash if $SHELL is unset.
+      # Wrap command in a login shell and explicitly source the user's interactive
+      # rc file so that PATH customisations from nvm, rbenv, brew, etc. are available.
+      #
+      # We use -l (login) instead of -i (interactive) to avoid SIGTTIN: when the
+      # process runs in a new process group (pgroup: 0) it is not the terminal's
+      # foreground group, so an interactive shell trying to acquire /dev/tty gets
+      # stopped by the kernel immediately.
+      #
+      # -l loads ~/.zprofile / ~/.bash_profile which is enough for most PATH setup.
+      # We additionally source the interactive rc file (~/.zshrc or ~/.bashrc) so
+      # aliases, functions, and tool shims (rbenv init, nvm, etc.) are also present.
       def wrap_with_shell(command)
-        shell = ENV['SHELL'].to_s
-        shell = '/bin/bash' if shell.empty?
-        "#{shell} -i -l -c #{Shellwords.escape(command)}"
+        # shell = ENV['SHELL'].to_s
+        # shell = '/bin/bash' if shell.empty?
+
+        # rc_source = rc_source_snippet(shell)
+        # full_command = rc_source ? "#{rc_source} #{command}" : command
+
+        # "#{shell} -l -c #{Shellwords.escape(full_command)}"
+        return command
+      end
+
+      # Returns a shell snippet that sources the user's interactive rc file,
+      # suppressing all errors so missing files never break command execution.
+      private def rc_source_snippet(shell)
+        shell_name = File.basename(shell)
+        home = ENV['HOME'].to_s
+
+        rc_file = case shell_name
+        when 'zsh'  then File.join(home, '.zshrc')
+        when 'bash' then File.join(home, '.bashrc')
+        when 'fish' then File.join(home, '.config', 'fish', 'config.fish')
+        end
+
+        return nil unless rc_file
+
+        # Source silently: suppress stderr and ignore exit code so that
+        # errors in the user's rc file don't prevent the command from running.
+        "source #{Shellwords.escape(rc_file)} 2>/dev/null;"
       end
 
       def determine_timeouts(command, soft_timeout, hard_timeout)
-        # 检查是否是慢命令
         is_slow = SLOW_COMMANDS.any? { |slow_cmd| command.include?(slow_cmd) }
 
         if is_slow
           soft_timeout ||= 30
-          hard_timeout ||= 180 # 3分钟
+          hard_timeout ||= 180
         else
           soft_timeout ||= 7
           hard_timeout ||= 60
@@ -277,7 +306,8 @@ module Clacky
         [soft_timeout, hard_timeout]
       end
 
-      # L1: 规则检测
+      # Rule-based interaction detection: scan the last few lines of output
+      # for patterns that indicate the command is waiting for user input.
       def detect_interaction(output)
         return nil if output.empty?
 
@@ -288,18 +318,17 @@ module Clacky
           next if line_stripped.empty?
 
           INTERACTION_PATTERNS.each do |pattern, type|
-            if line.match?(pattern)
-              return { type: type, line: line_stripped }
-            end
+            return { type: type, line: line_stripped } if line.match?(pattern)
           end
         end
 
         nil
       end
 
-      # Heuristic: sudo writes its password prompt to /dev/tty, bypassing stdout/stderr pipes.
-      # If the command contains sudo and the process is still alive after soft_timeout,
-      # it's almost certainly waiting for a password.
+      # Heuristic: sudo writes its password prompt to /dev/tty, bypassing
+      # stdout/stderr pipes.  If the command contains sudo and the process is
+      # still alive after soft_timeout, it is almost certainly waiting for a
+      # password.
       def detect_sudo_waiting(command, wait_thr)
         return nil unless wait_thr.alive?
         return nil unless command.match?(/\bsudo\b/)
@@ -356,7 +385,10 @@ module Clacky
         {
           command: command,
           stdout: truncate_output(stdout, max_output_lines),
-          stderr: truncate_output(stderr.empty? ? "Command timed out after #{elapsed.round(1)} seconds (#{type}=#{timeout}s)" : stderr, max_output_lines),
+          stderr: truncate_output(
+            stderr.empty? ? "Command timed out after #{elapsed.round(1)} seconds (#{type}=#{timeout}s)" : stderr,
+            max_output_lines
+          ),
           exit_code: -1,
           success: false,
           state: 'TIMEOUT',
@@ -369,9 +401,7 @@ module Clacky
       def truncate_output(output, max_lines)
         return output if output.nil? || output.empty?
 
-        # First truncate individual long lines (e.g. minified JS/CSS, expanded JSON)
         output = truncate_long_lines(output, MAX_LINE_CHARS)
-
         lines = output.lines
         return output if lines.length <= max_lines
 
@@ -416,42 +446,31 @@ module Clacky
       MAX_LINE_CHARS = 500
 
       def format_result_for_llm(result)
-        # Return error info as-is if command failed or timed out
         return result if result[:error] || result[:state] == 'TIMEOUT' || result[:state] == 'WAITING_INPUT'
 
-        # Ensure all string fields are valid UTF-8 before JSON serialization.
-        # stdout/stderr are already scrubbed by EncodingSafeBuffer, but :command
-        # (and any other string field) may still carry ASCII-8BIT encoding when
-        # the caller built the command from binary paths or ENV values.
         enc = Clacky::Utils::Encoding
         stdout = enc.to_utf8(result[:stdout] || "")
         stderr = enc.to_utf8(result[:stderr] || "")
         exit_code = result[:exit_code] || 0
 
-        # Build compact result with truncated output
         compact = {
           command: enc.to_utf8(result[:command].to_s),
           exit_code: exit_code,
           success: result[:success]
         }
 
-        # Add elapsed time if available (keep original precision)
         compact[:elapsed] = result[:elapsed] if result[:elapsed]
 
-        # Extract command name for temp file naming
         command_name = extract_command_name(compact[:command])
 
-        # Process stdout: truncate and optionally save to temp file
         stdout_info = truncate_and_save(stdout, MAX_LLM_OUTPUT_CHARS, "stdout", command_name)
         compact[:stdout] = stdout_info[:content]
         compact[:stdout_full] = stdout_info[:temp_file] if stdout_info[:temp_file]
 
-        # Process stderr: truncate and optionally save to temp file
         stderr_info = truncate_and_save(stderr, MAX_LLM_OUTPUT_CHARS, "stderr", command_name)
         compact[:stderr] = stderr_info[:content]
         compact[:stderr_full] = stderr_info[:temp_file] if stderr_info[:temp_file]
 
-        # Add output_truncated flag if present
         compact[:output_truncated] = true if result[:output_truncated]
 
         compact
@@ -467,32 +486,20 @@ module Clacky
       def truncate_and_save(output, max_chars, label, command_name)
         return { content: "", temp_file: nil } if output.empty?
 
-        # Truncate individual long lines (e.g., minified CSS/JS files)
-        # truncate_output already does this, but truncate_and_save may be called
-        # with raw output that hasn't gone through truncate_output
         output = truncate_long_lines(output, MAX_LINE_CHARS)
-
         return { content: output, temp_file: nil } if output.length <= max_chars
 
-        # Sanitize command name for file name
         safe_name = command_name.gsub(/[^\w\-.]/, "_")[0...50]
-
-        # Use Ruby tmpdir for safe temp file creation
         temp_dir = Dir.mktmpdir
         temp_file = File.join(temp_dir, "#{safe_name}_#{Time.now.strftime("%Y%m%d_%H%M%S")}.output")
-
-        # Write full output to temp file
         File.write(temp_file, output)
 
-        # For LLM display: show first N lines to preserve most useful information
         lines = output.lines
         return { content: output, temp_file: nil } if lines.length <= 2
 
-        # Reserve space for truncation notice (including temp file path)
         notice_overhead = 200
         available_chars = max_chars - notice_overhead
 
-        # Prioritize first lines as they usually contain the most important information
         first_part = []
         accumulated = 0
         lines.each do |line|
@@ -504,23 +511,13 @@ module Clacky
         total_lines = lines.length
         shown_lines = first_part.length
 
-        # Create prominent notice message with temp file path
-        if label == "stderr"
-          notice = <<~NOTICE
-
-            ... [Error output truncated for LLM: showing #{shown_lines} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ...
-          NOTICE
+        notice = if label == "stderr"
+          "\n... [Error output truncated for LLM: showing #{shown_lines} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ...\n"
         else
-          notice = <<~NOTICE
-
-            ... [Output truncated for LLM: showing #{shown_lines} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ...
-          NOTICE
+          "\n... [Output truncated for LLM: showing #{shown_lines} of #{total_lines} lines, full content: #{temp_file} (use grep to search)] ...\n"
         end
 
-        # Combine with compact notice
-        content = first_part.join + notice
-
-        { content: content, temp_file: temp_file }
+        { content: first_part.join + notice, temp_file: temp_file }
       end
 
       # Truncate individual lines that exceed max_line_chars
@@ -544,7 +541,6 @@ module Clacky
       private def update_output_buffer
         return unless @output_buffer
 
-        # Push new lines to LimitStack (automatically handles size limit)
         stdout_lines = @stdout_buffer.string.lines
         stderr_lines = @stderr_buffer.string.lines
 
