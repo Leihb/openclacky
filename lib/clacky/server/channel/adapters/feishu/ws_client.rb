@@ -53,6 +53,11 @@ module Clacky
 
           private
 
+          # Timeout for IO.select on the read loop. Feishu server sends pings every
+          # @ping_interval seconds (default 90s). Allow two missed pings before
+          # treating the connection as dead.
+          READ_TIMEOUT_MULTIPLIER = 2.5
+
           def connect_and_listen
             Clacky::Logger.info("[feishu-ws] Fetching WebSocket endpoint...")
             endpoint = fetch_ws_endpoint
@@ -92,9 +97,22 @@ module Clacky
 
             start_ping_thread
 
+            # read_timeout is based on the server-provided ping interval so it
+            # automatically adapts if Feishu changes the cadence.
+            read_timeout = (@ping_interval * READ_TIMEOUT_MULTIPLIER).ceil
+
             loop do
               break unless @running
-              data = socket.readpartial(4096)
+
+              # Use IO.select with a timeout to detect silent connection drops
+              # (NAT expiry, firewall idle-kill) that never send a TCP FIN/RST.
+              ready = IO.select([socket], nil, nil, read_timeout)
+              unless ready
+                Clacky::Logger.warn("[feishu-ws] read timeout (#{read_timeout}s), reconnecting...")
+                return
+              end
+
+              data = socket.read_nonblock(4096)
               @incoming << data
               while (frame = @incoming.next)
                 case frame.type
@@ -106,13 +124,14 @@ module Clacky
                 when :ping
                   send_raw_frame(:pong, frame.data)
                 when :close
-                  Clacky::Logger.info("[feishu-ws] WebSocket closed, will reconnect")
+                  Clacky::Logger.info("[feishu-ws] WebSocket closed by server, will reconnect")
                   return
                 end
               end
             end
-          rescue EOFError, Errno::ECONNRESET
-            Clacky::Logger.warn("[feishu-ws] Connection lost, reconnecting in #{RECONNECT_DELAY}s...")
+          rescue EOFError, IOError, Errno::ECONNRESET, Errno::EPIPE,
+                 Errno::ETIMEDOUT, OpenSSL::SSL::SSLError => e
+            Clacky::Logger.warn("[feishu-ws] Connection lost (#{e.class}: #{e.message}), reconnecting in #{RECONNECT_DELAY}s...")
           ensure
             @ws_open = false
             @ws_socket = nil
@@ -254,7 +273,10 @@ module Clacky
                     headers: { "type" => "ping" }
                   )
                 rescue => e
-                  warn "[feishu-ws] ping failed: #{e.message}"
+                  Clacky::Logger.warn("[feishu-ws] ping failed (#{e.class}: #{e.message}), forcing reconnect")
+                  # Close the socket so IO.select in the read loop immediately
+                  # returns nil / read_nonblock raises IOError, triggering reconnect.
+                  @ws_socket&.close rescue nil
                   break
                 end
               end

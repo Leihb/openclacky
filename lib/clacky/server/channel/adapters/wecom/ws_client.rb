@@ -117,6 +117,13 @@ module Clacky
 
           private
 
+          # Timeout for IO.select on the read loop. If no data arrives within this
+          # window we treat the connection as dead and reconnect. This catches the
+          # silent-drop case where the TCP stack never delivers a FIN/RST (e.g.
+          # NAT timeout, firewall idle-kill). The WeCom server sends pings every
+          # ~30 s, so 75 s gives two missed pings before we give up.
+          READ_TIMEOUT_S = 75
+
           def connect_and_listen
             uri = URI.parse(@ws_url)
             port = uri.port || 443
@@ -151,7 +158,17 @@ module Clacky
 
             loop do
               break unless @running
-              data = ssl.readpartial(4096)
+
+              # Use IO.select with a timeout so we detect silent connection drops
+              # (e.g. NAT expiry) that never deliver a TCP FIN/RST. Without this,
+              # readpartial blocks forever and the thread hangs permanently.
+              ready = IO.select([ssl], nil, nil, READ_TIMEOUT_S)
+              unless ready
+                Clacky::Logger.warn("[WecomWSClient] read timeout (#{READ_TIMEOUT_S}s), reconnecting...")
+                return
+              end
+
+              data = ssl.read_nonblock(4096)
               @incoming << data
               while (frame = @incoming.next)
                 case frame.type
@@ -160,13 +177,14 @@ module Clacky
                 when :ping
                   send_raw_frame(:pong, frame.data)
                 when :close
-                  Clacky::Logger.info("[WecomWSClient] connection closed")
+                  Clacky::Logger.info("[WecomWSClient] connection closed by server")
                   return
                 end
               end
             end
-          rescue EOFError, Errno::ECONNRESET
-            Clacky::Logger.info("[WecomWSClient] connection lost, reconnecting...")
+          rescue EOFError, IOError, Errno::ECONNRESET, Errno::EPIPE,
+                 Errno::ETIMEDOUT, OpenSSL::SSL::SSLError => e
+            Clacky::Logger.info("[WecomWSClient] connection lost (#{e.class}: #{e.message}), reconnecting...")
           ensure
             @ws_open = false
             @ws_socket = nil
@@ -257,7 +275,15 @@ module Clacky
               loop do
                 sleep HEARTBEAT_INTERVAL
                 break unless @running
-                send_frame(cmd: "ping", req_id: generate_req_id("ping"))
+                begin
+                  send_frame(cmd: "ping", req_id: generate_req_id("ping"))
+                rescue => e
+                  Clacky::Logger.warn("[WecomWSClient] ping failed (#{e.class}: #{e.message}), forcing reconnect")
+                  # Close the socket so IO.select in the read loop immediately
+                  # returns nil / read_nonblock raises IOError, triggering reconnect.
+                  @ws_socket&.close rescue nil
+                  break
+                end
               end
             end
           end
