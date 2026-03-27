@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.14] - 2026-03-27
+
+### Fixed
+- **rubyzip Ruby 2.6 compatibility**: replaced `if RUBY_VERSION >= "3.0"` conditional in gemspec (evaluated at build time, ineffective at install time) with `~> 2.4.1` pin — RubyGems now correctly selects rubyzip 2.4.1 when installing on Ruby 2.6
+
 ## [0.9.13] - 2026-03-27
 
 ### Added

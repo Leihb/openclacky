@@ -71,11 +71,8 @@ Gem::Specification.new do |spec|
   spec.add_dependency "websocket", "~> 1.2"
   spec.add_dependency "webrick", "~> 1.8"
   spec.add_dependency "artii", "~> 2.1"
-  if RUBY_VERSION >= "3.0"
-    spec.add_dependency "rubyzip", ">= 2.4", "< 4"
-  else
-    spec.add_dependency "rubyzip", "~> 2.4.1"
-  end
+  # rubyzip 3.x requires Ruby >= 3.0; pin to ~> 2.4.1 for cross-version compatibility
+  spec.add_dependency "rubyzip", "~> 2.4.1"
 
   # rouge >= 4.0 requires Ruby >= 2.7; cap at < 4.0 so Ruby 2.6 gets 3.30.0
   spec.add_dependency "rouge", ">= 3.14", "< 4.0"
