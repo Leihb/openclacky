@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.17] - 2026-03-27
+
+### Added
+- **Browser screenshots now saved to disk**: every screenshot action automatically saves both the original full-resolution PNG and the compressed (800px) version to disk — the agent reports both file paths so you can reference, open, or pass the screenshots to other tools
+- **Provider "Get API Key" links in onboarding**: the setup wizard now shows a direct link to the provider's website when you select a provider that has a `website_url` — making it easier to sign up and get your API key without leaving the flow
+
+### Fixed
+- **WebSocket auto-reconnect for Feishu and WeCom channels**: the WebSocket clients for Feishu and WeCom now automatically retry the connection after failures — channels stay online without manual intervention after a network hiccup
+- **Brand command in simple install script**: the `clacky` brand command was incorrectly invoked in `install_simple.sh` — now fixed so the post-install branding step runs correctly
+- **Windows WSL2 and Hyper-V detection in PowerShell installer**: improved detection logic for WSL2 and Hyper-V environments in `install.ps1`, reducing false negatives on Windows machines with non-standard configurations
+
 ## [0.9.16] - 2026-03-27
 
 ### Fixed
