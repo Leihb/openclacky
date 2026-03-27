@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.15] - 2026-03-27
+
+### Improved
+- **CN install now downloads gem from OSS mirror**: Chinese users no longer hit RubyGems.org or GitHub during installation — the install script fetches the `.gem` file directly from `oss.1024code.com` and installs dependencies via Aliyun mirror, making installs faster and more reliable in mainland China
+
 ## [0.9.14] - 2026-03-27
 
 ### Fixed
