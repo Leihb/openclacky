@@ -53,7 +53,6 @@ module Clacky
         Clacky::Logger.info("[ChannelManager] Starting channels: #{enabled_platforms.join(", ")}")
         @running = true
         enabled_platforms.each { |platform| start_adapter(platform) }
-        puts "   📱 Channels started: #{enabled_platforms.join(", ")}"
       end
 
       # Stop all adapters gracefully.
@@ -185,11 +184,23 @@ module Clacky
         # source: :channel prevents the message from being echoed back to the IM channel.
         web_ui&.show_user_message(text, source: :channel) unless text.nil? || text.empty?
 
+        # Start typing keepalive BEFORE sending any message.
+        # sendmessage cancels the typing indicator in WeChat protocol,
+        # so keepalive must be running when "Thinking..." is sent so it
+        # immediately re-asserts the typing state after that message.
+        chat_id       = event[:chat_id]
+        context_token = event[:context_token]
+        adapter.start_typing_keepalive(chat_id, context_token) if adapter.respond_to?(:start_typing_keepalive)
+
         # Acknowledge to the IM channel only — WebUI doesn't need a "Thinking..." noise.
-        adapter.send_text(event[:chat_id], "Thinking...")
+        adapter.send_text(chat_id, "Thinking...")
 
         @run_agent_task.call(session_id, agent) do
-          agent.run(text, files: files)
+          begin
+            agent.run(text, files: files)
+          ensure
+            adapter.stop_typing_keepalive(chat_id) if adapter.respond_to?(:stop_typing_keepalive)
+          end
         end
       end
 
@@ -349,7 +360,7 @@ module Clacky
       def safe_stop_adapter(adapter)
         adapter.stop
       rescue StandardError => e
-        warn "[ChannelManager] Error stopping #{adapter.platform_id}: #{e.message}"
+        Clacky::Logger.warn("[ChannelManager] Error stopping #{adapter.platform_id}: #{e.message}")
       end
     end
   end

@@ -76,6 +76,12 @@ module Clacky
             @context_tokens = {}
             @ctx_mutex      = Mutex.new
             @api_client     = ApiClient.new(base_url: @base_url, token: @token)
+            # Typing keepalive: user_id → { ticket:, thread:, cached_at: }
+            @typing_tickets  = {}
+            @typing_mutex    = Mutex.new
+            # Active keepalive threads: user_id → Thread
+            @keepalive_threads = {}
+            @keepalive_mutex   = Mutex.new
           end
 
           def start(&on_message)
@@ -141,7 +147,7 @@ module Clacky
 
             { message_id: nil }
           rescue => e
-            Clacky::Logger.error("[WeixinAdapter] send_text failed for #{chat_id}: #{e.message}")
+            Clacky::Logger.error("[WeixinAdapter] send_text failed for #{chat_id} (context_token=#{lookup_context_token(chat_id).to_s.slice(0, 20)}...): #{e.message}")
             { message_id: nil }
           end
 
@@ -354,14 +360,20 @@ module Clacky
             @ctx_mutex.synchronize { @context_tokens[user_id] }
           end
 
-          # Split text into ≤4000-char chunks, preferring newline boundaries.
-          def split_message(text, limit: 4000)
-            return [text] if text.length <= limit
+          # Split text into ≤2000 Unicode character chunks per iLink protocol recommendation.
+          # Priority: split at \n\n, then \n, then space, then hard cut.
+          def split_message(text, limit: 2000)
+            return [text] if text.chars.length <= limit
             chunks = []
-            while text.length > limit
-              cut = text.rindex("\n", limit) || limit
-              chunks << text[0, cut].rstrip
-              text = text[cut..].lstrip
+            while text.chars.length > limit
+              window = text.chars.first(limit).join
+              # Prefer double-newline boundary
+              cut = window.rindex("\n\n")
+              cut = window.rindex("\n")   if cut.nil?
+              cut = window.rindex(" ")    if cut.nil?
+              cut = limit                 if cut.nil? || cut.zero?
+              chunks << text.chars.first(cut).join.rstrip
+              text = text.chars.drop(cut).join.lstrip
             end
             chunks << text unless text.empty?
             chunks
@@ -372,14 +384,101 @@ module Clacky
             r = text.dup
             r.gsub!(/```[^\n]*\n?([\s\S]*?)```/) { Regexp.last_match(1).strip }
             r.gsub!(/!\[[^\]]*\]\([^)]*\)/, "")
-            r.gsub!(/\[([^\]]+)\]\([^)]*\)/, '\1')
-            r.gsub!(/\*\*([^*]+)\*\*/, '\1')
-            r.gsub!(/\*([^*]+)\*/, '\1')
-            r.gsub!(/__([^_]+)__/, '\1')
-            r.gsub!(/_([^_]+)_/, '\1')
+            r.gsub!(/\[([^\]]+)\]\([^)]*\)/, '')
+            r.gsub!(/\*\*([^*]+)\*\*/, '')
+            r.gsub!(/\*([^*]+)\*/, '')
+            r.gsub!(/__([^_]+)__/, '')
+            r.gsub!(/_([^_]+)_/, '')
             r.gsub!(/^#+\s+/, "")
             r.gsub!(/^[-*_]{3,}\s*$/, "")
             r.strip
+          end
+
+          # ── Typing keepalive ─────────────────────────────────────────────────
+          # sendtyping(status=1) serves dual purpose: maintains typing indicator AND
+          # renews the context_token TTL. Official @tencent-weixin/openclaw-weixin
+          # npm package uses keepaliveIntervalMs: 5000. We match that exactly.
+          TYPING_KEEPALIVE_INTERVAL = 5
+          # typing_ticket is valid for ~24h; cache and reuse it.
+          TYPING_TICKET_TTL = 86_400
+
+          # Fetch (or return cached) typing_ticket for user_id.
+          # Returns nil on failure — keepalive will just skip without crashing.
+          def fetch_typing_ticket(user_id, context_token)
+            @typing_mutex.synchronize do
+              entry = @typing_tickets[user_id]
+              if entry && (Time.now.to_i - entry[:cached_at]) < TYPING_TICKET_TTL
+                return entry[:ticket]
+              end
+            end
+
+            ticket = @api_client.get_typing_ticket(
+              ilink_user_id: user_id,
+              context_token: context_token
+            )
+            return nil if ticket.empty?
+
+            @typing_mutex.synchronize do
+              @typing_tickets[user_id] = { ticket: ticket, cached_at: Time.now.to_i }
+            end
+            ticket
+          rescue => e
+            Clacky::Logger.warn("[WeixinAdapter] getconfig failed for #{user_id}: #{e.message}")
+            nil
+          end
+
+          # Start a background thread that sends sendtyping(1) every TYPING_KEEPALIVE_INTERVAL.
+          # Any existing keepalive for this user is stopped first.
+          def start_typing_keepalive(user_id, context_token)
+            stop_typing_keepalive(user_id)
+
+            ticket = fetch_typing_ticket(user_id, context_token)
+            unless ticket
+              Clacky::Logger.debug("[WeixinAdapter] no typing_ticket for #{user_id}, skipping keepalive")
+              return
+            end
+
+            thread = Thread.new do
+              loop do
+                begin
+                  @api_client.send_typing(
+                    ilink_user_id: user_id,
+                    typing_ticket: ticket,
+                    status:        1
+                  )
+                  Clacky::Logger.debug("[WeixinAdapter] typing keepalive sent for #{user_id}")
+                rescue => e
+                  Clacky::Logger.debug("[WeixinAdapter] typing keepalive error: #{e.message}")
+                end
+                sleep TYPING_KEEPALIVE_INTERVAL
+              end
+            end
+
+            @keepalive_mutex.synchronize { @keepalive_threads[user_id] = thread }
+            Clacky::Logger.debug("[WeixinAdapter] typing keepalive started for #{user_id}")
+          end
+
+          # Stop keepalive thread and send sendtyping(status=2) to cancel "typing" indicator.
+          def stop_typing_keepalive(user_id)
+            thread = @keepalive_mutex.synchronize { @keepalive_threads.delete(user_id) }
+            return unless thread
+
+            thread.kill
+            thread.join(1)
+
+            ticket = @typing_mutex.synchronize { @typing_tickets.dig(user_id, :ticket) }
+            if ticket
+              begin
+                @api_client.send_typing(
+                  ilink_user_id: user_id,
+                  typing_ticket: ticket,
+                  status:        2
+                )
+              rescue => e
+                Clacky::Logger.debug("[WeixinAdapter] stop typing error: #{e.message}")
+              end
+            end
+            Clacky::Logger.debug("[WeixinAdapter] typing keepalive stopped for #{user_id}")
           end
         end
 

@@ -61,6 +61,26 @@ module Clacky
             post("getupdates", { get_updates_buf: get_updates_buf }, timeout: LONG_POLL_TIMEOUT_S)
           end
 
+          # Retrieve a typing_ticket for the given user.
+          # context_token is optional but recommended per protocol spec.
+          # @return [String] typing_ticket
+          def get_typing_ticket(ilink_user_id:, context_token: nil)
+            body = { ilink_user_id: ilink_user_id }
+            body[:context_token] = context_token if context_token
+            resp = post("getconfig", body)
+            resp["typing_ticket"].to_s
+          end
+
+          # Send/keep/cancel typing indicator.
+          # @param status [Integer] 1 = typing, 2 = cancel
+          def send_typing(ilink_user_id:, typing_ticket:, status:)
+            post("sendtyping", {
+              ilink_user_id: ilink_user_id,
+              typing_ticket: typing_ticket,
+              status:        status
+            })
+          end
+
           # Send a plain text message.
           # context_token is required by the Weixin protocol for conversation association.
           def send_text(to_user_id:, text:, context_token:)
@@ -353,9 +373,15 @@ module Clacky
             res = http.request(req)
             raise ApiError.new(res.code.to_i, res.body), "HTTP #{res.code}" unless res.is_a?(Net::HTTPSuccess)
 
-            data = JSON.parse(res.body)
+            raw_body = res.body
+            data = JSON.parse(raw_body)
             ret  = data["ret"] || data["errcode"]
-            raise ApiError.new(ret, data["errmsg"]) if ret && ret != 0
+            if ret && ret != 0
+              # Include full response body for easier debugging (errmsg is often empty)
+              detail = data["errmsg"].to_s.strip
+              detail = raw_body.slice(0, 300) if detail.empty?
+              raise ApiError.new(ret, detail)
+            end
 
             data
           rescue Net::ReadTimeout, Net::OpenTimeout
