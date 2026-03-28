@@ -4,6 +4,7 @@ require "net/http"
 require "json"
 require "uri"
 require "cgi"
+require "base64"
 require_relative "../utils/encoding"
 
 module Clacky
@@ -28,71 +29,63 @@ module Clacky
         required: %w[query]
       }
 
+      # Ordered list of search providers to try in sequence
+      PROVIDERS = %i[duckduckgo bing baidu].freeze
+
       def execute(query:, max_results: 10, working_dir: nil)
-        # Validate query
         if query.nil? || query.strip.empty?
           return { error: "Query cannot be empty" }
         end
 
-        begin
-          # Use DuckDuckGo HTML search (no API key needed)
-          results = search_duckduckgo(query, max_results)
+        last_error = nil
 
-          {
-            query: query,
-            results: results,
-            count: results.length,
-            error: nil
-          }
-        rescue StandardError => e
-          { error: "Failed to perform web search: #{e.message}" }
+        PROVIDERS.each do |provider|
+          begin
+            results = send(:"search_#{provider}", query, max_results)
+            # Consider it a success only if we got real results
+            next if results.empty? || results.first[:url].include?("duckduckgo.com") && results.first[:title] == "Web search results"
+
+            return {
+              query: query,
+              results: results,
+              count: results.length,
+              provider: provider.to_s,
+              error: nil
+            }
+          rescue StandardError => e
+            last_error = e
+            next
+          end
         end
+
+        # All providers failed
+        {
+          query: query,
+          results: [],
+          count: 0,
+          provider: nil,
+          error: "All search providers failed. Last error: #{last_error&.message}"
+        }
       end
 
+      # ── DuckDuckGo ─────────────────────────────────────────────────────────
+
       private def search_duckduckgo(query, max_results)
-        # DuckDuckGo HTML search endpoint
         encoded_query = CGI.escape(query)
         url = URI("https://html.duckduckgo.com/html/?q=#{encoded_query}")
+        response = http_get(url)
+        return [] unless response.is_a?(Net::HTTPSuccess)
 
-        # Make request with user agent
-        request = Net::HTTP::Get.new(url)
-        request["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-
-        response = Net::HTTP.start(url.hostname, url.port, use_ssl: true, read_timeout: 10) do |http|
-          http.request(request)
-        end
-
-        unless response.is_a?(Net::HTTPSuccess)
-          return []
-        end
-
-        # Parse HTML results (simple extraction)
         parse_duckduckgo_html(response.body, max_results)
-      rescue StandardError => e
-        # Fallback: return basic search URL
-        [
-          {
-            title: "Search results for: #{query}",
-            url: "https://duckduckgo.com/?q=#{CGI.escape(query)}",
-            snippet: "Click to view search results in browser. Error: #{e.message}"
-          }
-        ]
       end
 
       private def parse_duckduckgo_html(html, max_results)
         results = []
-
-        # Ensure HTML is valid UTF-8
         html = Clacky::Utils::Encoding.to_utf8(html)
 
-        # Extract all result links and snippets
-        # Pattern: <a class="result__a" href="//duckduckgo.com/l/?uddg=ENCODED_URL...">TITLE</a>
         links = html.scan(%r{<a[^>]*class="result__a"[^>]*href="//duckduckgo\.com/l/\?uddg=([^"&]+)[^"]*"[^>]*>(.*?)</a>}m)
-        
-        # Pattern: <a class="result__snippet">SNIPPET</a>
         snippets = html.scan(%r{<a[^>]*class="result__snippet"[^>]*>(.*?)</a>}m)
 
-        # Combine links and snippets
         links.each_with_index do |link_data, index|
           break if results.length >= max_results
 
@@ -106,34 +99,183 @@ module Clacky
             snippet = CGI.unescapeHTML(snippet) if snippet.include?("&")
           end
 
-          results << {
-            title: title,
-            url: url,
-            snippet: snippet
-          }
-        end
-
-        # If parsing failed, provide a fallback
-        if results.empty?
-          results << {
-            title: "Web search results",
-            url: "https://duckduckgo.com/",
-            snippet: "Could not parse search results. Please try again."
-          }
+          results << { title: title, url: url, snippet: snippet }
         end
 
         results
-      rescue StandardError => e
-        # Return fallback on error
-        [{
-          title: "Web search error",
-          url: "https://duckduckgo.com/",
-          snippet: "Error parsing results: #{e.message}"
-        }]
       end
 
+      # ── Bing ───────────────────────────────────────────────────────────────
+
+      private def search_bing(query, max_results)
+        encoded_query = CGI.escape(query)
+        url = URI("https://www.bing.com/search?q=#{encoded_query}&count=#{max_results}&setlang=en&cc=us")
+        response = http_get(url, accept_language: "en-US,en;q=0.9")
+        return [] unless response.is_a?(Net::HTTPSuccess)
+
+        parse_bing_html(response.body, max_results)
+      end
+
+      private def parse_bing_html(html, max_results)
+        results = []
+        html = Clacky::Utils::Encoding.to_utf8(html)
+
+        # Bing result blocks: <li class="b_algo">...</li>
+        blocks = html.scan(%r{<li[^>]*class="b_algo"[^>]*>(.*?)</li>}m)
+
+        blocks.each do |block_arr|
+          break if results.length >= max_results
+          block = block_arr[0]
+
+          # Extract URL and title from <h2><a href="URL">TITLE</a></h2>
+          title_match = block.match(%r{<h2[^>]*>.*?<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>}m)
+          next unless title_match
+
+          raw_url = CGI.unescapeHTML(title_match[1])
+          url = decode_bing_url(raw_url)
+          title = title_match[2].gsub(/<[^>]+>/, "").strip
+          title = CGI.unescapeHTML(title) if title.include?("&")
+
+          # Extract snippet from <p class="b_lineclamp..."> or <div class="b_caption"><p>
+          snippet = ""
+          snippet_match = block.match(%r{<p[^>]*class="b_lineclamp[^"]*"[^>]*>(.*?)</p>}m) ||
+                          block.match(%r{<div[^>]*class="b_caption"[^>]*>.*?<p[^>]*>(.*?)</p>}m)
+          if snippet_match
+            snippet = snippet_match[1].gsub(/<[^>]+>/, "").strip
+            snippet = CGI.unescapeHTML(snippet) if snippet.include?("&")
+          end
+
+          results << { title: title, url: url, snippet: snippet }
+        end
+
+        results
+      end
+
+      # Decode Bing's redirect URL: bing.com/ck/a?...&u=a1BASE64URL&ntb=1
+      # The "u" param is "a1" prefix + base64-encoded real URL
+      private def decode_bing_url(url)
+        return url unless url.include?("bing.com/ck/")
+
+        u_param = url.match(/[?&]u=([^&]+)/)
+        return url unless u_param
+
+        encoded = u_param[1]
+        # Remove "a1" prefix then base64-decode
+        return url unless encoded.start_with?("a1")
+
+        base64_part = encoded[2..]
+        # Bing uses URL-safe base64 without padding
+        padded = base64_part + "=" * ((4 - base64_part.length % 4) % 4)
+        decoded = Base64.urlsafe_decode64(padded)
+        decoded.force_encoding("UTF-8").valid_encoding? ? decoded : url
+      rescue StandardError
+        url
+      end
+
+      # ── Baidu ──────────────────────────────────────────────────────────────
+
+      private def search_baidu(query, max_results)
+        encoded_query = CGI.escape(query)
+        url = URI("https://www.baidu.com/s?wd=#{encoded_query}&rn=#{max_results}")
+        response = http_get(url, accept_language: "zh-CN,zh;q=0.9,en;q=0.8", follow_redirects: 3)
+        return [] unless response.is_a?(Net::HTTPSuccess)
+
+        parse_baidu_html(response.body, max_results)
+      end
+
+      private def parse_baidu_html(html, max_results)
+        results = []
+        html = Clacky::Utils::Encoding.to_utf8(html)
+
+        # Include the opening tag itself so mu= attribute is accessible
+        blocks = html.scan(%r{(<div[^>]*\bclass="[^"]*\bresult\b[^"]*\bc-container\b[^"]*"[^>]*>.*?</div>\s*</div>)}m)
+
+        blocks.each do |block_arr|
+          break if results.length >= max_results
+          block = block_arr[0]
+
+          # Prefer mu= attribute (real URL) over baidu redirect link
+          url = extract_baidu_real_url(block)
+          next if url.nil? || url.empty?
+
+          # Extract title from <h3> — title text is nested inside multiple tags
+          h3_match = block.match(%r{<h3[^>]*>(.*?)</h3>}m)
+          next unless h3_match
+
+          title = h3_match[1].gsub(/<[^>]+>/, "").strip
+          title = CGI.unescapeHTML(title) if title.include?("&")
+          next if title.empty?
+
+          # Extract snippet from data-module="abstract"
+          snippet = ""
+          snippet_match = block.match(%r{data-module="abstract">(.*?)</div>}m)
+          if snippet_match
+            snippet = snippet_match[1].gsub(/<[^>]+>/, "").strip
+            snippet = CGI.unescapeHTML(snippet) if snippet.include?("&")
+          end
+
+          results << { title: title, url: url, snippet: snippet }
+        end
+
+        results
+      end
+
+      # Baidu embeds the real destination URL in the mu= attribute on result divs
+      private def extract_baidu_real_url(block)
+        # mu="URL" on the opening <div> tag is the real destination
+        mu_match = block.match(/\bmu="(https?:\/\/[^"]+)"/)
+        return mu_match[1] if mu_match
+
+        # Fallback: any non-baidu href in h3
+        href_match = block.match(%r{<h3[^>]*>.*?<a[^>]*\bhref="(https?://(?!www\.baidu\.com)[^"]+)"[^>]*>}m)
+        return href_match[1] if href_match
+
+        nil
+      end
+
+      # ── Shared HTTP helper ─────────────────────────────────────────────────
+
+      USER_AGENTS = [
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      ].freeze
+
+      # Shared browser-like GET request — no Accept-Encoding to avoid gzip/br
+      # detection tricks used by Bing. Supports redirect following.
+      private def http_get(url, accept_language: "en-US,en;q=0.9", follow_redirects: 0)
+        request = Net::HTTP::Get.new(url)
+        request["User-Agent"] = USER_AGENTS.sample
+        request["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        request["Accept-Language"] = accept_language
+        # Deliberately omit Accept-Encoding — sending gzip causes Bing to return
+        # a JS-only skeleton (~39KB) instead of the real HTML results (~120KB)
+        request["Sec-Fetch-Dest"] = "document"
+        request["Sec-Fetch-Mode"] = "navigate"
+        request["Sec-Fetch-Site"] = "none"
+        request["Upgrade-Insecure-Requests"] = "1"
+
+        response = Net::HTTP.start(url.hostname, url.port,
+          use_ssl: url.scheme == "https",
+          read_timeout: 8,
+          open_timeout: 5) { |http| http.request(request) }
+
+        # Follow redirects (e.g. Baidu returns 302 on first request)
+        if follow_redirects > 0 && response.is_a?(Net::HTTPRedirection)
+          location = response["location"]
+          redirect_url = location.start_with?("http") ? URI(location) : URI("#{url.scheme}://#{url.hostname}#{location}")
+          return http_get(redirect_url, accept_language: accept_language, follow_redirects: follow_redirects - 1)
+        end
+
+        response
+      end
+
+      # ── Formatting ─────────────────────────────────────────────────────────
+
       def format_call(args)
-        query = args[:query] || args['query'] || ''
+        query = args[:query] || args["query"] || ""
         display_query = query.length > 40 ? "#{query[0..37]}..." : query
         "web_search(\"#{display_query}\")"
       end
@@ -143,7 +285,8 @@ module Clacky
           "[Error] #{result[:error]}"
         else
           count = result[:count] || 0
-          "[OK] Found #{count} results"
+          provider = result[:provider] ? " via #{result[:provider]}" : ""
+          "[OK] Found #{count} results#{provider}"
         end
       end
     end

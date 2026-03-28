@@ -23,10 +23,9 @@ RSpec.describe Clacky::Tools::WebSearch do
 
       result = tool.execute(query: "test query")
 
-      # Should return fallback results with error info
-      expect(result[:error]).to be_nil  # The tool handles errors internally
-      expect(result[:results]).not_to be_empty
-      expect(result[:results].first[:snippet]).to include("Error:")
+      # All providers failed — should return an error message
+      expect(result[:error]).to include("All search providers failed")
+      expect(result[:results]).to be_empty
     end
 
     it "respects max_results parameter" do

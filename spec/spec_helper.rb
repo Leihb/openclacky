@@ -25,4 +25,8 @@ RSpec.configure do |config|
   config.expect_with :rspec do |c|
     c.syntax = :expect
   end
+
+  # Exclude smoke tests from the default test run — they make real network requests.
+  # Run explicitly with: bundle exec rspec spec/integration/ --tag smoke
+  config.filter_run_excluding :smoke
 end
