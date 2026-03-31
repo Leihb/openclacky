@@ -48,16 +48,16 @@ module Clacky
         "website_url" => "https://console.anthropic.com/settings/keys"
       }.freeze,
 
-      "bedrock-jp" => {
-        "name" => "AWS Bedrock (JP)",
-        "base_url" => "https://bedrock-runtime.ap-northeast-1.amazonaws.com",
+      "clackyai" => {
+        "name" => "Clacky AI",
+        "base_url" => "https://api.clacky.ai",
         "api" => "bedrock",
         "default_model" => "jp.anthropic.claude-sonnet-4-6",
         "models" => [
           "jp.anthropic.claude-sonnet-4-6",
           "jp.anthropic.claude-haiku-4-6"
         ],
-        "website_url" => "https://console.aws.amazon.com/iam/home#/security_credentials"
+        "website_url" => "https://clacky.ai"
       }.freeze
 
     }.freeze

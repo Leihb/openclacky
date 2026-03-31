@@ -88,7 +88,7 @@ module Clacky
       cloned = deep_clone(messages)
 
       if bedrock?
-        send_bedrock_request(cloned, model, tools, max_tokens)
+        send_bedrock_request(cloned, model, tools, max_tokens, caching_enabled)
       elsif anthropic_format?
         send_anthropic_request(cloned, model, tools, max_tokens, caching_enabled)
       else
@@ -124,8 +124,8 @@ module Clacky
 
     # ── Bedrock Converse request / response ───────────────────────────────────
 
-    def send_bedrock_request(messages, model, tools, max_tokens)
-      body     = MessageFormat::Bedrock.build_request_body(messages, model, tools, max_tokens)
+    def send_bedrock_request(messages, model, tools, max_tokens, caching_enabled)
+      body     = MessageFormat::Bedrock.build_request_body(messages, model, tools, max_tokens, caching_enabled)
       response = bedrock_connection.post(bedrock_endpoint(model)) { |r| r.body = body.to_json }
 
       raise_error(response) unless response.status == 200
