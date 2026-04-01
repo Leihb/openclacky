@@ -114,6 +114,7 @@ module Clacky
       # Replay conversation history by calling ui.show_* methods for each message.
       # Supports cursor-based pagination using created_at timestamps on user messages.
       # Each "round" starts at a user message and includes all subsequent assistant/tool messages.
+      # Compressed chunks (chunk_path on assistant messages) are transparently expanded.
       #
       # @param ui [Object] UI interface that responds to show_user_message, show_assistant_message, etc.
       # @param limit [Integer] Maximum number of rounds (user turns) to replay
@@ -147,7 +148,17 @@ module Clacky
             rounds << current_round
           elsif current_round
             current_round[:events] << msg
+          elsif msg[:compressed_summary] && msg[:chunk_path]
+            # Compressed summary sitting before any user rounds — expand it from chunk md
+            chunk_rounds = parse_chunk_md_to_rounds(msg[:chunk_path])
+            rounds.concat(chunk_rounds)
           end
+        end
+
+        # Expand any compressed_summary assistant messages sitting inside a round's events.
+        # These occur when compression happened mid-round (rare) — expand them in-place.
+        rounds.each do |round|
+          round[:events].select! { |ev| !ev[:compressed_summary] }
         end
 
         # Apply before-cursor filter: only rounds whose user message created_at < before
@@ -191,6 +202,159 @@ module Clacky
         end
 
         { has_more: has_more }
+      end
+
+      # Parse a chunk MD file into an array of rounds compatible with replay_history.
+      # Each round is { user_msg: Hash, events: Array<Hash> }.
+      # Timestamps are synthesised from the chunk's archived_at, spread backwards.
+      # Recursively expands nested chunk references (compressed summary inside a chunk).
+      #
+      # @param chunk_path [String] Path to the chunk md file
+      # @return [Array<Hash>] rounds array (may be empty if file missing/unreadable)
+      private def parse_chunk_md_to_rounds(chunk_path)
+        return [] unless chunk_path && File.exist?(chunk_path.to_s)
+
+        raw = File.read(chunk_path.to_s, encoding: "utf-8")
+
+        # Parse YAML front matter to get archived_at for synthetic timestamps
+        archived_at = nil
+        if raw.start_with?("---")
+          fm_end = raw.index("\n---\n", 4)
+          if fm_end
+            fm_text = raw[4...fm_end]
+            fm_text.each_line do |line|
+              if line.start_with?("archived_at:")
+                archived_at = Time.parse(line.split(":", 2).last.strip) rescue nil
+              end
+            end
+          end
+        end
+        base_time = (archived_at || Time.now).to_f
+        chunk_dir = File.dirname(chunk_path.to_s)
+
+        # Split into sections by ## headings
+        sections = []
+        current_role       = nil
+        current_lines      = []
+        current_nested_chunk = nil  # chunk reference from a Compressed Summary heading
+
+        raw.each_line do |line|
+          stripped = line.chomp
+          if (m = stripped.match(/\A## Assistant \[Compressed Summary — original conversation at: (.+)\]/))
+            # Nested chunk reference — record it, treat as assistant section
+            sections << { role: current_role, lines: current_lines.dup, nested_chunk: current_nested_chunk } if current_role
+            current_role         = "assistant"
+            current_lines        = []
+            current_nested_chunk = File.join(chunk_dir, m[1])
+          elsif stripped.match?(/\A## (User|Assistant)/)
+            sections << { role: current_role, lines: current_lines.dup, nested_chunk: current_nested_chunk } if current_role
+            current_role         = stripped.match(/\A## (User|Assistant)/)[1].downcase
+            current_lines        = []
+            current_nested_chunk = nil
+          elsif stripped.match?(/\A### Tool Result:/)
+            sections << { role: current_role, lines: current_lines.dup, nested_chunk: current_nested_chunk } if current_role
+            current_role         = "tool"
+            current_lines        = []
+            current_nested_chunk = nil
+          else
+            current_lines << line
+          end
+        end
+        sections << { role: current_role, lines: current_lines.dup, nested_chunk: current_nested_chunk } if current_role
+
+        # Remove front-matter / header noise sections (nil role or non-user/assistant/tool)
+        sections.select! { |s| %w[user assistant tool].include?(s[:role]) }
+
+        # Group into rounds: each user section starts a new round
+        rounds        = []
+        current_round = nil
+        round_index   = 0
+
+        sections.each do |sec|
+          text = sec[:lines].join.strip
+
+          # Nested chunk: expand it recursively, prepend before current rounds
+          if sec[:nested_chunk]
+            nested = parse_chunk_md_to_rounds(sec[:nested_chunk])
+            rounds = nested + rounds unless nested.empty?
+            # Also render its summary text as an assistant event in current round if any
+            if current_round && !text.empty?
+              current_round[:events] << { role: "assistant", content: text }
+            end
+            next
+          end
+
+          next if text.empty?
+
+          if sec[:role] == "user"
+            round_index += 1
+            # Synthetic timestamp: spread rounds backwards from archived_at
+            synthetic_ts = base_time - (sections.size - round_index) * 1.0
+            current_round = {
+              user_msg: {
+                role: "user",
+                content: text,
+                created_at: synthetic_ts,
+                _from_chunk: true
+              },
+              events: []
+            }
+            rounds << current_round
+          elsif current_round
+            if sec[:role] == "assistant"
+              # Detect "_Tool calls: ..._" lines — convert to tool_calls events
+              # so _replay_single_message renders them as tool group UI (same as live).
+              #
+              # Formats supported:
+              #   New: "_Tool calls: name | {"arg":"val"}; name2 | {"k":"v"}_"
+              #   Old: "_Tool calls: name1, name2_"  (backward compat)
+              remaining_lines = []
+              pending_tool_entries = []  # [{name:, args:}]
+
+              text.each_line do |line|
+                stripped = line.strip
+                if (m = stripped.match(/\A_Tool calls?:\s*(.+?)_?\z/i))
+                  raw = m[1]
+                  # New format uses ";" as separator between tools (each entry: "name | {json}")
+                  # Old format uses "," with no JSON part.
+                  entries = raw.include?(" | ") ? raw.split(/;\s*/) : raw.split(/,\s*/)
+                  entries.each do |entry|
+                    entry = entry.strip
+                    if (parts = entry.match(/\A(.+?)\s*\|\s*(\{.+\})\z/))
+                      tool_name = parts[1].strip
+                      args = JSON.parse(parts[2]) rescue {}
+                      pending_tool_entries << { name: tool_name, args: args }
+                    else
+                      pending_tool_entries << { name: entry, args: {} }
+                    end
+                  end
+                else
+                  remaining_lines << line
+                end
+              end
+
+              # Flush any plain text
+              plain_text = remaining_lines.join.strip
+              current_round[:events] << { role: "assistant", content: plain_text } unless plain_text.empty?
+
+              # Emit one synthetic tool_calls message per detected tool
+              pending_tool_entries.each do |entry|
+                current_round[:events] << {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [{ name: entry[:name], arguments: entry[:args] }]
+                }
+              end
+            else
+              current_round[:events] << { role: "tool", content: text }
+            end
+          end
+        end
+
+        rounds
+      rescue => e
+        Clacky::Logger.warn("parse_chunk_md_to_rounds failed for #{chunk_path}: #{e.message}")
+        []
       end
 
 
@@ -328,12 +492,14 @@ module Clacky
           next unless block[:type] == "image_url"
 
           url = block.dig(:image_url, :url)
-          next unless url && url.start_with?("data:")
+          # image_path is stored at send-time so replay can reconstruct the image from tmp
+          path = block[:image_path]
 
-          # Derive mime_type from the data URL prefix (e.g. "data:image/jpeg;base64,...")
-          mime_type = url[/\Adata:([^;]+);/, 1] || "image/jpeg"
+          next unless url&.start_with?("data:") || path
+
+          mime_type = (url || "")[/\Adata:([^;]+);/, 1] || "image/jpeg"
           ext       = mime_type.split("/").last
-          { name: "image_#{idx + 1}.#{ext}", mime_type: mime_type, data_url: url }
+          { name: "image_#{idx + 1}.#{ext}", mime_type: mime_type, data_url: url, path: path }
         end
       end
     end

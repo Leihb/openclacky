@@ -34,7 +34,18 @@ module Clacky
         rendered = Array(files).filter_map do |f|
           url  = f[:data_url] || f["data_url"]
           name = f[:name]     || f["name"]
-          url || (name ? "pdf:#{name}" : nil)
+          path = f[:path]     || f["path"]
+
+          if url
+            url
+          elsif path && File.exist?(path.to_s)
+            # Reconstruct data_url from the tmp file (still present on disk)
+            Utils::FileProcessor.image_path_to_data_url(path) rescue "expired:#{name}"
+          elsif name
+            # File badge for non-image disk files, or image whose tmp file is gone
+            type = f[:type] || f["type"] || ""
+            type.to_s == "image" ? "expired:#{name}" : "pdf:#{name}"
+          end
         end
         ev[:images] = rendered unless rendered.empty?
         @events << ev

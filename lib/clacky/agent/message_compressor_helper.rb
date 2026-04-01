@@ -305,9 +305,11 @@ module Clacky
         return nil unless @session_id && @created_at
 
         # Messages being compressed = original minus system message minus recent messages
+        # Also exclude system-injected scaffolding (session context, memory prompts, etc.)
+        # — these are internal CLI metadata and must not appear in chunk MD or WebUI history.
         recent_set = recent_messages.to_a
         messages_to_archive = original_messages.reject do |m|
-          m[:role] == "system" || recent_set.include?(m)
+          m[:role] == "system" || m[:system_injected] || recent_set.include?(m)
         end
 
         return nil if messages_to_archive.empty?
@@ -374,9 +376,23 @@ module Clacky
             end
             lines << ""
             # Include tool calls summary if present
+            # Format: "_Tool calls: name | {args_json}_" so replay can restore args for WebUI display.
             if msg[:tool_calls]&.any?
-              tool_names = msg[:tool_calls].map { |tc| tc.dig(:function, :name) }.compact.join(", ")
-              lines << "_Tool calls: #{tool_names}_"
+              tc_parts = msg[:tool_calls].map do |tc|
+                name = tc.dig(:function, :name) || tc[:name] || ""
+                next nil if name.empty?
+
+                args_raw = tc.dig(:function, :arguments) || tc[:arguments] || {}
+                args = args_raw.is_a?(String) ? (JSON.parse(args_raw) rescue nil) : args_raw
+                if args.is_a?(Hash) && !args.empty?
+                  # Truncate large string values to keep chunk MD readable
+                  compact = args.transform_values { |v| v.is_a?(String) && v.length > 200 ? v[0..197] + "..." : v }
+                  "#{name} | #{compact.to_json}"
+                else
+                  name
+                end
+              end.compact
+              lines << "_Tool calls: #{tc_parts.join("; ")}_"
               lines << ""
             end
             lines << format_message_content(content) if content

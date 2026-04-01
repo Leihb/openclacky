@@ -218,7 +218,9 @@ module Clacky
       all_disk_files = disk_files + downgraded
 
       # Format user message — text + inline vision images
-      user_content = format_user_content(user_input, vision_images.map { |v| v[:url] })
+      # Store the tmp path alongside the data_url so the history replay can
+      # reconstruct the image if the base64 was stripped (e.g. after compression).
+      user_content = format_user_content(user_input, vision_images.map { |v| { url: v[:url], path: v[:path] } })
 
       # Parse disk files — agent's responsibility, not the upload layer.
       # process_path runs the parser script and returns a FileRef with preview_path or parse_error.
@@ -1111,15 +1113,25 @@ module Clacky
 
     # Build user message content for LLM.
     # Returns plain String when no vision images; Array of content parts otherwise.
-    private def format_user_content(text, vision_urls)
-      vision_urls ||= []
+    # Build user message content for LLM.
+    # vision_images: Array of String (plain url) OR Hash { url:, path: }
+    # path is stored in the block so history replay can reconstruct the image
+    # from the tmp file when the base64 data_url is no longer available.
+    private def format_user_content(text, vision_images)
+      vision_images ||= []
 
-      return text if vision_urls.empty?
+      return text if vision_images.empty?
 
       content = []
       content << { type: "text", text: text } unless text.nil? || text.empty?
-      vision_urls.each do |url|
-        content << { type: "image_url", image_url: { url: url } }
+      vision_images.each do |img|
+        if img.is_a?(Hash)
+          block = { type: "image_url", image_url: { url: img[:url] } }
+          block[:image_path] = img[:path] if img[:path]
+          content << block
+        else
+          content << { type: "image_url", image_url: { url: img } }
+        end
       end
       content
     end
