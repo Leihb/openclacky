@@ -151,7 +151,9 @@ module Clacky
         live = @mutex.synchronize do
           @sessions.transform_values do |s|
             model_info = s[:agent]&.current_model_info
-            { status: s[:status], error: s[:error], model: model_info&.dig(:model) }
+            live_name  = s[:agent]&.name
+            live_name  = nil if live_name&.empty?
+            { status: s[:status], error: s[:error], model: model_info&.dig(:model), name: live_name }
           end
         end
 
@@ -185,7 +187,7 @@ module Clacky
           ls = live[id]
           {
             id:            id,
-            name:          s[:name] || "",
+            name:          ls&.dig(:name) || s[:name] || "",
             status:        ls ? ls[:status].to_s : "idle",
             error:         ls ? ls[:error] : nil,
             model:         ls&.dig(:model),
