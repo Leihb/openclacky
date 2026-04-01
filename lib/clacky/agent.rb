@@ -1156,7 +1156,8 @@ module Clacky
         "Today is #{Time.now.strftime('%Y-%m-%d, %A')}",
         "Current model: #{current_model}",
         os != :unknown ? "OS: #{Clacky::Utils::EnvironmentDetector.os_label}" : nil,
-        desktop ? "Desktop: #{desktop}" : nil
+        desktop ? "Desktop: #{desktop}" : nil,
+        "Working directory: #{@working_dir}"
       ].compact.join(". ")
 
       content = "[Session context: #{parts}]"

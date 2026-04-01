@@ -19,6 +19,7 @@ module Clacky
 
       SCRIPTS = %w[
         install_browser.sh
+        install_system_deps.sh
       ].freeze
 
       # Copy bundled scripts to ~/.clacky/scripts/ if missing or outdated.

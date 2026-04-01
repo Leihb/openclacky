@@ -378,5 +378,45 @@ RSpec.describe Clacky::Tools::SafeShell do
       expect(result).to include("line truncated")
     end
   end
+
+  describe "xcode-select auto-install" do
+    let(:xcode_stderr) do
+      "xcode-select: note: No developer tools were found, requesting install.\n" \
+      "If developer tools are located at a non-default location on disk, use " \
+      "`xcode-select --switch path/to/Xcode.app` to specify the Xcode that you " \
+      "wish to use for command line developer tools, and cancel the installation " \
+      "dialog.\nSee `man xcode-select` for more details."
+    end
+
+    it "detects xcode-select shim stderr" do
+      expect(tool.send(:xcode_tools_missing?, xcode_stderr)).to be true
+    end
+
+    it "does not false-positive on normal stderr" do
+      expect(tool.send(:xcode_tools_missing?, "Error: file not found")).to be false
+      expect(tool.send(:xcode_tools_missing?, "")).to be false
+      expect(tool.send(:xcode_tools_missing?, nil)).to be false
+    end
+
+    it "replaces xcode-select stderr with actionable install message" do
+      allow(tool).to receive(:xcode_tools_missing?).and_return(true)
+
+      result = tool.execute(command: "python3 --version")
+
+      expect(result[:stderr]).to include("Xcode Command Line Tools are not installed")
+      expect(result[:stderr]).to include("install_system_deps.sh")
+      expect(result[:exit_code]).to eq(1)
+      expect(result[:success]).to be false
+    end
+
+    it "passes through stderr unchanged when xcode-select shim not detected" do
+      allow(tool).to receive(:xcode_tools_missing?).and_return(false)
+
+      result = tool.execute(command: "echo hello")
+
+      expect(result[:stderr]).not_to include("install_system_deps.sh")
+      expect(result[:exit_code]).to eq(0)
+    end
+  end
 end
 

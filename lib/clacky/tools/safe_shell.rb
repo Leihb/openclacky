@@ -61,6 +61,15 @@ module Clacky
           # 4. Call parent class execution method
           result = super(command: safe_command, soft_timeout: soft_timeout, hard_timeout: hard_timeout, max_output_lines: max_output_lines, output_buffer: output_buffer, working_dir: working_dir)
 
+          # 4a. If macOS xcode-select shim detected, replace stderr with actionable message
+          if xcode_tools_missing?(result[:stderr])
+            result = result.merge(
+              stderr: "Xcode Command Line Tools are not installed.\nRun: bash ~/.clacky/scripts/install_system_deps.sh\nThen retry the original command.",
+              exit_code: 1,
+              success: false
+            )
+          end
+
           # 5. Enhance result information
           enhance_result(result, command, safe_command, safety_replacer)
 
@@ -293,6 +302,14 @@ module Clacky
       private def truncate_error(text, max_length)
         return text if text.length <= max_length
         "#{text[0...max_length-3]}..."
+      end
+
+      # Returns true if stderr contains the macOS xcode-select shim message,
+      # which appears when Xcode Command Line Tools are not installed and the
+      # user (or LLM) tries to run python3, git, make, gcc, etc.
+      def xcode_tools_missing?(stderr)
+        return false if stderr.nil? || stderr.empty?
+        stderr.include?("xcode-select") && stderr.include?("No developer tools were found")
       end
     end
 
