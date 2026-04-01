@@ -145,7 +145,7 @@ module Clacky
       #   before:  ISO8601 cursor — only sessions with created_at < before
       #
       # source and profile are orthogonal — either can be nil independently.
-      def list(limit: nil, before: nil, source: nil, profile: nil)
+      def list(limit: nil, before: nil, q: nil, date: nil, type: nil)
         return [] unless @session_manager
 
         live = @mutex.synchronize do
@@ -157,12 +157,25 @@ module Clacky
 
         all = @session_manager.all_sessions  # already sorted newest-first
 
-        # ── source filter ────────────────────────────────────────────────────
-        all = all.select { |s| s_source(s) == source } if source
-        # source == nil → no filter, return all
+        # ── type filter (replaces old source/profile split) ──────────────────
+        # type=coding  → agent_profile == "coding"
+        # type=manual/cron/channel/setup → source match (profile=general implied)
+        if type
+          if type == "coding"
+            all = all.select { |s| (s[:agent_profile] || "general").to_s == "coding" }
+          else
+            all = all.select { |s| s_source(s) == type && (s[:agent_profile] || "general").to_s != "coding" }
+          end
+        end
 
-        # ── profile filter ───────────────────────────────────────────────────
-        all = all.select { |s| (s[:agent_profile] || "general").to_s == profile } if profile
+        # ── date filter (YYYY-MM-DD, matches created_at prefix) ──────────────
+        all = all.select { |s| s[:created_at].to_s.start_with?(date) } if date
+
+        # ── name search ──────────────────────────────────────────────────────
+        if q && !q.empty?
+          q_down = q.downcase
+          all = all.select { |s| (s[:name] || "").downcase.include?(q_down) }
+        end
 
         all = all.select { |s| (s[:created_at] || "") < before } if before
         all = all.first(limit) if limit

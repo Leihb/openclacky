@@ -404,12 +404,16 @@ module Clacky
 
       def api_list_sessions(req, res)
         query   = URI.decode_www_form(req.query_string.to_s).to_h
-        limit   = [query["limit"].to_i.then { |n| n > 0 ? n : 10 }, 50].min
-        before  = query["before"].to_s.strip.then { |v| v.empty? ? nil : v }
-        source  = query["source"].to_s.strip.then { |v| v.empty? ? nil : v }
-        profile = query["profile"].to_s.strip.then { |v| v.empty? ? nil : v }
+        limit   = [query["limit"].to_i.then { |n| n > 0 ? n : 20 }, 50].min
+        before  = query["before"].to_s.strip.then  { |v| v.empty? ? nil : v }
+        q       = query["q"].to_s.strip.then       { |v| v.empty? ? nil : v }
+        date    = query["date"].to_s.strip.then    { |v| v.empty? ? nil : v }
+        type    = query["type"].to_s.strip.then    { |v| v.empty? ? nil : v }
+        # Backward-compat: ?source=<x> and ?profile=coding → type
+        type ||= query["profile"].to_s.strip.then { |v| v.empty? ? nil : v }
+        type ||= query["source"].to_s.strip.then  { |v| v.empty? ? nil : v }
         # Fetch one extra to detect has_more without a separate count query
-        sessions = @registry.list(limit: limit + 1, before: before, source: source, profile: profile)
+        sessions = @registry.list(limit: limit + 1, before: before, q: q, date: date, type: type)
         has_more = sessions.size > limit
         sessions = sessions.first(limit)
         json_response(res, 200, { sessions: sessions, has_more: has_more })
@@ -1785,24 +1789,12 @@ module Clacky
           interrupt_session(session_id)
 
         when "list_sessions"
-          # Initial load: 5 per bucket so all tabs/sections get their first page.
-          # General area tabs: manual / cron / channel / setup — filtered by source.
-          # Coding section: profile=coding — source is irrelevant (no source filter).
-          # has_more_by_source drives independent load-more buttons on the frontend.
-          buckets = {
-            "manual"  => { source: "manual",  profile: "general" },
-            "cron"    => { source: "cron",    profile: "general" },
-            "channel" => { source: "channel", profile: "general" },
-            "setup"   => { source: "setup",   profile: "general" },
-            "coding"  => { profile: "coding" },
-          }
-          by_bucket = buckets.each_with_object({}) do |(key, params), h|
-            page = @registry.list(limit: 6, **params)  # +1 to detect has_more
-            h[key] = { sessions: page.first(5), has_more: page.size > 5 }
-          end
-          all_sessions = by_bucket.values.flat_map { |v| v[:sessions] }.uniq { |s| s[:id] }
-          has_more_map = by_bucket.transform_values { |v| v[:has_more] }
-          conn.send_json(type: "session_list", sessions: all_sessions, has_more_by_source: has_more_map)
+          # Initial load: newest 20 sessions regardless of source/profile.
+          # Single unified query — frontend shows all in one time-sorted list.
+          page = @registry.list(limit: 21)
+          has_more = page.size > 20
+          all_sessions = page.first(20)
+          conn.send_json(type: "session_list", sessions: all_sessions, has_more: has_more)
 
         when "run_task"
           # Client sends this after subscribing to guarantee it's ready to receive
