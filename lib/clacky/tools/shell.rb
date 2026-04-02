@@ -63,7 +63,7 @@ module Clacky
         [/[Pp]assword\s*:\s*$|Enter password|enter password/, 'password'],
         [/^\s*>>>\s*$|^\s*>>?\s*$|^irb\(.*\):\d+:\d+[>*]\s*$|^\>\s*$/, 'repl'],
         [/^\s*:\s*$|\(END\)|--More--|Press .* to continue|lines \d+-\d+/, 'pager'],
-        [/Are you sure|Continue\?|Proceed\?|Confirm|Overwrite/i, 'question'],
+        [/Are you sure|Continue\?|Proceed\?|\bConfirm\b|\bConfirm\?|Overwrite/i, 'question'],
         [/Enter\s+\w+:|Input\s+\w+:|Please enter|please provide/i, 'input'],
         [/Select an option|Choose|Which one|select one/i, 'selection']
       ].freeze
@@ -316,9 +316,9 @@ module Clacky
 
         files = case shell_name
         when 'zsh'
-          %w[.zshrc .zprofile .zshenv].map { File.join(home, _1) }
+          %w[.zshrc .zprofile .zshenv].map { |f| File.join(home, f) }
         when 'bash'
-          %w[.bashrc .bash_profile .profile].map { File.join(home, _1) }
+          %w[.bashrc .bash_profile .profile].map { |f| File.join(home, f) }
         when 'fish'
           [File.join(home, '.config', 'fish', 'config.fish')]
         else
@@ -326,7 +326,7 @@ module Clacky
         end
 
         files
-          .select { File.exist?(_1) }
+          .select { |f| File.exist?(f) }
           .to_h { |f| [f, Digest::MD5.file(f).hexdigest] }
       end
 

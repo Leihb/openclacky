@@ -206,7 +206,7 @@ On success: "✅ WeCom channel configured. WeCom client → Contacts → Smart B
 
 Weixin uses a QR code login — no app_id/app_secret needed. The token from the QR scan is saved directly in `channels.yml`.
 
-#### Step 1 — Fetch QR code and open in browser
+#### Step 1 — Fetch QR code
 
 Run the script in `--fetch-qr` mode to get the QR URL without blocking:
 
@@ -221,17 +221,29 @@ Parse the JSON output:
 
 If the output contains `"error"`, show it and stop.
 
-Tell the user:
-> Opening the WeChat QR code in your browser. Please scan it with WeChat, then confirm in the app.
+#### Step 2 — Show QR code to user (browser or manual fallback)
 
-**Open the QR code page in browser** — build a local URL and navigate to it:
-
+Build the local QR page URL (include current Unix timestamp as `since` to detect new logins only):
 ```
-http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/weixin-qr.html?url=<URL-encoded qrcode_url>
+http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/weixin-qr.html?url=<URL-encoded qrcode_url>&since=<current_unix_timestamp>
 ```
 
-Use the browser tool to open this URL. The page renders a proper scannable QR code image using qrcode.js.
-Do NOT open the raw `qrcode_url` directly — that page shows "请使用微信扫码打开" with no actual QR image.
+**Try browser first** — attempt to open the QR page using the browser tool:
+```
+browser(action="navigate", url="<qr_page_url>")
+```
+
+**If browser succeeds:** Tell the user:
+> I've opened the WeChat QR code in your browser. Please scan it with WeChat, then confirm in the app.
+
+**If browser fails (not configured or unavailable):** Fall back to manual — tell the user:
+> Please open the following link in your browser to scan the WeChat QR code:
+>
+> `http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/weixin-qr.html?url=<URL-encoded qrcode_url>`
+>
+> Scan the QR code with WeChat, confirm in the app, then reply "done".
+
+The page renders a proper scannable QR code image. Do NOT open the raw `qrcode_url` directly — that page shows "请使用微信扫码打开" with no actual QR image.
 
 #### Step 3 — Wait for scan and save credentials
 
@@ -243,7 +255,11 @@ ruby "SKILL_DIR/weixin_setup.rb" --qrcode-id "$QRCODE_ID"
 
 Where `$QRCODE_ID` is the `qrcode_id` from Step 2's JSON output.
 
-This command blocks until the user scans and confirms in WeChat (up to 5 minutes), then automatically saves the token via `POST /api/channels/weixin`.
+Run this command with `timeout: 60`. If it doesn't succeed, **retry up to 3 times with the same `$QRCODE_ID`** — the QR code stays valid for 5 minutes. Only stop retrying if:
+- Exit code is 0 → success
+- Output contains "expired" → QR expired, offer to restart from Step 1
+- Output contains "timed out" → offer to restart from Step 1
+- 3 retries exhausted → show error and offer to restart from Step 1
 
 Tell the user while waiting:
 > Waiting for you to scan the QR code and confirm in WeChat... (this may take a moment)

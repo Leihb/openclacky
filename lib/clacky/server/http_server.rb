@@ -1120,6 +1120,9 @@ module Clacky
         fields = body.transform_keys(&:to_sym).reject { |k, _| k == :platform }
         fields = fields.transform_values { |v| v.is_a?(String) ? v.strip : v }
 
+        # Record when the token was last updated so clients can detect re-login
+        fields[:token_updated_at] = Time.now.to_i if platform == :weixin && fields.key?(:token)
+
         # Validate credentials against live API before persisting.
         # Merge with existing config so partial updates (e.g. allowed_users only) still validate correctly.
         klass = Clacky::Channel::Adapters.find(platform)
@@ -1195,10 +1198,10 @@ module Clacky
           }
         when :weixin
           {
-            base_url:      raw["base_url"] || Clacky::Channel::Adapters::Weixin::ApiClient::DEFAULT_BASE_URL,
-            allowed_users: raw["allowed_users"] || [],
-            # Indicate whether a token is present (never expose the token itself)
-            has_token:     !raw["token"].to_s.strip.empty?
+            base_url:          raw["base_url"] || Clacky::Channel::Adapters::Weixin::ApiClient::DEFAULT_BASE_URL,
+            allowed_users:     raw["allowed_users"] || [],
+            has_token:         !raw["token"].to_s.strip.empty?,
+            token_updated_at:  raw["token_updated_at"]  # Unix timestamp, nil if never set
           }
         else
           {}
@@ -1711,7 +1714,7 @@ module Clacky
         handshake = WebSocket::Handshake::Server.new
         handshake << build_handshake_request(req)
         unless handshake.finished? && handshake.valid?
-          $stderr.puts "WebSocket handshake invalid"
+          Clacky::Logger.warn("WebSocket handshake invalid")
           return
         end
 
@@ -1750,8 +1753,8 @@ module Clacky
               end
             end
           end
-        rescue IOError, Errno::ECONNRESET, Errno::EPIPE
-          # Client disconnected
+        rescue IOError, Errno::ECONNRESET, Errno::EPIPE, Errno::EBADF
+          # Client disconnected or socket became invalid
         ensure
           on_ws_close(conn)
           socket.close rescue nil
@@ -1761,7 +1764,7 @@ module Clacky
         res.instance_variable_set(:@header, {})
         res.status = -1
       rescue => e
-        $stderr.puts "WebSocket handler error: #{e.class}: #{e.message}"
+        Clacky::Logger.error("WebSocket handler error: #{e.class}: #{e.message}")
       end
 
       # Build a raw HTTP request string from WEBrick request for WebSocket::Handshake::Server
@@ -1966,15 +1969,28 @@ module Clacky
       end
 
       # Broadcast an event to all clients subscribed to a session.
+      # Dead connections (broken pipe / closed socket) are removed automatically.
       def broadcast(session_id, event)
         clients = @ws_mutex.synchronize { (@ws_clients[session_id] || []).dup }
-        clients.each { |conn| conn.send_json(event) rescue nil }
+        dead = clients.reject { |conn| conn.send_json(event) }
+        return if dead.empty?
+
+        @ws_mutex.synchronize do
+          (@ws_clients[session_id] || []).reject! { |conn| dead.include?(conn) }
+        end
       end
 
       # Broadcast an event to every connected client (regardless of session subscription).
+      # Dead connections are removed automatically.
       def broadcast_all(event)
         clients = @ws_mutex.synchronize { @all_ws_conns.dup }
-        clients.each { |conn| conn.send_json(event) rescue nil }
+        dead = clients.reject { |conn| conn.send_json(event) }
+        return if dead.empty?
+
+        @ws_mutex.synchronize do
+          @all_ws_conns.reject! { |conn| dead.include?(conn) }
+          @ws_clients.each_value { |list| list.reject! { |conn| dead.include?(conn) } }
+        end
       end
 
       # Broadcast a session_update event to all clients so they can patch their
@@ -2183,16 +2199,29 @@ module Clacky
           @socket     = socket
           @version    = version
           @send_mutex = Mutex.new
+          @closed     = false
         end
 
+        # Returns true if the underlying socket has been detected as dead.
+        def closed?
+          @closed
+        end
+
+        # Send a JSON-serializable object over the WebSocket.
+        # Returns true on success, false if the connection is dead.
         def send_json(data)
           send_raw(:text, JSON.generate(data))
         rescue => e
-          $stderr.puts "WS send error: #{e.message}"
+          Clacky::Logger.debug("WS send error (connection dead): #{e.message}")
+          false
         end
 
+        # Send a raw WebSocket frame.
+        # Returns true on success, false on broken/closed socket.
         def send_raw(type, data)
           @send_mutex.synchronize do
+            return false if @closed
+
             outgoing = WebSocket::Frame::Outgoing::Server.new(
               version: @version,
               data: data,
@@ -2200,8 +2229,15 @@ module Clacky
             )
             @socket.write(outgoing.to_s)
           end
+          true
+        rescue Errno::EPIPE, Errno::ECONNRESET, IOError, Errno::EBADF => e
+          @closed = true
+          Clacky::Logger.debug("WS send_raw error (client disconnected): #{e.message}")
+          false
         rescue => e
-          $stderr.puts "WS send_raw error: #{e.message}"
+          @closed = true
+          Clacky::Logger.debug("WS send_raw unexpected error: #{e.message}")
+          false
         end
       end
     end
