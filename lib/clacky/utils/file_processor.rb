@@ -62,7 +62,8 @@ module Clacky
       ".pdf"  => :pdf,
       ".zip"  => :zip, ".gz" => :zip, ".tar" => :zip, ".rar" => :zip, ".7z" => :zip,
       ".png"  => :image, ".jpg" => :image, ".jpeg" => :image,
-      ".gif"  => :image, ".webp" => :image
+      ".gif"  => :image, ".webp" => :image,
+      ".csv"  => :csv
     }.freeze
 
     # FileRef: result of process / process_path.
@@ -108,6 +109,17 @@ module Clacky
 
       when ".png", ".jpg", ".jpeg", ".gif", ".webp"
         FileRef.new(name: name, type: :image, original_path: path)
+
+      when ".csv"
+        # CSV is plain text — read directly, no external parser needed.
+        # Try UTF-8 first, then GBK (common in Chinese-origin CSV), then binary with replacement.
+        begin
+          text         = read_text_with_encoding_fallback(path)
+          preview_path = save_preview(text, path)
+          FileRef.new(name: name, type: :csv, original_path: path, preview_path: preview_path)
+        rescue => e
+          FileRef.new(name: name, type: :csv, original_path: path, parse_error: e.message)
+        end
 
       else
         result = Utils::ParserManager.parse(path)
@@ -225,7 +237,27 @@ module Clacky
       base.empty? ? 'upload' : base
     end
 
-    private_class_method :parse_zip_listing, :save_preview, :sanitize_filename
+    # Read a text file with automatic encoding detection.
+    # Tries UTF-8, then GBK (common for Chinese-origin CSV/text files), then
+    # falls back to binary read with invalid byte replacement.
+    def self.read_text_with_encoding_fallback(path)
+      # Try UTF-8 first (most common, fastest path)
+      raw = File.binread(path)
+      utf8 = raw.dup.force_encoding("UTF-8")
+      return utf8.encode("UTF-8") if utf8.valid_encoding?
+
+      # Try GBK (GB2312 superset — common in Chinese Windows/Excel exports)
+      begin
+        return raw.encode("UTF-8", "GBK", invalid: :replace, undef: :replace, replace: "?")
+      rescue Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError
+        # fall through
+      end
+
+      # Last resort: binary read with replacement characters
+      raw.encode("UTF-8", "binary", invalid: :replace, undef: :replace, replace: "?")
+    end
+
+    private_class_method :parse_zip_listing, :save_preview, :sanitize_filename, :read_text_with_encoding_fallback
   end
   end
 end
