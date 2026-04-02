@@ -320,6 +320,8 @@ module Clacky
                 cdn_media = fi["media"]
                 file_name = fi["file_name"].to_s
                 file_name = "attachment" if file_name.empty?
+                file_md5  = fi["md5"].to_s
+                file_len  = fi["len"].to_s
 
                 if cdn_media
                   begin
@@ -329,7 +331,9 @@ module Clacky
                     files << {
                       type: :file,
                       name: saved[:name],
-                      path: saved[:path]
+                      path: saved[:path],
+                      md5:  file_md5.empty? ? nil : file_md5,
+                      len:  file_len.empty? ? nil : file_len
                     }
                   rescue => e
                     Clacky::Logger.warn("[WeixinAdapter] Failed to download file #{file_name}: #{e.message}\n#{e.backtrace.first(3).join("\n")}")
@@ -337,13 +341,17 @@ module Clacky
                     files << {
                       type:      :file,
                       name:      file_name,
-                      cdn_media: cdn_media
+                      cdn_media: cdn_media,
+                      md5:       file_md5.empty? ? nil : file_md5,
+                      len:       file_len.empty? ? nil : file_len
                     }
                   end
                 else
                   files << {
                     type: :file,
-                    name: file_name
+                    name: file_name,
+                    md5:  file_md5.empty? ? nil : file_md5,
+                    len:  file_len.empty? ? nil : file_len
                   }
                 end
               when 5  # VIDEO

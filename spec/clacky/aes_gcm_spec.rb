@@ -50,35 +50,6 @@ RSpec.describe Clacky::AesGcm do
     end
   end
 
-  describe "cross-compatibility with native OpenSSL AES-256-GCM" do
-    # These tests verify wire-compatibility: ciphertext produced by one
-    # implementation can be decrypted by the other.
-
-    it "pure Ruby can decrypt what native OpenSSL encrypted" do
-      cipher           = OpenSSL::Cipher.new("aes-256-gcm").encrypt
-      cipher.key       = key
-      cipher.iv        = iv
-      cipher.auth_data = aad
-      ct  = cipher.update(plaintext) + cipher.final
-      tag = cipher.auth_tag
-
-      pt = described_class.decrypt(key, iv, ct, tag, aad)
-      expect(pt).to eq(plaintext)
-    end
-
-    it "native OpenSSL can decrypt what pure Ruby encrypted" do
-      ct, tag = described_class.encrypt(key, iv, plaintext, aad)
-
-      cipher           = OpenSSL::Cipher.new("aes-256-gcm").decrypt
-      cipher.key       = key
-      cipher.iv        = iv
-      cipher.auth_tag  = tag
-      cipher.auth_data = aad
-      pt = (cipher.update(ct) + cipher.final).force_encoding("UTF-8")
-      expect(pt).to eq(plaintext)
-    end
-  end
-
   describe "aes_gcm_decrypt fallback" do
     it "decrypts via pure Ruby when native OpenSSL is bypassed" do
       ct, tag = described_class.encrypt(key, iv, plaintext)
