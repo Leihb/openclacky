@@ -45,8 +45,8 @@ DISPLAY_NAME="OpenClacky"
 load_brand() {
     local brand_file="$HOME/.clacky/brand.yml"
     if [ -f "$brand_file" ]; then
-        BRAND_NAME=$(grep 'product_name:' "$brand_file" | sed 's/product_name: *"//' | sed 's/"//' | tr -d '[:space:]') || true
-        BRAND_COMMAND=$(grep 'package_name:' "$brand_file" | sed 's/package_name: *"//' | sed 's/"//' | tr -d '[:space:]') || true
+        BRAND_NAME=$(awk -F': ' '/^product_name:/{gsub(/^"|"$/, "", $2); gsub(/^ +| +$/, "", $2); print $2}' "$brand_file") || true
+        BRAND_COMMAND=$(awk -F': ' '/^package_name:/{gsub(/^"|"$/, "", $2); gsub(/^ +| +$/, "", $2); print $2}' "$brand_file") || true
         [ -n "$BRAND_NAME" ] && DISPLAY_NAME="$BRAND_NAME"
     fi
 }
@@ -68,8 +68,10 @@ uninstall_gem() {
         if gem list -i openclacky >/dev/null 2>&1; then
             print_step "Uninstalling via RubyGems..."
             gem uninstall openclacky -x
-            return 0
+        else
+            print_info "Gem 'openclacky' not found (already removed)"
         fi
+        return 0
     fi
     return 1
 }
@@ -106,10 +108,9 @@ remove_config() {
 
     if [ -d "$CONFIG_DIR" ]; then
         print_warning "Configuration directory found: $CONFIG_DIR"
-        read -p "$(echo -e ${YELLOW}?${NC}) Remove configuration files (including API keys)? [y/N] " -n 1 -r
-        echo
+        read -p "Remove configuration files (including API keys)? [y/N] " reply
 
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if [ "$reply" = "y" ] || [ "$reply" = "Y" ]; then
             rm -rf "$CONFIG_DIR"
             print_success "Configuration removed"
         else
@@ -132,6 +133,7 @@ main() {
 
     if ! check_installation; then
         print_warning "${DISPLAY_NAME} does not appear to be installed"
+        echo ""
         exit 0
     fi
 
@@ -140,11 +142,7 @@ main() {
 
     # Uninstall openclacky gem
     if ! uninstall_gem; then
-        print_error "Could not automatically uninstall ${DISPLAY_NAME}"
-        print_info "You may need to uninstall manually:"
-        echo "  gem uninstall openclacky"
-        echo "  rm -rf ~/.clacky"
-        exit 1
+        print_warning "gem command not found, skipping gem uninstall"
     fi
 
     print_success "${DISPLAY_NAME} uninstalled successfully"
