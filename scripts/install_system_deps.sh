@@ -153,8 +153,15 @@ setup_apt_mirror() {
     if ! _is_slow "$baidu"; then
         print_info "Region: China — configuring Aliyun apt mirror"
         local codename="${VERSION_CODENAME:-jammy}"
-        local mirror="https://mirrors.aliyun.com/ubuntu/"
         local components="main restricted universe multiverse"
+        local arch
+        arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
+        # arm64 uses ubuntu-ports mirror; amd64/i386 uses standard ubuntu mirror
+        if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then
+            local mirror="https://mirrors.aliyun.com/ubuntu-ports/"
+        else
+            local mirror="https://mirrors.aliyun.com/ubuntu/"
+        fi
         sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb ${mirror} ${codename} ${components}
 deb ${mirror} ${codename}-updates ${components}

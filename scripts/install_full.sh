@@ -641,8 +641,15 @@ install_ubuntu_dependencies() {
     if [ "$USE_CN_MIRRORS" = true ]; then
         print_info "Configuring apt mirror (Aliyun)..."
         local codename="${VERSION_CODENAME:-jammy}"
-        local mirror_base="https://mirrors.aliyun.com/ubuntu/"
         local common_components="main restricted universe multiverse"
+        local arch
+        arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
+        # arm64 uses ubuntu-ports mirror; amd64/i386 uses standard ubuntu mirror
+        if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then
+            local mirror_base="https://mirrors.aliyun.com/ubuntu-ports/"
+        else
+            local mirror_base="https://mirrors.aliyun.com/ubuntu/"
+        fi
         sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb ${mirror_base} ${codename} ${common_components}
 deb ${mirror_base} ${codename}-updates ${common_components}
