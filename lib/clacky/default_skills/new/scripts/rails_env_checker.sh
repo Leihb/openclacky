@@ -116,11 +116,11 @@ check_ruby() {
         RUBY_VERSION=$(ruby -e 'puts RUBY_VERSION' 2>/dev/null)
         print_info "Found Ruby version: $RUBY_VERSION"
 
-        if version_ge "$RUBY_VERSION" "3.0.0"; then
-            print_success "Ruby version is compatible (>= 3.0.0)"
+        if version_ge "$RUBY_VERSION" "3.3.0"; then
+            print_success "Ruby version is compatible (>= 3.3.0)"
             return 0
         else
-            print_warning "Ruby version $RUBY_VERSION is too old (need >= 3.0.0)"
+            print_warning "Ruby version $RUBY_VERSION is too old (need >= 3.3.0)"
             return 1
         fi
     else
@@ -305,21 +305,42 @@ main() {
     POSTGRESQL_OK=false
     RUBY_OK=false
 
-    # Check Ruby
+    # Check Ruby — auto-install via mise if version is too old or missing
     print_step "Checking Ruby..."
     if check_ruby; then
         RUBY_OK=true
     else
-        print_error "Ruby 3.0+ is required"
-        print_info "Please install Ruby using rbenv or mise:"
-        echo "  # Using mise (recommended)"
-        echo "  curl https://mise.run | sh"
-        echo "  mise use -g ruby@3"
-        echo ""
-        echo "  # Or using rbenv"
-        echo "  rbenv install 3.3.0"
-        echo "  rbenv global 3.3.0"
-        exit 1
+        print_warning "Ruby 3.0+ is required — attempting automatic installation..."
+        local installer="$HOME/.clacky/scripts/install_rails_deps.sh"
+        if [ ! -f "$installer" ]; then
+            print_error "install_rails_deps.sh not found at: $installer"
+            print_info "Please install Ruby 3.3+ manually:"
+            echo "  curl https://mise.run | sh"
+            echo "  mise use -g ruby@3"
+            exit 1
+        fi
+
+        if bash "$installer" ruby; then
+            # Re-check after installation (mise may have updated PATH)
+            # Source mise activation in case it wasn't active yet
+            if [ -x "$HOME/.local/bin/mise" ]; then
+                eval "$("$HOME/.local/bin/mise" activate bash 2>/dev/null)" 2>/dev/null || true
+                export PATH="$HOME/.local/bin:$PATH"
+            fi
+
+            if check_ruby; then
+                RUBY_OK=true
+                print_success "Ruby installed and verified"
+            else
+                print_error "Ruby installation succeeded but version check still fails"
+                print_info "Try opening a new terminal and re-running the setup"
+                exit 1
+            fi
+        else
+            print_error "Automatic Ruby installation failed"
+            print_info "Please install Ruby 3.3+ manually and run this script again"
+            exit 1
+        fi
     fi
 
     # Check Node.js

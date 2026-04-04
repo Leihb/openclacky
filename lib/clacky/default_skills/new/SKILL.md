@@ -58,7 +58,7 @@ The script will automatically:
 
 **Step 2: Check Environment**
 - Run rails_env_checker.sh to verify dependencies:
-  - Ruby >= 3.0.0 (must be pre-installed)
+  - Ruby >= 3.3.0 (auto-installed via mise if missing or too old — supports CN mirrors)
   - Node.js >= 22.0.0 (will install automatically if missing on macOS/Ubuntu)
   - PostgreSQL (will install automatically if missing on macOS/Ubuntu)
 - Script automatically installs missing dependencies without prompting
@@ -96,7 +96,7 @@ What would you like to develop next?
 ## Error Handling
 - Directory not empty → Ask user confirmation, abort if declined
 - Git clone fails → Check network connection, verify repository URL
-- Ruby not installed → Error message, user must install Ruby 3.x manually
+- Ruby < 3.3 or missing → **Automatically installs Ruby 3.3 via mise** (with CN mirror support); exits with instructions if mise install fails
 - Node.js < 22 → Script installs automatically (macOS/Ubuntu)
 - PostgreSQL missing → Script installs automatically (macOS/Ubuntu)
 - bin/setup fails → Show error, suggest running `./bin/setup` manually
