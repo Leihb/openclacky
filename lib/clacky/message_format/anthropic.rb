@@ -151,7 +151,15 @@ module Clacky
 
         # canonical tool result (role: "tool") → Anthropic user message with tool_result block
         if role == "tool"
-          block = { type: "tool_result", tool_use_id: msg[:tool_call_id], content: msg[:content] }
+          # If content is an Array of canonical blocks (e.g. image_url + text from file_reader),
+          # convert each block to Anthropic format via content_to_blocks.
+          # Plain strings pass through unchanged.
+          tool_content = if msg[:content].is_a?(Array)
+                           content_to_blocks(msg[:content])
+                         else
+                           msg[:content]
+                         end
+          block = { type: "tool_result", tool_use_id: msg[:tool_call_id], content: tool_content }
           return { role: "user", content: [block] }
         end
 

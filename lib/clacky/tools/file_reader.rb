@@ -216,17 +216,13 @@ module Clacky
             description += "\nWARNING: Large file (>#{Utils::FileProcessor::MAX_FILE_SIZE / 1024}KB) - may consume significant tokens"
           end
 
-          # For images, return both description and image content
+          # For images, return content blocks Array (same pattern as browser tool)
+          # so build_success_result passes it through as-is instead of JSON.generate-ing it.
           if result[:mime_type]&.start_with?("image/")
-            return {
-              type: "image",
-              path: result[:path],
-              format: result[:format],
-              size_bytes: result[:size_bytes],
-              mime_type: result[:mime_type],
-              base64_data: result[:base64_data],
-              description: description
-            }
+            return [
+              { type: "text", text: description },
+              { type: "image_url", image_url: { url: "data:#{result[:mime_type]};base64,#{result[:base64_data]}" } }
+            ]
           end
 
           # For PDFs and other binary formats, just return metadata with base64

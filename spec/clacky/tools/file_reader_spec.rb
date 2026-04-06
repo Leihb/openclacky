@@ -378,12 +378,20 @@ RSpec.describe Clacky::Tools::FileReader do
         mime_type: "image/png",
         base64_data: "iVBORw0KG..."
       }
-      
+
       formatted = tool.format_result_for_llm(result)
-      
-      expect(formatted[:type]).to eq("image")
-      expect(formatted[:mime_type]).to eq("image/png")
-      expect(formatted[:base64_data]).to eq("iVBORw0KG...")
+
+      # Should return Array of content blocks (same pattern as browser tool)
+      expect(formatted).to be_an(Array)
+      expect(formatted.length).to eq(2)
+
+      text_block = formatted[0]
+      expect(text_block[:type]).to eq("text")
+      expect(text_block[:text]).to include("image.png")
+
+      image_block = formatted[1]
+      expect(image_block[:type]).to eq("image_url")
+      expect(image_block[:image_url][:url]).to eq("data:image/png;base64,iVBORw0KG...")
     end
 
     it "returns a plain string for non-binary files (avoids JSON double-escaping)" do

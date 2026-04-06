@@ -164,11 +164,13 @@ module Clacky
         # canonical tool result (role: "tool") → Bedrock user message with toolResult block
         if role == "tool"
           result_content = msg[:content]
-          # Bedrock toolResult content must be an array of blocks
+          # Bedrock toolResult content must be an array of Bedrock-native blocks.
+          # If content is an Array of canonical blocks (e.g. image_url + text from file_reader),
+          # convert each block to Bedrock format via normalize_block.
           result_blocks = if result_content.is_a?(String)
                            [{ text: result_content }]
                          elsif result_content.is_a?(Array)
-                           result_content
+                           result_content.map { |b| normalize_block(b) }.compact
                          else
                            [{ text: result_content.to_s }]
                          end
