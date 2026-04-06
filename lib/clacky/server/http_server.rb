@@ -328,7 +328,12 @@ module Clacky
 
         # Wrap all REST handlers in a timeout so a hung handler (e.g. infinite
         # recursion in chunk parsing) returns a proper 503 instead of an empty 200.
-        timeout_sec = 10
+        #
+        # Brand/license endpoints call PlatformHttpClient which retries across two
+        # hosts with OPEN_TIMEOUT=8s per attempt × 2 attempts = up to ~16s on the
+        # primary alone, before failing over to the fallback domain.  Give them a
+        # generous 90s so retry + failover can complete without being cut short.
+        timeout_sec = path.start_with?("/api/brand") ? 90 : 10
         Timeout.timeout(timeout_sec) do
           _dispatch_rest(req, res)
         end

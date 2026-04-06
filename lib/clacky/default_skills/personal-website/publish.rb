@@ -9,8 +9,8 @@
 # ~/.clacky/card_token (used for future updates/deletes).
 #
 # Environment:
-#   CARD_API_BASE   — platform base URL (default: https://app.clacky.ai)
-#   CARD_HMAC_SECRET — shared secret (default matches platform default)
+#   CLACKY_LICENSE_SERVER — platform base URL override (default: https://www.openclacky.com)
+#   CARD_HMAC_SECRET      — shared secret (default matches platform default)
 
 require "net/http"
 require "uri"
@@ -22,20 +22,29 @@ require "fileutils"
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-API_BASE     = ENV.fetch("CLACKY_LICENSE_SERVER", "https://www.openclacky.com")
+# Primary CDN-accelerated endpoint.
+# Fallback bypasses EdgeOne and is used when the primary times out or errors.
+PRIMARY_HOST  = ENV.fetch("CLACKY_LICENSE_SERVER", "https://www.openclacky.com")
+FALLBACK_HOST = "https://openclacky-platform.clackyai.app"
+# When the env override is set we use only that host (dev/test mode).
+API_HOSTS     = ENV["CLACKY_LICENSE_SERVER"] ? [PRIMARY_HOST] : [PRIMARY_HOST, FALLBACK_HOST]
+
 HMAC_SECRET  = ENV.fetch("CARD_HMAC_SECRET", "openclacky-card-v1-default-secret-change-me")
 TOKEN_FILE   = File.expand_path("~/clacky_workspace/personal_website/token.json")
+
+# Retry / timeout config
+OPEN_TIMEOUT      = 8
+READ_TIMEOUT      = 15
+ATTEMPTS_PER_HOST = 2
+INITIAL_BACKOFF   = 0.5
 
 # ── HMAC signing ─────────────────────────────────────────────────────────────
 
 def device_fingerprint
-  # Combine stable machine identifiers into an opaque hash
   parts = []
   parts << `hostname`.strip
-  # macOS: hardware UUID
   hw = `system_profiler SPHardwareDataType 2>/dev/null | grep 'Hardware UUID'`.strip
   parts << hw unless hw.empty?
-  # Fallback: username
   parts << ENV["USER"].to_s
   Digest::SHA256.hexdigest(parts.join("|"))[0, 16]
 end
@@ -55,26 +64,56 @@ end
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 
-def http_request(method, path, body: nil)
-  uri  = URI.parse("#{API_BASE}#{path}")
+# Resilient HTTP request: retries on transient errors, then fails over to the
+# fallback host before giving up.
+#
+# Returns [http_code_int, parsed_body_hash].
+# Calls exit(1) on network failure (all hosts/attempts exhausted).
+def http_request(method, path, body: nil, extra_headers: {})
+  last_error = nil
+
+  API_HOSTS.each_with_index do |base, host_index|
+    ATTEMPTS_PER_HOST.times do |attempt|
+      begin
+        result = do_http_request(method, base, path, body: body, extra_headers: extra_headers)
+        return result
+      rescue RetryableError => e
+        last_error = e
+        backoff    = INITIAL_BACKOFF * (2**attempt)
+        sleep(backoff)
+      end
+    end
+  end
+
+  warn "❌ Network error: #{last_error&.message || "unknown"}"
+  exit 1
+end
+
+def do_http_request(method, base, path, body:, extra_headers:)
+  uri  = URI.parse("#{base}#{path}")
   http = Net::HTTP.new(uri.host, uri.port)
-  http.use_ssl = uri.scheme == "https"
-  http.read_timeout = 15
-  http.open_timeout = 10
+  http.use_ssl      = uri.scheme == "https"
+  http.open_timeout = OPEN_TIMEOUT
+  http.read_timeout = READ_TIMEOUT
 
   req_class = { "POST" => Net::HTTP::Post, "PATCH" => Net::HTTP::Patch,
                 "DELETE" => Net::HTTP::Delete }[method]
   req = req_class.new(uri.path)
   hmac_headers.each { |k, v| req[k] = v }
+  extra_headers.each { |k, v| req[k] = v }
   req.body = body.to_json if body
 
   response = http.request(req)
   parsed   = JSON.parse(response.body) rescue { "raw" => response.body }
   [response.code.to_i, parsed]
-rescue => e
-  warn "❌ Network error: #{e.message}"
-  exit 1
+rescue Net::OpenTimeout, Net::ReadTimeout,
+       Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ENETUNREACH,
+       Errno::ECONNRESET, EOFError, OpenSSL::SSL::SSLError => e
+  raise RetryableError, e.message
 end
+
+# Sentinel for transient network errors that should trigger retry/failover.
+class RetryableError < StandardError; end
 
 # ── Token storage ─────────────────────────────────────────────────────────────
 
@@ -111,16 +150,9 @@ def cmd_publish(name:, html_file:)
     slug  = token_data["slug"]
     token = token_data["update_token"]
 
-    uri  = URI.parse("#{API_BASE}/api/v1/personal_websites/#{slug}")
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = uri.scheme == "https"
-    req  = Net::HTTP::Patch.new(uri.path)
-    hmac_headers.each { |k, v| req[k] = v }
-    req["X-Card-Token"] = token
-    req.body = { html_content: html_content }.to_json
-    resp   = http.request(req)
-    status = resp.code.to_i
-    body   = JSON.parse(resp.body) rescue { "raw" => resp.body }
+    status, body = http_request("PATCH", "/api/v1/personal_websites/#{slug}",
+                                body: { html_content: html_content },
+                                extra_headers: { "X-Card-Token" => token })
 
     if status == 200
       puts "✅ Website updated: #{body["url"]}"
@@ -131,7 +163,7 @@ def cmd_publish(name:, html_file:)
   else
     # First publish — POST to create
     status, body = http_request("POST", "/api/v1/personal_websites",
-      body: { name: name, html_content: html_content })
+                                body: { name: name, html_content: html_content })
 
     if status == 201
       save_token_data("slug" => body["slug"], "update_token" => body["update_token"])
@@ -156,16 +188,8 @@ def cmd_delete(slug: nil)
     exit 1
   end
 
-  uri  = URI.parse("#{API_BASE}/api/v1/personal_websites/#{slug}")
-  http = Net::HTTP.new(uri.host, uri.port)
-  http.use_ssl = uri.scheme == "https"
-  req  = Net::HTTP::Delete.new(uri.path)
-  hmac_headers.each { |k, v| req[k] = v }
-  req["X-Card-Token"] = token
-
-  resp   = http.request(req)
-  status = resp.code.to_i
-  body   = JSON.parse(resp.body) rescue { "raw" => resp.body }
+  status, body = http_request("DELETE", "/api/v1/personal_websites/#{slug}",
+                              extra_headers: { "X-Card-Token" => token })
 
   if status == 200
     File.delete(TOKEN_FILE) if File.exist?(TOKEN_FILE)
@@ -174,9 +198,6 @@ def cmd_delete(slug: nil)
     warn "❌ Delete failed (#{status}): #{body["error"] || body.inspect}"
     exit 1
   end
-rescue => e
-  warn "❌ Network error: #{e.message}"
-  exit 1
 end
 
 # ── CLI parsing ───────────────────────────────────────────────────────────────

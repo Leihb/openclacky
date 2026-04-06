@@ -33,11 +33,6 @@ module Clacky
     CONFIG_DIR  = File.join(Dir.home, ".clacky")
     BRAND_FILE  = File.join(CONFIG_DIR, "brand.yml")
 
-    # OpenClacky Cloud API base URL.
-    # Override with CLACKY_LICENSE_SERVER env var for local development:
-    #   CLACKY_LICENSE_SERVER=http://localhost:3000 bundle exec ruby bin/clacky server
-    API_BASE_URL = ENV.fetch("CLACKY_LICENSE_SERVER", "https://www.openclacky.com")
-
     # How often to send a heartbeat (seconds) — once per day
     HEARTBEAT_INTERVAL = 86_400
 
@@ -285,9 +280,6 @@ module Clacky
       return { success: false, error: "License not activated" } unless activated?
       return { success: false, error: "User license required to upload skills" } unless user_licensed?
 
-      require "net/http"
-      require "uri"
-
       # The client skills API uses @license_user_id (the platform owner user id),
       # NOT the user_id embedded in the license key structure.
       user_id   = @license_user_id.to_s
@@ -299,23 +291,17 @@ module Clacky
 
       # POST /api/v1/client/skills         → create (first upload)
       # PATCH /api/v1/client/skills/:name → update (force overwrite)
-      if force
-        uri = URI.parse("#{API_BASE_URL}/api/v1/client/skills/#{URI.encode_www_form_component(skill_name)}")
-      else
-        uri = URI.parse("#{API_BASE_URL}/api/v1/client/skills")
-      end
-
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl       = uri.scheme == "https"
-      http.open_timeout  = 15
-      http.read_timeout  = 60
+      path = if force
+               "/api/v1/client/skills/#{URI.encode_www_form_component(skill_name)}"
+             else
+               "/api/v1/client/skills"
+             end
 
       boundary = "----ClackySkillUpload#{SecureRandom.hex(8)}"
       crlf     = "\r\n"
 
-      # Build multipart body as a binary string using Array#pack so that null bytes
-      # in the ZIP data are preserved. Net::HTTP's body= raises on null bytes in
-      # the body string — avoid by writing all parts as binary and using body_stream.
+      # Build multipart body as a binary string so that null bytes in the ZIP
+      # data are preserved. All parts are joined as binary before sending.
       parts = []
       fields = {
         "key_hash"  => key_hash,
@@ -339,34 +325,34 @@ module Clacky
       parts << "--#{boundary}#{crlf}"
       parts << "Content-Disposition: form-data; name=\"skill_zip\"; filename=\"#{skill_name}.zip\"#{crlf}"
       parts << "Content-Type: application/zip#{crlf}#{crlf}"
-      # zip_data is binary — keep as-is
       parts << zip_data.b
       parts << "#{crlf}--#{boundary}--#{crlf}"
 
-      # Concatenate all parts as a single binary string
-      body_bytes = parts.map { |p| p.b }.join
+      body_bytes = parts.map(&:b).join
 
-      request = force ? Net::HTTP::Patch.new(uri.path) : Net::HTTP::Post.new(uri.path)
-      request["Content-Type"]   = "multipart/form-data; boundary=#{boundary}"
-      request["Content-Length"] = body_bytes.bytesize.to_s
-      request.body_stream = StringIO.new(body_bytes)
+      # Delegate sending (with retry + failover) to PlatformHttpClient.
+      # Uploads can be slow so we allow a generous 60-second read timeout.
+      result = if force
+                 platform_client.multipart_patch(path, body_bytes, boundary, read_timeout: 60)
+               else
+                 platform_client.multipart_post(path, body_bytes, boundary, read_timeout: 60)
+               end
 
-      response = http.request(request)
-      parsed   = JSON.parse(response.body) rescue {}
-
-      code_i = response.code.to_i
-      if code_i == 200 || code_i == 201
+      if result[:success]
+        parsed = result[:data]
         { success: true, skill: parsed["skill"] }
       else
-        # Server returns { status: "error", code: "...", errors: [...] }
-        code   = parsed["code"] || parsed["error"]
-        errors = parsed["errors"]&.join(", ")
-        msg    = [code, errors].compact.join(": ")
-        msg    = "Upload failed (HTTP #{response.code})" if msg.empty?
+        # Propagate structured error from PlatformHttpClient
+        body   = result[:data] || {}
+        code   = body["code"] || body["error"]
+        errors = body["errors"]&.join(", ")
+        msg    = result[:error] || [code, errors].compact.join(": ")
+        msg    = "Upload failed" if msg.to_s.strip.empty?
 
-        # Detect "already exists" conflicts (HTTP 409 or name_taken error code)
-        # so the caller can offer the user an overwrite option.
-        already_exists = code_i == 409 || code.to_s.include?("name_taken") || code.to_s.include?("already")
+        # Detect "already exists" conflicts so the caller can offer an overwrite option.
+        already_exists = body["code"].to_s.include?("name_taken") ||
+                         body["code"].to_s.include?("already") ||
+                         result[:error].to_s.include?("HTTP 409")
         { success: false, error: msg, already_exists: already_exists }
       end
     rescue StandardError => e
@@ -1158,49 +1144,17 @@ module Clacky
       nil
     end
 
-    # POST JSON to the API and return { success:, data:, error: }.
+    # POST JSON to the platform API with automatic retry and domain failover.
+    # Returns { success:, data:, error: }.
     private def api_post(path, payload)
-      require "net/http"
-      require "uri"
-
-      uri = URI.parse("#{API_BASE_URL}#{path}")
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl = uri.scheme == "https"
-      http.open_timeout = 10
-      http.read_timeout = 15
-
-      request = Net::HTTP::Post.new(uri.path, "Content-Type" => "application/json")
-      request.body = JSON.generate(payload)
-
-      response = http.request(request)
-      body     = JSON.parse(response.body) rescue {}
-
-      if response.code.to_i == 200
-        { success: true, data: body["data"] || body }
-      else
-        error_msg = map_api_error(body["code"])
-        { success: false, error: error_msg, data: body }
-      end
-    rescue StandardError => e
-      { success: false, error: "Network error: #{e.message}", data: {} }
+      platform_client.post(path, payload)
     end
 
-    # Map API error codes to human-readable messages.
-    API_ERROR_MESSAGES = {
-      "invalid_proof"        => "Invalid license key — please check and try again.",
-      "invalid_signature"    => "Invalid request signature.",
-      "nonce_replayed"       => "Duplicate request detected. Please try again.",
-      "timestamp_expired"    => "System clock is out of sync. Please adjust your time settings.",
-      "license_revoked"      => "This license has been revoked. Please contact support.",
-      "license_expired"      => "This license has expired. Please renew to continue.",
-      "device_limit_reached" => "Device limit reached for this license.",
-      "device_revoked"       => "This device has been revoked from the license.",
-      "invalid_license"      => "License key not found. Please verify the key.",
-      "device_not_found"     => "Device not registered. Please re-activate."
-    }.freeze
-
-    private def map_api_error(code)
-      API_ERROR_MESSAGES[code] || "Activation failed (#{code || 'unknown error'}). Please contact support."
+    # Lazy-initialised PlatformHttpClient, respecting CLACKY_LICENSE_SERVER override.
+    private def platform_client
+      @platform_client ||= Clacky::PlatformHttpClient.new(
+        base_url: ENV["CLACKY_LICENSE_SERVER"]
+      )
     end
   end
 end

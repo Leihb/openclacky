@@ -3394,6 +3394,13 @@ body {
   gap: 6px;
   flex-shrink: 0;
 }
+/* Inline install-error tip (replaces alert dialog) */
+.brand-install-error {
+  font-size: 12px;
+  color: var(--color-danger, #f87171);
+  margin-top: 6px;
+  line-height: 1.4;
+}
 
 /* Version chips */
 .brand-skill-version {
