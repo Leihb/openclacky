@@ -132,10 +132,13 @@ To use this skill, simply say:
 
 6. **Sync scripts/ to OSS**
 
-   After updating latest.txt, sync all files in `scripts/` to OSS so users always get the latest install scripts:
+   After updating latest.txt, first rebuild all shell scripts from templates, then sync to OSS:
 
    ```bash
-   # Upload each script file to OSS
+   # Step 1: Rebuild .sh files from .sh.cc templates
+   bash scripts/build/build.sh
+
+   # Step 2: Upload each script file to OSS
    for script in scripts/*; do
      coscli cp "$script" cos://clackyai-1258723534/clacky-ai/openclacky/main/scripts/$(basename "$script")
    done
@@ -144,7 +147,7 @@ To use this skill, simply say:
    curl -fsSL https://oss.1024code.com/clacky-ai/openclacky/main/scripts/install.sh | head -5
    ```
 
-   This ensures `scripts/install.sh`, `scripts/install_simple.sh`, `scripts/install.ps1`, `scripts/uninstall.sh` and any future scripts are all mirrored on OSS.
+   This ensures `scripts/install.sh`, `scripts/install_simple.sh`, `scripts/install.ps1`, `scripts/uninstall.sh` and any future scripts are compiled from latest templates and mirrored on OSS.
 
    > **Prerequisite**: Same `coscli` setup as above
 
@@ -338,7 +341,8 @@ echo "X.Y.Z" > /tmp/latest.txt
 coscli cp /tmp/latest.txt cos://clackyai-1258723534/openclacky/latest.txt
 curl -fsSL https://oss.1024code.com/openclacky/latest.txt  # verify
 
-# Sync scripts/ to OSS
+# Sync scripts/ to OSS (build from templates first)
+bash scripts/build/build.sh
 for script in scripts/*; do
   coscli cp "$script" cos://clackyai-1258723534/clacky-ai/openclacky/main/scripts/$(basename "$script")
 done

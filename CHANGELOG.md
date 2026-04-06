@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.27] - 2026-04-07
+
+### Added
+- **Image understanding in file_reader**: the agent can now read and analyse images (PNG, JPG, GIF, WebP) by sending them to the vision API — just attach or reference an image file
+- **Image auto-resize before upload**: large images are automatically resized to fit within model limits (max 5 MB base64), so vision requests no longer fail on high-resolution files
+- **Rails project installer script**: new `install_rails_deps.sh` script sets up a complete Ruby on Rails development environment (Ruby, Bundler, Node, Yarn, PostgreSQL) in one command
+- **Uninstall script**: new `scripts/uninstall.sh` to cleanly remove the openclacky gem and its associated files
+- **Shell script build system**: `scripts/build/` now contains a template compiler (`.sh.cc` → `.sh`) with dependency checking — install scripts are generated from composable library modules
+- **stdout streaming in Web UI**: agent tool output and shell results are now streamed live to the browser as they arrive, rather than waiting for a full response
+- **Ctrl+O shortcut in CLI**: pressing Ctrl+O in the terminal UI opens a file/output viewer for the current session
+
+### Improved
+- **Smart error recovery on 400 responses**: the agent now rolls back its message history when an API request is rejected as malformed (BadRequestError), preventing the same bad message from being replayed on every subsequent turn
+- **Brand skill reliability**: brand skills now auto-retry on transient failures and fall back gracefully if the remote skill is temporarily unavailable
+- **Shell tool RC file loading**: shell commands now correctly source `.bashrc` / `.zshrc` so user-defined aliases and environment variables are available inside tool executions
+- **Shell UTF-8 encoding**: fixed a warning about character encoding when shell output contains non-ASCII characters
+
+### Fixed
+- **Shell UTF-8 warning suppression**: eliminated noisy encoding warnings that appeared in shell tool output on some macOS setups
+
+### More
+- Lite mode configuration groundwork for clackyai platform
+- Rails new-project skill updated with improved environment checker
+- `new` skill improvements: http_server integration and tool category support
+
 ## [0.9.26] - 2026-04-03
 
 ### Added
