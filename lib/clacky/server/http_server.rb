@@ -371,6 +371,7 @@ module Clacky
         when ["POST",   "/api/brand/activate"]    then api_brand_activate(req, res)
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
         when ["GET",    "/api/brand"]             then api_brand_info(res)
+        when ["GET",    "/api/creator/skills"]    then api_creator_skills(res)
         when ["GET",    "/api/channels"]          then api_list_channels(res)
         when ["POST",   "/api/tool/browser"]      then api_tool_browser(req, res)
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
@@ -1370,15 +1371,29 @@ module Clacky
       # GET /api/skills — list all loaded skills with metadata
       def api_list_skills(res)
         @skill_loader.load_all  # refresh from disk on each request
+        upload_meta = Clacky::BrandConfig.load_upload_meta
+        shadowed    = @skill_loader.shadowed_by_local
+
         skills = @skill_loader.all_skills.reject(&:brand_skill).map do |skill|
           source = @skill_loader.loaded_from[skill.identifier]
+          meta   = upload_meta[skill.identifier] || {}
+
+          # Compute local modification time of SKILL.md for "has local changes" indicator
+          skill_md_path = File.join(skill.directory.to_s, "SKILL.md")
+          local_modified_at = File.exist?(skill_md_path) ? File.mtime(skill_md_path).utc.iso8601 : nil
+
           entry = {
-            name:        skill.identifier,
-            description: skill.context_description,
-            source:      source,
-            enabled:     !skill.disabled?,
-            invalid:     skill.invalid?,
-            warnings:    skill.warnings
+            name:              skill.identifier,
+            description:       skill.context_description,
+            source:            source,
+            enabled:           !skill.disabled?,
+            invalid:           skill.invalid?,
+            warnings:          skill.warnings,
+            platform_version:  meta["platform_version"],
+            uploaded_at:       meta["uploaded_at"],
+            local_modified_at: local_modified_at,
+            # true when this local skill is shadowing a same-named brand skill
+            shadowing_brand:   shadowed.key?(skill.identifier)
           }
           entry[:invalid_reason] = skill.invalid_reason if skill.invalid?
           entry
@@ -1446,6 +1461,89 @@ module Clacky
       end
 
       # POST /api/my-skills/:name/publish
+      # GET /api/creator/skills
+      # Returns two separate groups:
+      #   cloud_skills — published to the platform (with download_count)
+      #   local_skills — local user skills not yet published, or published but with local changes
+      # Requires user_licensed? — returns 403 otherwise.
+      private def api_creator_skills(res)
+        brand = Clacky::BrandConfig.load
+
+        unless brand.user_licensed?
+          json_response(res, 403, { ok: false, error: "User license required" })
+          return
+        end
+
+        @skill_loader.load_all
+        upload_meta  = Clacky::BrandConfig.load_upload_meta
+        shadowed     = @skill_loader.shadowed_by_local
+
+        # Local user skills (exclude default/brand sources)
+        local_skill_objects = @skill_loader.all_skills.reject(&:brand_skill).select do |skill|
+          src = @skill_loader.loaded_from[skill.identifier]
+          %i[global_clacky project_clacky global_claude project_claude].include?(src)
+        end
+
+        # Build local map: name → entry
+        local_map = local_skill_objects.each_with_object({}) do |skill, h|
+          meta = upload_meta[skill.identifier] || {}
+          skill_md_path = File.join(skill.directory.to_s, "SKILL.md")
+          local_modified_at = File.exist?(skill_md_path) ? File.mtime(skill_md_path).utc.iso8601 : nil
+          h[skill.identifier] = {
+            name:              skill.identifier,
+            description:       skill.context_description,
+            source:            @skill_loader.loaded_from[skill.identifier],
+            enabled:           !skill.disabled?,
+            platform_version:  meta["platform_version"],
+            uploaded_at:       meta["uploaded_at"],
+            local_modified_at: local_modified_at,
+            shadowing_brand:   shadowed.key?(skill.identifier)
+          }
+        end
+
+        # Fetch platform skills (may fail — we still return local skills)
+        platform_result = brand.fetch_my_skills!
+        platform_skills = platform_result[:success] ? platform_result[:skills] : []
+
+        # cloud_skills: everything that has been published to the platform
+        # (annotated with local presence and change indicator)
+        cloud_skills = platform_skills.map do |ps|
+          name  = ps["name"].to_s
+          local = local_map[name]
+          # Has local changes if local SKILL.md mtime is newer than uploaded_at
+          has_local_changes = if local && local[:local_modified_at] && local[:uploaded_at]
+            Time.parse(local[:local_modified_at]) > Time.parse(local[:uploaded_at]) rescue false
+          else
+            false
+          end
+          {
+            name:              name,
+            description:       ps["description"],
+            version:           ps["version"],
+            download_count:    ps["download_count"] || 0,
+            status:            ps["status"],
+            local_present:     local_map.key?(name),
+            has_local_changes: has_local_changes,
+            uploaded_at:       ps["updated_at"],
+            local_modified_at: local&.dig(:local_modified_at)
+          }
+        end.sort_by { |s| s[:name] }
+
+        # local_skills: local user skills that have NOT been published yet
+        # (uploaded_at nil means never published; skip if already in cloud)
+        published_names = platform_skills.map { |ps| ps["name"].to_s }.to_set
+        local_skills = local_map.values
+          .reject { |e| published_names.include?(e[:name]) }
+          .sort_by { |e| e[:name] }
+
+        json_response(res, 200, {
+          ok:                   true,
+          cloud_skills:         cloud_skills,
+          local_skills:         local_skills,
+          platform_fetch_error: platform_result[:success] ? nil : platform_result[:error]
+        })
+      end
+
       # Auto-packages the named skill directory into a ZIP and uploads it to the
       # OpenClacky cloud. No file picker is required — the server finds the skill
       # directory, zips it, and streams the ZIP to the cloud API.
@@ -1526,7 +1624,10 @@ module Clacky
           result = brand.upload_skill!(name, zip_data, force: force)
 
           if result[:success]
-            json_response(res, 200, { ok: true, name: name })
+            # Record the platform version returned by the server
+            platform_version = result.dig(:skill, "version")
+            Clacky::BrandConfig.record_upload!(name, platform_version) if platform_version
+            json_response(res, 200, { ok: true, name: name, platform_version: platform_version })
           else
             # Pass already_exists flag so the frontend can offer an overwrite prompt
             json_response(res, 422, {

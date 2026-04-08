@@ -169,6 +169,25 @@
           </div>
         </div>
       </div>
+
+      <!-- Creator Group — only shown when user_licensed -->
+      <div id="creator-section" style="display:none">
+        <div class="sidebar-divider"><span data-i18n="sidebar.creatorSection">Creator</span></div>
+        <div id="creator-nav-items">
+          <div id="creator-sidebar-item" class="task-item task-item-summary">
+            <div class="task-row">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="task-icon">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                <path d="M2 17l10 5 10-5"/>
+                <path d="M2 12l10 5 10-5"/>
+              </svg>
+              <div class="task-info">
+                <span class="task-name" id="creator-sidebar-label" data-i18n="sidebar.creator">Creator Hub</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Bottom Settings -->
@@ -290,6 +309,51 @@
           <button id="btn-send" data-i18n="chat.btn.send">Send</button>
           <button id="btn-interrupt" style="display:none" title="Stop">■</button>
         </div>
+      </div>
+    </div>
+
+    <!-- ── CREATOR PANEL ─────────────────────────────────────────────── -->
+    <div id="creator-panel" style="display:none">
+      <div id="creator-body">
+        <div class="skills-page-header">
+          <h2 class="skills-page-title" data-i18n="creator.title">Creator Hub</h2>
+          <p class="skills-page-subtitle" data-i18n="creator.subtitle">Manage and publish your skills to the platform</p>
+        </div>
+
+        <!-- Section 1: Cloud skills (published) -->
+        <div class="creator-section-block" id="creator-cloud-block">
+          <div class="creator-section-header">
+            <span class="creator-section-label" data-i18n="creator.section.cloud">Cloud Skills</span>
+            <span class="creator-section-hint" data-i18n="creator.section.cloudHint">Published to the platform</span>
+          </div>
+          <div id="creator-cloud-list" class="creator-list"></div>
+        </div>
+
+        <!-- Section 2: Local skills (ready to publish) -->
+        <div class="creator-section-block" id="creator-local-block">
+          <div class="creator-section-header">
+            <span class="creator-section-label" data-i18n="creator.section.local">Local Skills</span>
+            <span class="creator-section-hint" data-i18n="creator.section.localHint">Ready to publish</span>
+          </div>
+          <div id="creator-local-list" class="creator-list"></div>
+        </div>
+
+        <!-- Section 3: Create new skill -->
+        <div class="creator-section-block" id="creator-new-block">
+          <div class="creator-section-header">
+            <span class="creator-section-label" data-i18n="creator.section.new">Create New Skill</span>
+          </div>
+          <div id="creator-new-entry" class="creator-new-card">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M12 8v8"/><path d="M8 12h8"/>
+            </svg>
+            <span data-i18n="creator.newSkill.label">Create a new skill with AI</span>
+            <svg class="creator-new-arrow" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14"/><path d="M12 5l7 7-7 7"/>
+            </svg>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -646,6 +710,7 @@
 <script src="/settings.js"></script>
 <script src="/onboard.js"></script>
 <script src="/brand.js"></script>
+<script src="/creator.js"></script>
 <script src="/version.js"></script>
 <script src="/app.js"></script>
 </body>

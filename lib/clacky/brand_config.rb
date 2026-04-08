@@ -165,18 +165,23 @@ module Clacky
         @license_activated_at   = Time.now.utc
         @license_last_heartbeat = Time.now.utc
         @license_expires_at     = parse_time(data["expires_at"])
-        # product_name is applied via apply_distribution; no top-level product_name field expected at this level
-        # Save owner_user_id returned by the server when the license is bound to a specific user.
-        # Server returns "owner_user_id" for system licenses; plan-based licenses return nil.
-        owner_uid = data["owner_user_id"]
-        @license_user_id = owner_uid.to_s.strip if owner_uid && !owner_uid.to_s.strip.empty?
-        # Pin the device_id used in this activation request so that future API calls
-        # (e.g. skill_keys, heartbeat) always send the exact same device_id that was
-        # recorded in activated_devices on the server side.
-        # If the server echoes back device_id in the response, prefer that value;
-        # otherwise keep the one we just sent (@device_id is already set above).
         server_device_id = data["device_id"].to_s.strip
         @device_id = server_device_id unless server_device_id.empty?
+        # Clear ALL stale fields first, then apply fresh values from the new key.
+        # Order matters: reset everything before re-assigning so no old value lingers.
+        @product_name    = nil
+        @package_name    = nil
+        @logo_url        = nil
+        @support_contact = nil
+        @support_qr_url  = nil
+        @theme_color     = nil
+        @homepage_url    = nil
+        @license_user_id = nil
+        # Re-apply owner_user_id from the new activation response.
+        # Only system (creator) licenses return a non-nil owner_user_id.
+        # Brand-consumer keys return nil → @license_user_id stays nil → user_licensed? = false.
+        owner_uid = data["owner_user_id"]
+        @license_user_id = owner_uid.to_s.strip if owner_uid && !owner_uid.to_s.strip.empty?
         apply_distribution(data["distribution"])
         # Clear previously installed brand skills before saving the new license.
         # Skills from the old brand are encrypted with that brand's keys — they
@@ -365,6 +370,41 @@ module Clacky
     # (not filtered by the authenticated user's own skills).
     # Returns { success: bool, skills: [], error: }.
     #
+    # Fetch the creator's own published skills from the platform API.
+    # Uses GET /api/v1/client/skills (HMAC-signed, system license only).
+    # Returns { success: bool, skills: [], error: }.
+    def fetch_my_skills!
+      return { success: false, error: "License not activated", skills: [] } unless activated?
+      return { success: false, error: "User license required", skills: [] } unless user_licensed?
+
+      user_id   = @license_user_id.to_s
+      key_hash  = Digest::SHA256.hexdigest(@license_key)
+      ts        = Time.now.utc.to_i.to_s
+      nonce     = SecureRandom.hex(16)
+      message   = "#{user_id}:#{@device_id}:#{ts}:#{nonce}"
+      signature = OpenSSL::HMAC.hexdigest("SHA256", @license_key, message)
+
+      query = URI.encode_www_form(
+        key_hash:  key_hash,
+        user_id:   user_id,
+        device_id: @device_id,
+        timestamp: ts,
+        nonce:     nonce,
+        signature: signature
+      )
+
+      response = platform_client.get("/api/v1/client/skills?#{query}")
+
+      if response[:success]
+        skills = response[:data]["skills"] || []
+        { success: true, skills: skills }
+      else
+        { success: false, error: response[:error] || "Failed to fetch skills", skills: [] }
+      end
+    rescue StandardError => e
+      { success: false, error: "Network error: #{e.message}", skills: [] }
+    end
+
     # Each skill in the returned array is a hash with at minimum:
     #   "name", "description", "icon", "repo"
     def fetch_store_skills!
@@ -827,6 +867,42 @@ module Clacky
       valid
     rescue StandardError
       {}
+    end
+
+    # Path to the upload_meta.json file that tracks which local skills have been
+    # published to the platform and what version they were uploaded as.
+    #
+    # Format:
+    #   {
+    #     "commit"     => { "platform_version" => "1.2.0", "uploaded_at" => "2026-04-09T..." },
+    #     "nss-upload" => { "platform_version" => "1.0.0", "uploaded_at" => "..." }
+    #   }
+    UPLOAD_META_FILE = File.join(Dir.home, ".clacky", "skills", "upload_meta.json").freeze
+
+    # Load upload metadata for all published local skills.
+    # @return [Hash{String => Hash}]
+    def self.load_upload_meta
+      return {} unless File.exist?(UPLOAD_META_FILE)
+
+      JSON.parse(File.read(UPLOAD_META_FILE))
+    rescue StandardError
+      {}
+    end
+
+    # Persist a single skill's upload record.
+    # @param skill_name [String]
+    # @param platform_version [String]
+    def self.record_upload!(skill_name, platform_version)
+      meta = load_upload_meta
+      meta[skill_name] = {
+        "platform_version" => platform_version,
+        "uploaded_at"      => Time.now.utc.iso8601
+      }
+      dir = File.dirname(UPLOAD_META_FILE)
+      FileUtils.mkdir_p(dir)
+      File.write(UPLOAD_META_FILE, JSON.generate(meta))
+    rescue StandardError
+      # Non-fatal — metadata write failure should not break the upload flow
     end
 
     # Returns a hash representation for JSON serialization (e.g. /api/brand).

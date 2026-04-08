@@ -62,6 +62,11 @@ module Clacky
     # Load brand skills from ~/.clacky/brand_skills/
     # Supports both encrypted (SKILL.md.enc) and plain (SKILL.md) brand skills.
     # Encrypted skills require a BrandConfig with an activated license to decrypt.
+    #
+    # Local plain skills (global_clacky / project_clacky) shadow same-named brand
+    # skills — the local version takes priority. This is intentional: creators who
+    # have a local SKILL.md for a skill they also publish should always run their
+    # own (editable, up-to-date) copy rather than the encrypted distribution copy.
     # @return [Array<Skill>]
     def load_brand_skills
       return [] unless @brand_config&.activated?
@@ -83,7 +88,16 @@ module Clacky
         plain     = skill_dir.join("SKILL.md").exist?
         next unless encrypted || plain
 
-        skill_name      = skill_dir.basename.to_s
+        skill_name = skill_dir.basename.to_s
+
+        # Skip brand skill when a local plain skill with the same name is already
+        # loaded (global_clacky or project_clacky). The local copy shadows it.
+        if @skills[skill_name] && %i[global_clacky project_clacky project_claude global_claude].include?(@loaded_from[skill_name])
+          @shadowed_by_local ||= {}
+          @shadowed_by_local[skill_name] = @loaded_from[skill_name]
+          next
+        end
+
         # Pass cached_metadata for all brand skills (encrypted or plain).
         # brand_skills.json stores sanitized slugs, so this prevents sanitize_frontmatter
         # from flagging human-readable names like "Antique Identifier" as invalid.
@@ -92,6 +106,14 @@ module Clacky
         skills << skill if skill
       end
       skills
+    end
+
+    # Returns a hash of skill names that are shadowed by a local plain skill.
+    # e.g. { "commit" => :global_clacky } means brand "commit" is overridden by
+    # the user's own ~/.clacky/skills/commit/ copy.
+    # @return [Hash{String => Symbol}]
+    def shadowed_by_local
+      @shadowed_by_local || {}
     end
 
     # Load skills from ~/.claude/skills/ (lowest priority, compatibility)
@@ -211,6 +233,7 @@ module Clacky
       @skills.clear
       @skills_by_command.clear
       @errors.clear
+      @shadowed_by_local = {}
     end
 
     # Create a new skill directory and SKILL.md file

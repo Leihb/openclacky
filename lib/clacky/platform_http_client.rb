@@ -70,6 +70,16 @@ module Clacky
       request_with_failover(:post, path, payload, headers)
     end
 
+    # Send a GET request and return a normalised result hash.
+    # Query string parameters should be appended to path by the caller.
+    #
+    # @param path    [String]  API path with optional query string
+    # @param headers [Hash]    Additional HTTP headers (optional)
+    # @return [Hash]  { success: Boolean, data: Hash, error: String }
+    def get(path, headers: {})
+      request_with_failover(:get, path, nil, headers)
+    end
+
     # Send a PATCH request.  Same contract as #post.
     def patch(path, payload, headers: {})
       request_with_failover(:patch, path, payload, headers)
@@ -171,7 +181,7 @@ module Clacky
         get:    Net::HTTP::Get
       }.fetch(method)
 
-      req = klass.new(uri.path)
+      req = klass.new(uri.request_uri)
       req["Content-Type"] = "application/json"
       extra_headers.each { |k, v| req[k] = v }
       req.body = JSON.generate(payload) if payload

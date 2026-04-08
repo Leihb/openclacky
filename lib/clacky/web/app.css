@@ -5357,3 +5357,321 @@ body.setup-mode[data-theme="dark"] {
     gap: 6px;
   }
 }
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Creator Hub — Creator Center
+   ══════════════════════════════════════════════════════════════════════════ */
+
+#creator-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+#creator-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 32px 32px 40px;
+  gap: 28px;
+}
+
+/* ── Section blocks ────────────────────────────────────────────────────── */
+.creator-section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.creator-section-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border-primary);
+  margin-bottom: 2px;
+}
+
+.creator-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.creator-section-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.creator-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Skill Card base ───────────────────────────────────────────────────── */
+.creator-skill-card {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  padding: 14px 16px;
+  transition: border-color .15s;
+}
+.creator-skill-card:hover { border-color: var(--color-text-muted); }
+
+.creator-card-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.creator-card-info { flex: 1; min-width: 0; }
+.creator-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.creator-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.creator-skill-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.creator-card-desc {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Card meta row (version + download count) ──────────────────────────── */
+.creator-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 5px;
+}
+
+.creator-version {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.creator-dl-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+/* ── Badges ────────────────────────────────────────────────────────────── */
+.creator-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+.creator-badge-published {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-border);
+}
+.creator-badge-local {
+  background: rgba(250, 173, 20, 0.1);
+  color: #b8860b;
+  border: 1px solid rgba(250, 173, 20, 0.3);
+}
+[data-theme="dark"] .creator-badge-local {
+  color: #f5c842;
+  background: rgba(245, 200, 66, 0.1);
+  border-color: rgba(245, 200, 66, 0.25);
+}
+
+/* "Has local changes" badge — orange dot */
+.creator-changes-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: #d97706;
+  flex-shrink: 0;
+}
+[data-theme="dark"] .creator-changes-badge {
+  color: #fbbf24;
+}
+
+/* Local-overrides-brand badge */
+.creator-shadow-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(168, 85, 247, 0.1);
+  color: #8b5cf6;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  cursor: help;
+}
+[data-theme="dark"] .creator-shadow-badge {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+/* ── Publish / Update button ───────────────────────────────────────────── */
+.creator-upload-wrap { position: relative; }
+
+.btn-creator-publish {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--color-accent-primary);
+  color: #fff;
+  border: none;
+  transition: background-color 0.2s, opacity 0.2s;
+  white-space: nowrap;
+}
+.btn-creator-publish:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+.btn-creator-publish:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-creator-publish[data-state="success"] { background: var(--color-success, #22c55e); }
+.btn-creator-publish[data-state="error"]   { background: var(--color-error, #ef4444); }
+
+/* Progress bar (reuse skill-upload-progress-* classes) */
+.creator-upload-wrap .skill-upload-progress-wrap {
+  position: absolute;
+  bottom: -3px;
+  left: 0; right: 0;
+  height: 2px;
+  background: var(--color-border-primary);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.creator-upload-wrap .skill-upload-progress-bar {
+  height: 100%;
+  background: var(--color-accent-primary);
+  border-radius: 1px;
+  transition: width 0.15s ease;
+}
+.creator-upload-wrap .skill-upload-progress-bar[data-state="success"] { background: var(--color-success, #22c55e); }
+.creator-upload-wrap .skill-upload-progress-bar[data-state="error"]   { background: var(--color-error, #ef4444); }
+
+/* Iterate button */
+.btn-creator-iterate {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-primary);
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+  white-space: nowrap;
+}
+.btn-creator-iterate:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  border-color: var(--color-border-secondary);
+}
+
+/* Up-to-date (disabled) button */
+.btn-creator-up-to-date {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--color-text-disabled, var(--color-text-muted));
+  border: 1px solid var(--color-border-muted, var(--color-border-primary));
+  opacity: 0.55;
+  white-space: nowrap;
+}
+
+/* ── Create New Skill entry card ───────────────────────────────────────── */
+.creator-new-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--color-bg-secondary);
+  border: 1px dashed var(--color-border-primary);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  transition: border-color .15s, color .15s, background .15s;
+}
+.creator-new-card:hover {
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+  background: var(--color-accent-bg, rgba(59,130,246,0.04));
+}
+.creator-new-arrow {
+  margin-left: auto;
+  opacity: 0.5;
+  transition: opacity .15s, transform .15s;
+}
+.creator-new-card:hover .creator-new-arrow {
+  opacity: 1;
+  transform: translateX(3px);
+}
+
+/* ── State messages ────────────────────────────────────────────────────── */
+.creator-loading,
+.creator-empty {
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  padding: 24px 0;
+}
+.creator-error {
+  text-align: center;
+  color: var(--color-error, #ef4444);
+  font-size: 13px;
+  padding: 24px 0;
+}
+.creator-notice {
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+.creator-notice-warn {
+  background: rgba(250, 173, 20, 0.1);
+  color: #b8860b;
+  border: 1px solid rgba(250, 173, 20, 0.3);
+}
+[data-theme="dark"] .creator-notice-warn { color: #f5c842; }
+
+
