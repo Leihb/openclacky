@@ -555,6 +555,7 @@ RSpec.describe Clacky::Server::HttpServer do
         mock_skill = instance_double(Clacky::Skill,
           identifier:           "recall-memory",
           description:          "Recall memories",
+          description_zh:       nil,
           context_description:  "Recall memories",
           user_invocable?:      true,
           disabled?:            false,
