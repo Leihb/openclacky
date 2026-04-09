@@ -288,6 +288,16 @@
         <div id="ws-disconnect-hint" style="display:none"></div>
         <!-- Skill autocomplete dropdown (shown when user types /xxx) -->
         <div id="skill-autocomplete" style="display:none" role="listbox" aria-label="Skills">
+          <div class="skill-ac-header-row">
+            <div class="skill-ac-left">
+              <div class="skill-ac-title" data-i18n="sidebar.skills">Skills</div>
+              <label class="skill-ac-filter-toggle">
+                <input type="checkbox" id="chk-ac-show-system-skills">
+                <span class="skill-ac-toggle-track"></span>
+                <span class="skill-ac-filter-label" data-i18n="skills.filter.showSystemShort">System</span>
+              </label>
+            </div>
+          </div>
           <div id="skill-autocomplete-list"></div>
         </div>
         <!-- Image preview strip (hidden when empty) -->

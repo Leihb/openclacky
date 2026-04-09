@@ -13,6 +13,7 @@ module Clacky
     FRONTMATTER_FIELDS = %w[
       name
       description
+      description_zh
       disable-model-invocation
       user-invocable
       allowed-tools
@@ -28,7 +29,7 @@ module Clacky
     ].freeze
 
     attr_reader :directory, :frontmatter, :source_path
-    attr_reader :name, :description, :content
+    attr_reader :name, :description, :description_zh, :content
     attr_reader :disable_model_invocation, :user_invocable
     attr_reader :allowed_tools, :context, :agent_type, :argument_hint, :hooks
     attr_reader :fork_agent, :model, :forbidden_tools, :auto_summarize
@@ -383,10 +384,11 @@ module Clacky
       # For plain brand skills, also eagerly load the content so it's available at invoke time.
       # For encrypted brand skills, defer decryption to #decrypted_content (invocation time).
       if @cached_metadata
-        @frontmatter = {}
-        @name        = @cached_metadata["name"]
-        @description = @cached_metadata["description"]
-        @content     = plain ? plain_file.read.then { |raw| extract_content_only(raw) } : nil
+        @frontmatter    = {}
+        @name           = @cached_metadata["name"]
+        @description    = @cached_metadata["description"]
+        @description_zh = @cached_metadata["description_zh"]
+        @content        = plain ? plain_file.read.then { |raw| extract_content_only(raw) } : nil
         return
       end
 
@@ -448,8 +450,9 @@ module Clacky
 
     # Pull known fields out of @frontmatter into instance variables.
     private def extract_fields_from_frontmatter
-      @name        = @frontmatter["name"]
-      @description = @frontmatter["description"]
+      @name           = @frontmatter["name"]
+      @description    = @frontmatter["description"]
+      @description_zh = @frontmatter["description_zh"]
       @disable_model_invocation = @frontmatter["disable-model-invocation"]
       @user_invocable  = @frontmatter["user-invocable"]
       @allowed_tools   = @frontmatter["allowed-tools"]

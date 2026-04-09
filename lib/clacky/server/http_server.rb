@@ -1434,10 +1434,11 @@ module Clacky
         skill_data = skills.map do |skill|
           source_type = loaded_from[skill.identifier]
           {
-            name:        skill.identifier,
-            description: skill.description || skill.context_description,
-            encrypted:   skill.encrypted?,
-            source_type: source_type
+            name:           skill.identifier,
+            description:    skill.description || skill.context_description,
+            description_zh: skill.description_zh,
+            encrypted:      skill.encrypted?,
+            source_type:    source_type
           }
         end
 

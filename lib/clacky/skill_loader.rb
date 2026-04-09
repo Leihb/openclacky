@@ -24,11 +24,13 @@ module Clacky
     MAX_SKILLS = 50
 
     # Initialize the skill loader and automatically load all skills
-    # @param working_dir [String] Current working directory for project-level discovery
+    # @param working_dir [String, nil] Current working directory for project-level discovery.
+    #   When nil, project-level skills (.clacky/skills/, .claude/skills/) are not loaded,
+    #   making the loader project-agnostic (used by WebUI server).
     # @param brand_config [Clacky::BrandConfig, nil] Optional brand config used to
     #   decrypt brand skills. When nil, brand skills are silently skipped.
     def initialize(working_dir:, brand_config:)
-      @working_dir  = working_dir || Dir.pwd
+      @working_dir  = working_dir
       @brand_config = brand_config
       @skills = {}            # Map identifier -> Skill
       @skills_by_command = {} # Map slash_command -> Skill
@@ -52,8 +54,15 @@ module Clacky
       load_default_skills
       load_global_claude_skills
       load_global_clacky_skills
-      load_project_claude_skills
-      load_project_clacky_skills
+      
+      # Only load project-level skills when working_dir is explicitly provided.
+      # When nil (e.g. WebUI server mode), skip project skills to keep the loader
+      # project-agnostic and only expose global skills.
+      if @working_dir
+        load_project_claude_skills
+        load_project_clacky_skills
+      end
+      
       load_brand_skills
 
       all_skills

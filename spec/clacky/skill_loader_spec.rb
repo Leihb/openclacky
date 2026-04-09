@@ -62,6 +62,45 @@ RSpec.describe Clacky::SkillLoader do
         skill_identifiers = skills.map(&:identifier)
         expect(skill_identifiers).to include("project-skill")
       end
+
+      it "does NOT load project skills when working_dir is nil" do
+        # Create a separate temp directory to avoid touching any real .clacky/skills/
+        test_temp_dir = Dir.mktmpdir("skill-loader-test")
+        
+        begin
+          skills_dir = File.join(test_temp_dir, ".clacky", "skills")
+          FileUtils.mkdir_p(skills_dir)
+
+          skill_dir = File.join(skills_dir, "temp-test-skill")
+          FileUtils.mkdir_p(skill_dir)
+          File.write(File.join(skill_dir, "SKILL.md"), <<~CONTENT)
+            ---
+            name: temp-test-skill
+            description: A skill in temp directory
+            ---
+            This skill should NOT be loaded when working_dir is nil.
+          CONTENT
+
+          # Temporarily change to test directory to simulate project context
+          original_dir = Dir.pwd
+          Dir.chdir(test_temp_dir)
+
+          begin
+            # WebUI server mode: working_dir: nil means project-agnostic
+            loader = described_class.new(working_dir: nil, brand_config: nil)
+            skills = loader.load_all
+
+            skill_identifiers = skills.map(&:identifier)
+            # Should only include global and default skills, NOT project-level skills
+            expect(skill_identifiers).not_to include("temp-test-skill")
+          ensure
+            Dir.chdir(original_dir)
+          end
+        ensure
+          # Clean up temp directory
+          FileUtils.rm_rf(test_temp_dir) if File.exist?(test_temp_dir)
+        end
+      end
     end
 
     context "with multiple skills" do

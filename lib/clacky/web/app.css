@@ -1953,7 +1953,10 @@ body {
 
 /* ── Skill autocomplete dropdown ─────────────────────────────────────────── */
 #skill-autocomplete {
-  position: relative;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
   background: var(--color-bg-tertiary);
   border: none;
   border-radius: 8px 8px 0 0;
@@ -1964,6 +1967,7 @@ body {
     8px -4px 12px -4px rgba(0, 0, 0, .12);
   max-height: 260px;
   overflow-y: auto;
+  z-index: 1000;
 }
 
 #skill-autocomplete-list {
@@ -2026,6 +2030,81 @@ body {
   font-weight: 600;
   border-bottom: 1px solid var(--color-border-secondary);
   margin-bottom: 2px;
+}
+
+/* ── Header Row with Filter Toggle ──────────────────────────────────────── */
+.skill-ac-header-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.skill-ac-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.skill-ac-title {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.skill-ac-filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.skill-ac-filter-toggle input[type="checkbox"] {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.skill-ac-toggle-track {
+  position: relative;
+  display: inline-block;
+  width: 28px;
+  height: 16px;
+  background: var(--color-border-primary);
+  border-radius: 8px;
+  transition: background .2s;
+}
+
+.skill-ac-toggle-track::after {
+  content: "";
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  background: #fff;
+  border-radius: 50%;
+  top: 2.5px;
+  left: 2.5px;
+  transition: left .2s;
+}
+
+.skill-ac-filter-toggle input:checked + .skill-ac-toggle-track {
+  background: var(--color-button-primary);
+}
+
+.skill-ac-filter-toggle input:checked + .skill-ac-toggle-track::after {
+  left: 14.5px;
+}
+
+.skill-ac-filter-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-weight: 500;
 }
 
 /* meta block: encrypted badge + source directory */
@@ -3048,9 +3127,36 @@ body {
   cursor: pointer;
   flex-shrink: 0;
 }
+.skill-toggle::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  max-width: 280px;
+  background: var(--color-bg-elevated, #fff);
+  color: var(--color-text, #333);
+  border: 1px solid var(--color-border, #e0e0e0);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.skill-toggle:hover::after {
+  opacity: 1;
+}
 .skill-toggle-disabled {
   cursor: not-allowed;
   opacity: 0.4;
+}
+.skill-toggle-disabled:hover::after {
+  opacity: 1; /* Still show tooltip for disabled toggles */
 }
 .skill-toggle-input {
   opacity: 0;
@@ -3487,7 +3593,8 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.btn-brand-use {
+.btn-brand-use,
+.btn-skill-use {
   background: transparent;
   border: 1px solid var(--color-success-border);
   border-radius: 6px;
@@ -3499,7 +3606,8 @@ body {
   transition: background .15s;
   white-space: nowrap;
 }
-.btn-brand-use:hover {
+.btn-brand-use:hover,
+.btn-skill-use:hover {
   background: var(--color-success-bg);
 }
 
@@ -5375,7 +5483,7 @@ body.setup-mode[data-theme="dark"] {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  padding: 32px 32px 40px;
+  padding: 32px 32px 60px;
   gap: 28px;
 }
 
@@ -5420,7 +5528,11 @@ body.setup-mode[data-theme="dark"] {
   border: 1px solid var(--color-border-primary);
   border-radius: 8px;
   padding: 14px 16px;
+  margin-bottom: 12px;
   transition: border-color .15s;
+}
+.creator-skill-card:last-child {
+  margin-bottom: 0;
 }
 .creator-skill-card:hover { border-color: var(--color-text-muted); }
 
