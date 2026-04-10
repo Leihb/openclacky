@@ -165,10 +165,9 @@ module Clacky
         }
 
         # Show compression info (use estimated tokens from rebuilt history)
-        @ui&.show_info(
-          "History compressed (~#{compression_context[:original_token_count]} -> ~#{@history.estimate_tokens} tokens, " \
+        compression_summary = "History compressed (~#{compression_context[:original_token_count]} -> ~#{@history.estimate_tokens} tokens, " \
           "level #{compression_context[:compression_level]})"
-        )
+        @ui&.show_idle_status(phase: :end, message: compression_summary)
       end
 
       # Get recent messages while preserving tool_calls/tool_results pairs.
