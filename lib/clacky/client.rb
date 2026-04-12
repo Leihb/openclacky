@@ -51,6 +51,7 @@ module Clacky
     rescue Faraday::Error => e
       { success: false, error: "Connection error: #{e.message}" }
     rescue => e
+      Clacky::Logger.error("[test_connection] #{e.class}: #{e.message}", error: e)
       { success: false, error: e.message }
     end
 
@@ -328,7 +329,7 @@ module Clacky
       return raw_body unless error_body.is_a?(Hash)
 
       error_body["upstreamMessage"]&.then { |m| return m unless m.empty? }
-      error_body.dig("error", "message")&.then { |m| return m }
+      error_body.dig("error", "message")&.then { |m| return m } if error_body["error"].is_a?(Hash)
       error_body["message"]&.then             { |m| return m }
       error_body["error"].is_a?(String) ? error_body["error"] : (raw_body.to_s[0..200] + (raw_body.to_s.length > 200 ? "..." : ""))
     end
