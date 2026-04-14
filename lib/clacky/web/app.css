@@ -2048,6 +2048,30 @@ body {
   color: var(--color-accent-primary);
   white-space: nowrap;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.skill-ac-name-zh {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-accent-primary);
+}
+
+.skill-ac-name-id {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+}
+
+.skill-ac-highlight {
+  background: rgba(255, 200, 0, 0.35);
+  color: inherit;
+  font-weight: inherit;
 }
 
 .skill-ac-desc {

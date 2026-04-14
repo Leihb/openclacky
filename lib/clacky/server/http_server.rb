@@ -729,6 +729,7 @@ module Clacky
           local_skills = brand.installed_brand_skills.map do |name, meta|
             {
               "name"              => meta["name"] || name,
+              "name_zh"           => meta["name_zh"].to_s,
               # Use locally cached description so it renders correctly offline
               "description"       => meta["description"].to_s,
               "description_zh"    => meta["description_zh"].to_s,
@@ -1391,7 +1392,9 @@ module Clacky
 
           entry = {
             name:              skill.identifier,
+            name_zh:           skill.name_zh,
             description:       skill.context_description,
+            description_zh:    skill.description_zh,
             source:            source,
             enabled:           !skill.disabled?,
             invalid:           skill.invalid?,
@@ -1437,10 +1440,11 @@ module Clacky
         loader      = agent.skill_loader
         loaded_from = loader.loaded_from
 
-        skill_data = skills.map do |skill|
+                  skill_data = skills.map do |skill|
           source_type = loaded_from[skill.identifier]
           {
             name:           skill.identifier,
+            name_zh:        skill.name_zh,
             description:    skill.description || skill.context_description,
             description_zh: skill.description_zh,
             encrypted:      skill.encrypted?,

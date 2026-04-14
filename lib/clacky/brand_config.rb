@@ -560,7 +560,7 @@ module Clacky
       # Record installed version in brand_skills.json (including description for
       # offline display when the remote API is unreachable).
       # encrypted: true because the ZIP contains MANIFEST.enc.json + AES-256-GCM encrypted files.
-      record_installed_skill(slug, version, skill_info["description"], encrypted: true, description_zh: skill_info["description_zh"])
+      record_installed_skill(slug, version, skill_info["description"], encrypted: true, description_zh: skill_info["description_zh"], name_zh: skill_info["name_zh"])
 
       { success: true, name: slug, version: version }
     rescue StandardError, ScriptError => e
@@ -623,7 +623,7 @@ module Clacky
       File.binwrite(enc_path, mock_content.encode("UTF-8"))
 
       # encrypted: false — mock skills store plain bytes in .enc, no MANIFEST needed.
-      record_installed_skill(slug, version, description, encrypted: false, description_zh: description_zh)
+      record_installed_skill(slug, version, description, encrypted: false, description_zh: description_zh, name_zh: skill_info["name_zh"])
       { success: true, name: slug, version: version }
     rescue StandardError => e
       { success: false, error: e.message }
@@ -1069,7 +1069,7 @@ module Clacky
     #   1. name already valid            → use name as-is
     #   2. name invalid — sanitize       → downcase, spaces→hyphens, strip illegal chars
     #   3. still invalid after sanitize  → raise, caller gets { success: false }
-    private def record_installed_skill(name, version, description = nil, encrypted: true, description_zh: nil)
+    private def record_installed_skill(name, version, description = nil, encrypted: true, description_zh: nil, name_zh: nil)
       safe_name = sanitize_skill_name(name)
 
       FileUtils.mkdir_p(brand_skills_dir)
@@ -1078,6 +1078,7 @@ module Clacky
       installed[safe_name] = {
         "version"        => version,
         "name"           => safe_name,
+        "name_zh"        => name_zh.to_s,
         "description"    => description.to_s,
         "description_zh" => description_zh.to_s,
         "encrypted"      => encrypted,

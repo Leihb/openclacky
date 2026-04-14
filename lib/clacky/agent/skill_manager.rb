@@ -255,7 +255,7 @@ module Clacky
           transient: transient
         })
 
-        @ui&.show_info("Injected skill content for /#{skill.identifier}")
+        @ui&.show_info("Injected skill content for /#{skill.identifier}#{skill.name_zh ? " (#{skill.name_zh})" : ""}")
       end
 
 
@@ -405,7 +405,7 @@ module Clacky
 
         # Log which model the subagent is actually using (may differ from requested
         # when "lite" falls back to default due to no lite model configured)
-        @ui&.show_info("Subagent start: #{skill.identifier} [#{subagent.current_model_info[:model]}]")
+        @ui&.show_info("Subagent start: #{skill.identifier}#{skill.name_zh ? " (#{skill.name_zh})" : ""} [#{subagent.current_model_info[:model]}]")
 
         # Run subagent with the actual task as the sole user turn.
         # If the user typed the skill command with no arguments (e.g. "/jade-appraisal"),

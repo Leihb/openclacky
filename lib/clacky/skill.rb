@@ -12,6 +12,7 @@ module Clacky
     # Frontmatter fields that are recognized
     FRONTMATTER_FIELDS = %w[
       name
+      name_zh
       description
       description_zh
       disable-model-invocation
@@ -29,7 +30,7 @@ module Clacky
     ].freeze
 
     attr_reader :directory, :frontmatter, :source_path
-    attr_reader :name, :description, :description_zh, :content
+    attr_reader :name, :description, :name_zh, :description_zh, :content
     attr_reader :disable_model_invocation, :user_invocable
     attr_reader :allowed_tools, :context, :agent_type, :argument_hint, :hooks
     attr_reader :fork_agent, :model, :forbidden_tools, :auto_summarize
@@ -273,6 +274,7 @@ module Clacky
     def to_h
       {
         name: identifier,
+        name_zh: @name_zh,
         description: context_description,
         directory: @directory.to_s,
         source_path: @source_path.to_s,
@@ -386,6 +388,7 @@ module Clacky
       if @cached_metadata
         @frontmatter    = {}
         @name           = @cached_metadata["name"]
+        @name_zh        = @cached_metadata["name_zh"]
         @description    = @cached_metadata["description"]
         @description_zh = @cached_metadata["description_zh"]
         @content        = plain ? plain_file.read.then { |raw| extract_content_only(raw) } : nil
@@ -451,6 +454,7 @@ module Clacky
     # Pull known fields out of @frontmatter into instance variables.
     private def extract_fields_from_frontmatter
       @name           = @frontmatter["name"]
+      @name_zh        = @frontmatter["name_zh"]
       @description    = @frontmatter["description"]
       @description_zh = @frontmatter["description_zh"]
       @disable_model_invocation = @frontmatter["disable-model-invocation"]
