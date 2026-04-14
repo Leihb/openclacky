@@ -471,7 +471,7 @@ module Clacky
     # the skill is marked @invalid so the UI can display it greyed-out.
     def sanitize_frontmatter
       dir_slug = @directory.basename.to_s
-      valid_slug = ->(s) { s.to_s.match?(/\A[a-z0-9][a-z0-9-]*\z/) }
+      valid_slug = ->(s) { s.to_s.match?(/\A[a-z0-9][a-z0-9_-]*\z/) }
 
       # --- name ---
       # Brand skills loaded via cached_metadata have their name pre-sanitized by
