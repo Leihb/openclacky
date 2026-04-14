@@ -556,6 +556,7 @@ RSpec.describe Clacky::Server::HttpServer do
           identifier:           "recall-memory",
           description:          "Recall memories",
           description_zh:       nil,
+          name_zh:              nil,
           context_description:  "Recall memories",
           user_invocable?:      true,
           disabled?:            false,

@@ -116,11 +116,9 @@ module Clacky
         }
       end
       
-      private
-      
       # Find existing Postgres database service
       # @return [Hash, nil] { id:, name: } or nil if not found
-      def find_existing_database
+      private def find_existing_database
         Tempfile.create('railway_status') do |tmpfile|
           success = system(
             @env,
@@ -173,7 +171,7 @@ module Clacky
       
       # Fetch all existing service IDs from railway status
       # @return [Array<String>, nil] Array of service IDs, or nil on failure
-      def fetch_service_ids
+      private def fetch_service_ids
         Tempfile.create('railway_status') do |tmpfile|
           success = system(
             @env,
@@ -209,7 +207,7 @@ module Clacky
       # Execute the railway add command
       # NOTE: We ignore the exit code because Railway CLI has a known bug
       # where it returns error with project tokens but still succeeds
-      def execute_create_command
+      private def execute_create_command
         system(
           @env,
           "railway", "add", "--database", "postgres",
@@ -223,7 +221,7 @@ module Clacky
       # Detect newly created service by comparing service IDs
       # @param existing_ids [Array<String>] Service IDs before creation
       # @return [Hash, nil] { id: String, name: String } or nil if not found
-      def detect_new_service(existing_ids)
+      private def detect_new_service(existing_ids)
         max_attempts = DETECTION_TIMEOUT / DETECTION_INTERVAL
         
         max_attempts.times do
@@ -246,7 +244,7 @@ module Clacky
       # Fetch service name for a given service ID
       # @param service_id [String]
       # @return [Hash, nil] { id: String, name: String }
-      def fetch_service_info(service_id)
+      private def fetch_service_info(service_id)
         Tempfile.create('railway_status') do |tmpfile|
           success = system(
             @env,
@@ -290,7 +288,7 @@ module Clacky
       # Wait for DATABASE_URL to be available on the service
       # @param service_name [String]
       # @return [String, nil] DATABASE_URL or nil if timeout
-      def wait_for_database_url(service_name)
+      private def wait_for_database_url(service_name)
         max_attempts = PROVISION_TIMEOUT / PROVISION_INTERVAL
         
         max_attempts.times do
@@ -306,7 +304,7 @@ module Clacky
       # Fetch DATABASE_URL from service variables
       # @param service_name [String]
       # @return [String, nil] DATABASE_URL value or nil
-      def fetch_database_url(service_name)
+      private def fetch_database_url(service_name)
         tmpfile = Tempfile.new(['railway_vars', '.json'])
         
         begin

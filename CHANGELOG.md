@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.29] - 2026-04-15
+
+### Added
+- **Rails deployment skill**: full end-to-end deploy workflow — create Railway project, provision Postgres, set environment variables, and deploy in one conversation
+- **Skill Chinese names**: skills can now declare a `name_zh` field; the Web UI shows the localized name when the language is set to Chinese
+- **Skill name with underscores**: skill identifiers now support underscores (e.g. `my_skill`), not just hyphens
+
+### Improved
+- **LLM request timeout**: increased from 120 s to 300 s, reducing timeouts when models output large responses or run slowly
+- **Message compressor**: compressor no longer runs when the agent is idle, avoiding unnecessary token consumption
+- **Socket reliability**: improved WebSocket and browser socket handling to prevent dropped connections under load
+- **Word (.doc) file parsing**: Linux/WSL now uses `antiword` as fallback when `strings` is unavailable, improving compatibility
+
+### Fixed
+- **Session name badge clipping**: long session names in the sidebar no longer overflow or get clipped
+- **Browser setup**: `install_browser.sh` is now automatically executed when Node.js is missing during browser setup
+- **Feishu channel setup**: retry login check up to 3 times before falling back to manual setup; fixed tab-closed error on entry; browser tool API timeout raised to 30 s
+- **Language switch rendering**: skill cards and session list now re-render correctly after switching UI language
+- **File path arguments**: argument parser now correctly handles paths with spaces and edge-case formats
+- **Agent working directory**: base prompt now reliably sets the correct working directory for all operations
+- **Feishu WebSocket reconnect**: improved reconnection logic for long-lived Feishu channel connections
+
 ## [0.9.28] - 2026-04-10
 
 ### Added
