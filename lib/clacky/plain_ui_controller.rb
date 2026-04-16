@@ -23,6 +23,25 @@ module Clacky
 
     def show_tool_call(name, args)
       args_data = args.is_a?(String) ? (JSON.parse(args) rescue args) : args
+
+      # Special handling for request_user_feedback — display as a readable prompt
+      if name.to_s == "request_user_feedback"
+        question = args_data.is_a?(Hash) ? (args_data[:question] || args_data["question"]).to_s : ""
+        context  = args_data.is_a?(Hash) ? (args_data[:context]  || args_data["context"]).to_s  : ""
+        options  = args_data.is_a?(Hash) ? (args_data[:options]  || args_data["options"])        : nil
+        options  = Array(options) if options && !options.is_a?(Array)
+
+        parts = []
+        parts << "**Context:** #{context.strip}" if context && !context.strip.empty?
+        parts << "**Question:** #{question.strip}"
+        if options && !options.empty?
+          parts << "**Options:**"
+          options.each_with_index { |opt, i| parts << "  #{i + 1}. #{opt}" }
+        end
+        puts_line(parts.join("\n"))
+        return
+      end
+
       display = case name
                 when "shell", "safe_shell"
                   cmd = args_data.is_a?(Hash) ? (args_data[:command] || args_data["command"]) : args_data

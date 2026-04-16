@@ -398,6 +398,34 @@ module Clacky
         # doesn't bleed into the next one, and so the buffer is ready before
         # on_output starts firing (which can happen before show_progress is called).
         @stdout_lines = nil
+
+        # Special handling for request_user_feedback: render as a readable interactive card
+        # with the full question and options, rather than the truncated format_call summary.
+        if name.to_s == "request_user_feedback"
+          args_data = args.is_a?(String) ? (JSON.parse(args, symbolize_names: true) rescue {}) : args
+          args_data = args_data.transform_keys(&:to_sym) if args_data.is_a?(Hash)
+
+          question = args_data[:question].to_s.strip
+          context  = args_data[:context].to_s.strip
+          options  = Array(args_data[:options])
+
+          theme = ThemeManager.current_theme
+          parts = []
+
+          parts << context unless context.empty?
+          parts << question unless question.empty?
+
+          if options.any?
+            parts << ""
+            options.each_with_index { |opt, i| parts << "  #{i + 1}. #{opt}" }
+          end
+
+          card_text = parts.join("\n")
+          output = @renderer.render_system_message(card_text, prefix_newline: true)
+          append_output(output)
+          return
+        end
+
         formatted_call = format_tool_call(name, args)
         output = @renderer.render_tool_call(tool_name: name, formatted_call: formatted_call)
         append_output(output)

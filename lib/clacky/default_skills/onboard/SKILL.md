@@ -41,21 +41,21 @@ Example (Chinese):
 ### 2. Ask the user to name the AI (card)
 
 Call `request_user_feedback` to let the user pick or type a name for their AI assistant.
-Offer a few fun suggestions as options, plus a free-text fallback.
+Offer a few fun suggestions as options. The user can also ignore the options and type any name directly.
 
 If `lang == "zh"`, use:
 ```json
 {
-  "question": "先来点有意思的 —— 你想叫我什么名字？可以选一个，也可以直接输入你喜欢的：",
-  "options": ["🐟 摸鱼王", "📚 卷王", "🌟 小天才", "🐱 本喵", "🌅 拾光", "自己输入名字…"]
+  "question": "先来点有意思的 —— 你想叫我什么名字？",
+  "options": ["摸鱼王", "老六", "夜猫子", "话唠", "包打听", "碎碎念", "掌柜的"]
 }
 ```
 
 Otherwise (English):
 ```json
 {
-  "question": "Let's start with something fun — what would you like to call me? Pick one or type your own:",
-  "options": ["✨ Aria", "🤖 Max", "🌙 Luna", "⚡ Zap", "🎯 Ace", "Type your own name…"]
+  "question": "Let's start with something fun — what would you like to call me?",
+  "options": ["Nox", "Sable", "Remy", "Vex", "Pip", "Zola", "Bex"]
 }
 ```
 
@@ -108,7 +108,11 @@ Call `request_user_feedback` again. This is where we learn about the user themse
 If `lang == "zh"`, use:
 ```json
 {
-  "question": "那你呢？随便聊聊自己吧 —— 全部可选，填多少都行：\n• 你的名字（我该怎么称呼你？）\n• 职业\n• 最希望用 AI 做什么\n• 社交 / 作品链接（GitHub、微博、个人网站等）—— 我会读取公开信息来更了解你",
+  "question": "那你呢？随便聊聊自己吧 —— 全部可选，填多少都行：
+- 你的名字（我该怎么称呼你？）
+- 职业
+- 最希望用 AI 做什么
+- 社交 / 作品链接（GitHub、微博、个人网站等）—— 我会读取公开信息来更了解你",
   "options": []
 }
 ```
@@ -116,7 +120,11 @@ If `lang == "zh"`, use:
 Otherwise (English):
 ```json
 {
-  "question": "Now a bit about you — all optional, skip anything you like.\n• Your name (what should I call you?)\n• Occupation\n• What you want to use AI for most\n• Social / portfolio links (GitHub, Twitter/X, personal site…) — I'll read them to learn about you",
+  "question": "Now a bit about you — all optional, skip anything you like.
+- Your name (what should I call you?)
+- Occupation
+- What you want to use AI for most
+- Social / portfolio links (GitHub, Twitter/X, personal site…) — I'll read them to learn about you",
   "options": []
 }
 ```

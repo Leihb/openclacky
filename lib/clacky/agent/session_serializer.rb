@@ -414,7 +414,8 @@ module Clacky
                 parts = []
                 parts << "**Context:** #{context.strip}" << "" unless context.strip.empty?
                 parts << "**Question:** #{question.strip}"
-                if options && !options.empty?
+                # Guard: options must be an Array to iterate with each_with_index
+                if options.is_a?(Array) && !options.empty?
                   parts << "" << "**Options:**"
                   options.each_with_index { |opt, i| parts << "  #{i + 1}. #{opt}" }
                 end

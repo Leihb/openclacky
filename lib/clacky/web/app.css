@@ -327,6 +327,10 @@ body {
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-top: 4px;
+  position: sticky;
+  top: 0;
+  background: var(--color-bg-secondary);
+  z-index: 10;
 }
 .sidebar-divider:first-child {
   margin-top: 0;
@@ -348,34 +352,33 @@ body {
   padding: 0 8px;
   border: none;
   border-radius: 5px 0 0 5px;
-  background: var(--color-bg-hover);
-  color: var(--color-text-secondary);
+  background: var(--color-accent-primary);
+  color: #fff;
   font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
   line-height: 1;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
 .btn-split-main:hover {
-  background: var(--color-accent-primary);
-  color: #fff;
+  background: var(--color-button-primary-hover);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 .btn-split-arrow {
   height: 22px;
   padding: 0 4px;
   border: none;
-  border-left: 1px solid var(--color-border-primary);
+  border-left: 1px solid rgba(255,255,255,0.3);
   border-radius: 0 5px 5px 0;
-  background: var(--color-bg-hover);
-  color: var(--color-text-tertiary);
+  background: var(--color-accent-primary);
+  color: #fff;
   font-size: 10px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .btn-split-arrow:hover {
-  background: var(--color-accent-primary);
-  color: #fff;
+  background: var(--color-button-primary-hover);
 }
 
 /* ── Dropdown menu ───────────────────────────────────────────────────────── */
@@ -1513,6 +1516,65 @@ body {
 .msg-assistant em { font-style: italic; color: var(--color-text-secondary); }
 .msg-tool      { background: var(--color-bg-primary); border: 1px solid var(--color-border-primary); font-family: monospace; font-size: 12px; color: var(--color-text-secondary); align-self: flex-start; }
 .msg-info      { color: var(--color-text-secondary); font-size: 12px; align-self: center; font-style: italic; }
+
+/* ── Feedback request card ──────────────────────────────────────────────── */
+.feedback-card {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin: 4px 0;
+  align-self: flex-start;
+  max-width: 85%;
+  color: var(--color-text-primary);
+}
+.feedback-context {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.feedback-question {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.feedback-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.feedback-option-btn {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  padding: 7px 12px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: left;
+}
+.feedback-option-btn:hover {
+  border-color: var(--color-accent-primary);
+  background: var(--color-bg-secondary);
+}
+.feedback-option-btn:active {
+  opacity: 0.8;
+}
+.feedback-hint {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-top: 6px;
+}
+.feedback-card--submitted {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 .history-start-marker {
   display: flex;
   align-items: center;
@@ -2926,10 +2988,26 @@ body {
 /* ── Skills Tabs ─────────────────────────────────────────────────────────── */
 #skills-tabs {
   display: flex;
-  gap: 4px;
+  justify-content: space-between;
+  align-items: center;
   border-bottom: 1px solid var(--color-border-primary);
   flex-shrink: 0;
+  gap: 16px;
 }
+
+.skills-tabs-left {
+  display: flex;
+  gap: 4px;
+}
+
+.skills-tabs-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 12px;
+  margin-bottom: 4px;
+}
+
 .skills-tab {
   background: none;
   border: none;
@@ -2998,34 +3076,40 @@ body {
 }
 
 /* ── My Skills list ──────────────────────────────────────────────────────── */
-/* ── Skills Filter Bar ───────────────────────────────────────────────────── */
-.skills-filter-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 10px 0 6px;
-}
-
+/* ── Skills Filter Toggle (in tab bar) ───────────────────────────────────── */
 .skills-filter-toggle {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   cursor: pointer;
   user-select: none;
+  padding: 0;
+  background: none;
+  border: none;
 }
 
 .skills-filter-toggle input[type="checkbox"] {
   display: none;
 }
 
+.skills-filter-label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.skills-filter-toggle:hover .skills-filter-label {
+  color: var(--color-text-primary);
+}
+
 /* Mini toggle track — matches the skill-card toggle style */
 .skills-filter-toggle-track {
   position: relative;
-  width: 28px;
-  height: 16px;
+  width: 32px;
+  height: 18px;
   background: var(--color-border-primary);
-  border-radius: 8px;
+  border-radius: 9px;
   flex-shrink: 0;
   transition: background 0.18s;
 }
@@ -3034,8 +3118,8 @@ body {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   background: #fff;
   border-radius: 50%;
   transition: transform 0.18s;
@@ -3044,12 +3128,7 @@ body {
   background: var(--color-accent, #6c63ff);
 }
 .skills-filter-toggle input:checked ~ .skills-filter-toggle-track::after {
-  transform: translateX(12px);
-}
-
-.skills-filter-label {
-  font-size: 12px;
-  color: var(--color-text-secondary);
+  transform: translateX(14px);
 }
 
 #skills-list {
@@ -3450,24 +3529,44 @@ body {
 }
 
 /* ── Brand Skills tab ────────────────────────────────────────────────────── */
-#brand-skills-header {
-  display: flex;
-  justify-content: flex-end;
-  padding: 8px 0 4px;
-}
+/* Refresh button now lives in skills-tabs-controls, but keep these styles */
 .btn-brand-skills-refresh {
-  background: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-bg-secondary);
   border: 1px solid var(--color-border-primary);
   border-radius: 6px;
   color: var(--color-text-secondary);
   cursor: pointer;
-  font-size: 12px;
-  padding: 4px 10px;
-  transition: color .15s, border-color .15s;
+  font-size: 13px;
+  padding: 6px 12px;
+  transition: color .15s, background .15s, border-color .15s;
+  white-space: nowrap;
 }
 .btn-brand-skills-refresh:hover {
+  background: var(--color-bg-hover);
   border-color: var(--color-accent-primary);
-  color: var(--color-accent-primary);
+  color: var(--color-text-primary);
+}
+.btn-brand-skills-refresh:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-brand-skills-refresh svg {
+  flex-shrink: 0;
+}
+.btn-brand-skills-refresh svg.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 #brand-skills-list {

@@ -92,10 +92,24 @@ module Clacky
       end
 
       def show_tool_call(name, args)
-        # Skip request_user_feedback — its question is already shown as an assistant message
-        return if name.to_s == "request_user_feedback"
-
         args_data = args.is_a?(String) ? (JSON.parse(args) rescue args) : args
+
+        # Special handling for request_user_feedback — emit a dedicated UI event
+        if name.to_s == "request_user_feedback"
+          question = args_data.is_a?(Hash) ? (args_data[:question] || args_data["question"]).to_s : ""
+          context  = args_data.is_a?(Hash) ? (args_data[:context]  || args_data["context"]).to_s  : ""
+          options  = args_data.is_a?(Hash) ? (args_data[:options]  || args_data["options"])        : nil
+
+          # Normalize options to array (guard against malformed data)
+          options = Array(options) if options && !options.is_a?(Array)
+
+          emit("request_feedback",
+               question: question,
+               context: context,
+               options: options || [])
+          # Don't forward to IM subscribers — they get the formatted text version already
+          return
+        end
 
         # Generate a human-readable summary using the tool's format_call method
         summary = tool_call_summary(name, args_data)

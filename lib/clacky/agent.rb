@@ -698,11 +698,13 @@ module Clacky
             @ui&.update_todos(@todos.dup)
           end
 
-          # Special handling for request_user_feedback: show directly as message
+          # Special handling for request_user_feedback: emit as interactive feedback card
           if call[:name] == "request_user_feedback"
-            if result.is_a?(Hash) && result[:message]
-              @ui&.show_assistant_message(result[:message], files: [])
-            end
+            # Pass the raw call arguments to show_tool_call so the WebUI controller
+            # can extract question/context/options and emit a "request_feedback" event
+            # (renders as a clickable card in the browser).
+            # Fallback UIs (terminal, IM channels) receive the formatted text message.
+            @ui&.show_tool_call(call[:name], call[:arguments])
 
             if @config.permission_mode == :auto_approve
               # auto_approve means no human is watching (unattended/scheduled tasks).
