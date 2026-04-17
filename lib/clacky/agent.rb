@@ -736,6 +736,17 @@ module Clacky
           }
           Clacky::Logger.error("tool_execution_error", tool: call[:name], error: e)
 
+          # If arguments were malformed/truncated (e.g. Bedrock streaming truncation),
+          # retract the bad assistant message from history so the next LLM call gets a
+          # fresh context rather than re-reading a cached broken tool call.
+          # Also skip adding a tool_result — without the assistant message there is no
+          # tool_call to pair with, and sending an orphan tool_result breaks the API.
+          if e.is_a?(Utils::BadArgumentsError)
+            size_before = @history.size
+            @history.pop_while { |m| m[:role] == "assistant" && m[:tool_calls]&.any? { |tc| tc[:id] == call[:id] } }
+            next if @history.size < size_before # message was retracted, skip tool_result
+          end
+
           @hooks.trigger(:on_tool_error, call, e)
           @ui&.show_tool_error(e)
           # Use build_denied_result with system_injected=true so LLM knows it can retry

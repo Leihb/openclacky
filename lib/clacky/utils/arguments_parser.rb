@@ -113,7 +113,7 @@ module Clacky
       def self.raise_helpful_error(call, tool_registry, original_error)
         tool = tool_registry.get(call[:name])
         error_msg = build_error_message(call, tool, original_error)
-        raise StandardError, error_msg
+        raise BadArgumentsError, error_msg
       end
 
       def self.build_error_message(call, tool, original_error)
@@ -173,8 +173,13 @@ module Clacky
       end
     end
 
+    # Raised when tool call arguments are malformed or missing required params.
+    # Distinct from StandardError so the agent can handle it specially
+    # (e.g. retract the bad assistant message from history to break cache loops).
+    class BadArgumentsError < StandardError; end
+
     # Custom exception for missing required parameters
-    class MissingRequiredParamsError < StandardError
+    class MissingRequiredParamsError < BadArgumentsError
       attr_reader :tool_name, :missing_params, :provided_params
 
       def initialize(tool_name, missing_params, provided_params)
