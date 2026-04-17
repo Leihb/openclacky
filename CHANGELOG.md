@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.31] - 2026-04-18
+
+### Added
+- GLM (智谱) model provider support — select GLM models directly from the provider settings
+- Claude Opus 4.7 model option in the built-in provider list
+- Skill Creator UI — create and edit skills from the Web interface with a visual editor
+- Interactive feedback cards — `request_user_feedback` now renders as a styled interactive card in all UIs (Web, UI2, plain), instead of plain text
+- Brand deactivation — white-label brand can now be toggled on/off from the settings page
+- Empty skill placeholder — shows a friendly message when no skills are installed yet
+
+### Improved
+- Shell tool large output handling — when a shell command waits for input or times out with large output, the output is now properly truncated and saved to temp files so the agent can still read the full content
+- Chinese UI translations expanded with new thinkverbose labels
+
+### Fixed
+- Bedrock streaming truncation recovery — when a tool call's arguments are truncated by the API, the broken assistant message is now retracted from history and the agent retries cleanly instead of crashing
+- First session scroll position in the Web UI sidebar
+- Idle status indicator in UI2
+- Channels page spacing and skill creator label alignment in Web UI
+
 ## [0.9.30] - 2026-04-16
 
 ### Added
