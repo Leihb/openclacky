@@ -3144,6 +3144,42 @@ body {
   padding: 20px 0;
   text-align: center;
 }
+.skills-empty-text {
+  margin-bottom: 12px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+/* Guided CTA card in the empty-skills state — mirrors .creator-new-card */
+.skills-empty-create-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--color-bg-secondary);
+  border: 1px dashed var(--color-border-primary);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  transition: border-color .15s, color .15s, background .15s;
+  text-align: left;
+  margin-top: 4px;
+}
+.skills-empty-create-btn:hover {
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+  background: var(--color-accent-bg, rgba(59,130,246,0.04));
+}
+.skills-empty-create-arrow {
+  margin-left: auto;
+  opacity: 0.5;
+  transition: opacity .15s, transform .15s;
+}
+.skills-empty-create-btn:hover .skills-empty-create-arrow {
+  opacity: 1;
+  transform: translateX(3px);
+}
 
 /* ── Skill Card ──────────────────────────────────────────────────────────── */
 .skill-card {
