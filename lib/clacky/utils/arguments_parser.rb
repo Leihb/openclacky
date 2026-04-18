@@ -174,8 +174,6 @@ module Clacky
     end
 
     # Raised when tool call arguments are malformed or missing required params.
-    # Distinct from StandardError so the agent can handle it specially
-    # (e.g. retract the bad assistant message from history to break cache loops).
     class BadArgumentsError < StandardError; end
 
     # Custom exception for missing required parameters

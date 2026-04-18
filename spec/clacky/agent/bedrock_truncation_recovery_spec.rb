@@ -7,13 +7,9 @@
 #   (e.g. only 18 tokens: '{"path": "/tmp/build_manual.py"' — no `content`).
 #   When this happens, ArgumentsParser raises BadArgumentsError.
 #
-#   Without the fix, the bad assistant message stays in history.  On the next
-#   LLM call, prompt-caching returns the same cached context → same truncated
-#   output → infinite retry loop.
-#
-#   The fix: on BadArgumentsError, Agent#act retracts the bad assistant message
-#   from history *before* returning, and skips appending an orphan tool_result.
-#   The next LLM call therefore sees a clean context and regenerates correctly.
+#   BadArgumentsError is treated as a normal tool error: the assistant message
+#   stays in history and a tool_result with the error message is appended.
+#   The LLM sees the error feedback and naturally adjusts on the next attempt.
 
 RSpec.describe Clacky::Agent, "Bedrock truncated tool call recovery" do
   # ── helpers ──────────────────────────────────────────────────────────────────
@@ -82,7 +78,7 @@ RSpec.describe Clacky::Agent, "Bedrock truncated tool call recovery" do
 
   # ── Scenario 1: history is clean after truncated call ────────────────────────
 
-  describe "Scenario 1 — truncated write args: bad assistant message removed from history" do
+  describe "Scenario 1 — truncated write args: error returned as normal tool result" do
     # LLM returns the truncated tool call once, then a plain text final answer
     before do
       call_count = 0
@@ -106,15 +102,13 @@ RSpec.describe Clacky::Agent, "Bedrock truncated tool call recovery" do
       expect { agent.run("Write a build script") }.not_to raise_error
     end
 
-    it "removes the bad assistant message so history ends cleanly" do
+    it "returns the parse error as a tool result so LLM can see the feedback" do
       agent.run("Write a build script")
 
-      history_roles = agent.history.to_a.map { |m| m[:role] }
-      # The truncated assistant turn must NOT be in history.
-      # History should look like: system, user, (optional context), assistant(final)
-      # There must be NO consecutive assistant messages or orphan tool messages.
       tool_msgs = agent.history.to_a.select { |m| m[:role] == "tool" }
-      expect(tool_msgs).to be_empty
+      expect(tool_msgs.size).to eq(1)
+      error_content = JSON.parse(tool_msgs.first[:content])
+      expect(error_content["error"]).to include("write")
     end
 
     it "does not leave orphan tool-result messages in history" do
@@ -261,12 +255,16 @@ RSpec.describe Clacky::Agent, "Bedrock truncated tool call recovery" do
       expect(result[:status]).to eq(:success)
     end
 
-    it "never accumulates orphan tool messages in history" do
+    it "returns error tool results so LLM gets feedback each time" do
       agent.run("Write a build script")
 
       tool_msgs = agent.history.to_a.select { |m| m[:role] == "tool" }
-      # After fix: all truncated assistant messages and their potential tool results are gone
-      expect(tool_msgs).to be_empty
+      # Each truncated tool call gets an error tool_result — LLM sees the feedback
+      expect(tool_msgs).not_to be_empty
+      tool_msgs.each do |msg|
+        error_content = JSON.parse(msg[:content])
+        expect(error_content).to have_key("error")
+      end
     end
   end
 end

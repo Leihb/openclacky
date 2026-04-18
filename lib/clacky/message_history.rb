@@ -62,12 +62,6 @@ module Clacky
       @messages.pop
     end
 
-    # Remove messages from the end while the block is truthy.
-    def pop_while(&block)
-      @messages.pop while !@messages.empty? && block.call(@messages.last)
-      self
-    end
-
     # Remove all messages matching the block in-place
     # (e.g. cleanup_memory_messages uses reject! { m[:memory_update] }).
     def delete_where(&block)
@@ -150,12 +144,6 @@ module Clacky
     # Return all messages where task_id <= given id (Time Machine support).
     def for_task(task_id)
       @messages.select { |m| !m[:task_id] || m[:task_id] <= task_id }
-    end
-
-    # Count how many of the last N messages have :truncated set.
-    # Used by think() to guard against infinite truncation retry loops.
-    def recent_truncation_count(n)
-      @messages.last(n).count { |m| m[:truncated] }
     end
 
     # ─────────────────────────────────────────────

@@ -109,20 +109,6 @@ RSpec.describe Clacky::MessageHistory do
   end
 
   # ─────────────────────────────────────────────
-  # pop_while
-  # ─────────────────────────────────────────────
-  describe "#pop_while" do
-    it "removes messages from the end while condition is true" do
-      history.append(user_msg("keep"))
-      history.append(assistant_msg("remove1"))
-      history.append(assistant_msg("remove2"))
-      history.pop_while { |m| m[:role] == "assistant" }
-      expect(history.size).to eq(1)
-      expect(history.to_a.last[:content]).to eq("keep")
-    end
-  end
-
-  # ─────────────────────────────────────────────
   # delete_where
   # ─────────────────────────────────────────────
   describe "#delete_where" do
@@ -235,25 +221,6 @@ RSpec.describe Clacky::MessageHistory do
       history.append(user_msg("t3", task_id: 3))
       result = history.for_task(2)
       expect(result.map { |m| m[:content] }).to eq(%w[t1 t2])
-    end
-  end
-
-  # ─────────────────────────────────────────────
-  # recent_truncation_count
-  # ─────────────────────────────────────────────
-  describe "#recent_truncation_count" do
-    it "counts truncated messages in the last N messages" do
-      history.append(assistant_msg("ok"))
-      history.append(assistant_msg("truncated", truncated: true))
-      history.append(assistant_msg("truncated", truncated: true))
-      expect(history.recent_truncation_count(5)).to eq(2)
-    end
-
-    it "only looks at the last N messages" do
-      10.times { history.append(assistant_msg("truncated", truncated: true)) }
-      3.times { history.append(assistant_msg("ok")) }
-      # last 3 are all non-truncated, so count should be 0
-      expect(history.recent_truncation_count(3)).to eq(0)
     end
   end
 

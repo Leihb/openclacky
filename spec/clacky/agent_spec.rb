@@ -767,7 +767,7 @@ RSpec.describe Clacky::Agent do
 
       # Should have added a system message about truncation
       system_messages = agent.history.to_a.select { |m| 
-        m[:role] == "user" && m[:content]&.include?("[SYSTEM] Your response was truncated")
+        m[:role] == "user" && m[:content]&.include?("[SYSTEM] Your previous response was truncated")
       }
       expect(system_messages.size).to eq(1)
 

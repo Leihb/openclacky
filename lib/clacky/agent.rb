@@ -174,6 +174,7 @@ module Clacky
       task_id = start_new_task
 
       @start_time = Time.now
+      @task_truncation_count = 0  # Reset truncation counter for each task
       @task_cost_source = :estimated  # Reset for new task
       # Note: Do NOT reset @previous_total_tokens here - it should maintain the value from the last iteration
       # across tasks to correctly calculate delta tokens in each iteration
@@ -499,9 +500,9 @@ module Clacky
       # Handle truncated responses (when max_tokens limit is reached)
       if response[:finish_reason] == "length"
         # Count recent truncations to prevent infinite loops
-        recent_truncations = @history.recent_truncation_count(5)
+        @task_truncation_count = (@task_truncation_count || 0) + 1
 
-        if recent_truncations >= 2
+        if @task_truncation_count >= 3
           # Too many truncations - task is too complex
           @ui&.show_error("Response truncated multiple times. Task is too complex.")
 
@@ -525,18 +526,30 @@ module Clacky
           return error_response
         end
 
+        # Preserve the truncated assistant message (text only, drop incomplete tool_calls)
+        # so the LLM sees what it attempted before. This also maintains the required
+        # user/assistant alternation for Bedrock Converse API.
+        truncated_text = response[:content] || ""
+        truncated_text = "..." if truncated_text.strip.empty?
+        @history.append({
+          role: "assistant",
+          content: truncated_text,
+          task_id: @current_task_id
+        })
+
         # Insert system message to guide LLM to retry with smaller steps
         @history.append({
           role: "user",
-          content: "[SYSTEM] Your response was truncated due to length limit. Please retry with a different approach:\n" \
-                   "- For long file content: create the file with structure first, then use edit() to add content section by section\n" \
-                   "- Break down large tasks into multiple smaller steps\n" \
-                   "- Avoid putting more than 2000 characters in a single tool call argument\n" \
+          content: "[SYSTEM] Your previous response was truncated because it exceeded the output token limit (max_tokens=#{@config.max_tokens}). " \
+                   "The incomplete tool call has been discarded. Please retry with a different approach:\n" \
+                   "- For long file content: create the file with a basic structure first, then use edit() to add content section by section\n" \
+                   "- Break down large tasks into multiple smaller tool calls\n" \
+                   "- Keep each tool call argument under 2000 characters\n" \
                    "- Use multiple tool calls instead of one large call",
           truncated: true
         })
 
-        @ui&.show_warning("Response truncated. Retrying with smaller steps...")
+        @ui&.show_warning("Response truncated (#{@task_truncation_count}/3). Retrying with smaller steps...")
 
         # Recursively retry
         return think
@@ -735,17 +748,6 @@ module Clacky
             backtrace: e.backtrace&.first(20) # Keep first 20 lines of backtrace
           }
           Clacky::Logger.error("tool_execution_error", tool: call[:name], error: e)
-
-          # If arguments were malformed/truncated (e.g. Bedrock streaming truncation),
-          # retract the bad assistant message from history so the next LLM call gets a
-          # fresh context rather than re-reading a cached broken tool call.
-          # Also skip adding a tool_result — without the assistant message there is no
-          # tool_call to pair with, and sending an orphan tool_result breaks the API.
-          if e.is_a?(Utils::BadArgumentsError)
-            size_before = @history.size
-            @history.pop_while { |m| m[:role] == "assistant" && m[:tool_calls]&.any? { |tc| tc[:id] == call[:id] } }
-            next if @history.size < size_before # message was retracted, skip tool_result
-          end
 
           @hooks.trigger(:on_tool_error, call, e)
           @ui&.show_tool_error(e)
