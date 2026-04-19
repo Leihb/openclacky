@@ -41,7 +41,7 @@ module Clacky
       # Looks for invoke_skill tool calls in the conversation history
       # @return [Boolean]
       private def skill_invoked_in_history?
-        @history.any? { |msg|
+        @history.to_a.any? { |msg|
           msg[:role] == "assistant" &&
             msg[:tool_calls]&.any? { |tc| tc[:name] == "invoke_skill" }
         }

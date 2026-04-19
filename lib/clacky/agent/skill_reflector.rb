@@ -12,13 +12,20 @@ module Clacky
     # If the LLM identifies concrete improvements, it can invoke skill-creator
     # to update the skill.
     module SkillReflector
-      # Minimum iterations for a skill execution to warrant reflection
-      MIN_SKILL_ITERATIONS = 2
+      # Minimum iterations for a skill execution to warrant reflection.
+      # Raised to 5 to filter out lightweight skill invocations (e.g. platform
+      # management skills like cron-task-creator that the user triggered incidentally).
+      MIN_SKILL_ITERATIONS = 5
 
       # Check if we should reflect on the skill that just executed
       # Called from SkillEvolution#run_skill_evolution_hooks
       def maybe_reflect_on_skill
         return unless @skill_execution_context
+
+        # Only reflect on skills that the user explicitly invoked via slash command.
+        # Skills triggered by the LLM itself (e.g. as part of a broader task) or
+        # platform-management skills invoked incidentally should not be reflected on.
+        return unless @skill_execution_context[:slash_command]
 
         skill_name = @skill_execution_context[:skill_name]
         start_iteration = @skill_execution_context[:start_iteration]
