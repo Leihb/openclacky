@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.32] - 2026-04-20
+
+### Added
+- **Skill auto-evolution system**: after completing a complex task (12+ iterations) without an existing skill, the agent automatically analyzes whether the workflow is worth capturing as a reusable skill and creates one via `skill-creator` if it meets the criteria
+- **Skill reflection**: after executing a skill via slash command, the agent reflects on whether the skill's instructions could be improved and updates it automatically if concrete improvements are found
+
+### Improved
+- **Shell tool output management**: shell tool now uses `LimitStack` for output buffering — per-line character limits, total character budgets, and rolling-window line caps are all enforced in a single, well-tested utility, replacing ad-hoc truncation logic
+- **Progress display**: cleaned up progress/spinner lifecycle — all UIs (Web, CLI, UI2, channel) now use a unified `show_progress done` pattern instead of a separate `clear_progress` call, eliminating stale spinners
+
+### Fixed
+- **Thinking state bleed across sessions**: in the Web UI, a "thinking" indicator from a previous session no longer bleeds into a freshly opened session
+- **Token truncation reliability**: improved agent token-limit handling — context trimming now uses a cleaner single-pass approach and removes the dependency on per-message character counting in `MessageHistory`
+- **Skill auto-creation crash**: fixed `nil.to_a` error in `SkillAutoCreator` when conversation history contained messages without tool calls
+
+### More
+- Updated platform HTTP client fallback host for improved connectivity reliability
+
 ## [0.9.31] - 2026-04-18
 
 ### Added
