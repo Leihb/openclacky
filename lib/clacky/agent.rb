@@ -20,6 +20,9 @@ require_relative "agent/system_prompt_builder"
 require_relative "agent/llm_caller"
 require_relative "agent/time_machine"
 require_relative "agent/memory_updater"
+require_relative "agent/skill_evolution"
+require_relative "agent/skill_reflector"
+require_relative "agent/skill_auto_creator"
 
 module Clacky
   class Agent
@@ -33,6 +36,9 @@ module Clacky
     include LlmCaller
     include TimeMachine
     include MemoryUpdater
+    include SkillEvolution
+    include SkillReflector
+    include SkillAutoCreator
 
     attr_reader :session_id, :name, :history, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
                 :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile,
@@ -409,6 +415,11 @@ module Clacky
         save_modified_files_snapshot(@modified_files_in_task)
         @modified_files_in_task = []  # Reset for next task
       end
+
+        # Run skill evolution hooks after main loop completes
+        # Only for main agent (not subagents) to avoid recursive evolution
+        run_skill_evolution_hooks unless @is_subagent
+
         if @is_subagent
           # Parent agent (skill_manager) prints the completion summary; skip here.
         else

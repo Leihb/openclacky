@@ -200,6 +200,14 @@ module Clacky
       # @param task_id [Integer] Current task ID (for message tagging)
       # @return [void]
       def inject_skill_as_assistant_message(skill, arguments, task_id, slash_command: false)
+        # Track skill execution context for self-evolution system
+        @skill_execution_context = {
+          skill_name: skill.identifier,
+          start_iteration: @iterations,
+          arguments: arguments,
+          slash_command: slash_command
+        }
+
         # For encrypted brand skills with supporting scripts: decrypt to a tmpdir so the
         # LLM receives the real paths it can execute. The tmpdir is registered on the agent
         # and shredded when agent.run completes (see Agent#shred_script_tmpdirs).

@@ -152,7 +152,8 @@ module Clacky
 
     attr_accessor :permission_mode, :max_tokens, :verbose,
                   :enable_compression, :enable_prompt_caching,
-                  :models, :current_model_index
+                  :models, :current_model_index,
+                  :memory_update_enabled, :skill_evolution
 
     def initialize(options = {})
       @permission_mode = validate_permission_mode(options[:permission_mode])
@@ -165,6 +166,14 @@ module Clacky
       # Models configuration
       @models = options[:models] || []
       @current_model_index = options[:current_model_index] || 0
+
+      # Memory and skill evolution configuration
+      @memory_update_enabled = options[:memory_update_enabled].nil? ? true : options[:memory_update_enabled]
+      @skill_evolution = options[:skill_evolution] || {
+        enabled: true,
+        auto_create_threshold: 12,
+        reflection_mode: "llm_analysis"
+      }
     end
 
     # Load configuration from file

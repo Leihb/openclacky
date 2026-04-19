@@ -7,6 +7,15 @@ description: Create new skills, modify and improve existing skills, and measure 
 
 A skill for creating new skills and iteratively improving them.
 
+## Usage Modes
+
+This skill supports two modes:
+
+### 1. Interactive Mode (default)
+
+The full workflow with user interviews, test cases, and iteration cycles.
+Use when creating or refining skills manually.
+
 At a high level, the process of creating a skill goes like this:
 
 - Decide what you want the skill to do and roughly how it should do it
@@ -21,6 +30,43 @@ At a high level, the process of creating a skill goes like this:
 Your job is to figure out where the user is in this process and jump in to help them progress through these stages. Maybe they say "I want to make a skill for X" — help narrow down the intent, write a draft, write test cases, evaluate, and repeat. Or maybe they already have a draft — go straight to the eval/iterate part.
 
 Always be flexible. If the user says "skip the evals, just vibe with me", do that instead.
+
+### 2. Quick Mode (for agent self-evolution)
+
+**Trigger**: When invoked with `mode: "quick"` in the task arguments.
+
+Fast, opinionated skill creation without user interaction. This mode is used by the agent's self-evolution system to automatically create or improve skills.
+
+**Behavior**:
+- Skip user interviews and detailed requirements gathering
+- Extract workflow pattern from provided context
+- Write a minimal but functional SKILL.md
+- Save to `~/.clacky/skills/auto-<name>-<timestamp>/` (or improve existing skill in place)
+- Skip test cases and evals (user can refine later if needed)
+- Always validate frontmatter with the validator script after creation
+- Focus on the happy path; edge cases can be added later
+
+**Expected arguments when using quick mode**:
+- `task`: Clear description of what to automate and how (be specific about workflow steps)
+- `mode`: Must be set to `"quick"`
+- `suggested_name`: (optional) Proposed skill identifier (lowercase, hyphens OK)
+
+**Quick mode principles**:
+- **Be opinionated**: Make reasonable assumptions without asking
+- **Be concise**: Keep instructions simple and focused
+- **Be practical**: Focus on the core workflow that will save the most time
+- **Be correct**: Always set `disable-model-invocation: false` and `user-invocable: true`
+- **Be validating**: Run the frontmatter validator immediately after creation
+
+**Example invocation from the agent's self-evolution system**:
+```
+invoke_skill(
+  skill_name: "skill-creator",
+  task: "Create a skill to extract and summarize content from URLs. The skill should: 1) fetch the URL using safe_shell with curl, 2) parse the HTML to extract main text content, 3) generate a concise markdown summary. Expected input: URL string. Expected output: markdown summary with title and key points.",
+  mode: "quick",
+  suggested_name: "url-summarizer"
+)
+```
 
 ---
 
