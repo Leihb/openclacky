@@ -5,10 +5,10 @@ module Clacky
     # Scenario 1: Auto-create new skills from complex task patterns.
     #
     # After completing a complex task (high iteration count, no existing skill used),
-    # inject a system prompt asking the LLM to analyze if the workflow is reusable
-    # and worth capturing as a new skill.
+    # forks a subagent to analyze if the workflow is reusable and worth capturing
+    # as a new skill.
     #
-    # If the LLM determines it's valuable, it can invoke skill-creator in "quick mode"
+    # If the LLM determines it's valuable, it invokes skill-creator in "quick mode"
     # to generate a new skill automatically.
     module SkillAutoCreator
       # Default minimum iterations to consider auto-creating a skill
@@ -19,7 +19,11 @@ module Clacky
       def maybe_create_skill_from_task
         return unless should_auto_create_skill?
 
-        inject_skill_creation_prompt
+        @ui&.show_info("Analyzing task for skill creation opportunity...")
+
+        # Fork an isolated subagent to evaluate + create — does NOT touch main history
+        subagent = fork_subagent
+        subagent.run(build_skill_creation_prompt)
       end
 
       # Determine if this task is a candidate for skill auto-creation
@@ -45,19 +49,6 @@ module Clacky
           msg[:role] == "assistant" &&
             msg[:tool_calls]&.any? { |tc| tc[:name] == "invoke_skill" }
         }
-      end
-
-      # Inject skill creation prompt as a system message
-      # The LLM will analyze and decide whether to create a new skill
-      private def inject_skill_creation_prompt
-        @history.append({
-          role: "user",
-          content: build_skill_creation_prompt,
-          system_injected: true,
-          skill_auto_create: true
-        })
-
-        @ui&.show_info("Analyzing task for skill creation opportunity...")
       end
 
       # Build the skill auto-creation prompt content

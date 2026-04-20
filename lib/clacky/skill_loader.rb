@@ -433,6 +433,7 @@ module Clacky
 
       @skills[id]        = skill
       @loaded_from[id]   = source
+      skill.source       = source
 
       # Invalid skills have no usable slug — skip slash command registration but
       # still keep them in @skills so they appear (greyed-out) in the UI.
@@ -466,16 +467,7 @@ module Clacky
 
         begin
           skill = Skill.new(Pathname.new(skill_dir))
-
-          # Check for duplicates (higher priority skills override)
-          if @skills.key?(skill.identifier)
-            next  # Skip if already loaded from higher priority location
-          end
-
-          # Register skill
-          @skills[skill.identifier] = skill
-          @skills_by_command[skill.slash_command] = skill
-          @loaded_from[skill.identifier] = :default
+          register_skill(skill, source: :default)
         rescue StandardError => e
           @errors << "Failed to load default skill #{skill_name}: #{e.message}"
         end

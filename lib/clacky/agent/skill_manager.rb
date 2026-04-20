@@ -205,7 +205,8 @@ module Clacky
           skill_name: skill.identifier,
           start_iteration: @iterations,
           arguments: arguments,
-          slash_command: slash_command
+          slash_command: slash_command,
+          source: skill.source
         }
 
         # For encrypted brand skills with supporting scripts: decrypt to a tmpdir so the

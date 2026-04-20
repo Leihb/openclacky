@@ -4,12 +4,12 @@ module Clacky
   class Agent
     # Scenario 2: Reflect on skill execution and suggest improvements.
     #
-    # After a skill completes, inject a system prompt asking the LLM to analyze:
+    # After a skill completes, forks a subagent to analyze:
     #   - Were instructions clear enough?
     #   - Any missing edge cases?
     #   - Any improvements needed?
     #
-    # If the LLM identifies concrete improvements, it can invoke skill-creator
+    # If the LLM identifies concrete improvements, it invokes skill-creator
     # to update the skill.
     module SkillReflector
       # Minimum iterations for a skill execution to warrant reflection.
@@ -27,6 +27,11 @@ module Clacky
         # platform-management skills invoked incidentally should not be reflected on.
         return unless @skill_execution_context[:slash_command]
 
+        # Skip default and brand skills — they are system-owned and should not be
+        # auto-improved by the evolution system.
+        source = @skill_execution_context[:source]
+        return if source == :default || source == :brand
+
         skill_name = @skill_execution_context[:skill_name]
         start_iteration = @skill_execution_context[:start_iteration]
         iterations = @iterations - start_iteration
@@ -34,26 +39,13 @@ module Clacky
         # Only reflect if the skill actually ran for a meaningful number of iterations
         return if iterations < MIN_SKILL_ITERATIONS
 
-        inject_skill_reflection_prompt(skill_name, iterations)
+        # Fork an isolated subagent to reflect + improve — does NOT touch main history
+        @ui&.show_info("Reflecting on skill execution: #{skill_name}")
+        subagent = fork_subagent
+        subagent.run(build_skill_reflection_prompt(skill_name, iterations))
 
         # Clear the context so we don't reflect again
         @skill_execution_context = nil
-      end
-
-      # Inject reflection prompt into history as a system message
-      # The LLM will respond in the next user interaction (non-blocking)
-      #
-      # @param skill_name [String] Identifier of the skill that was executed
-      # @param iterations [Integer] Number of iterations the skill ran for
-      private def inject_skill_reflection_prompt(skill_name, iterations)
-        @history.append({
-          role: "user",
-          content: build_skill_reflection_prompt(skill_name, iterations),
-          system_injected: true,
-          skill_reflection: true
-        })
-
-        @ui&.show_info("Reflecting on skill execution: #{skill_name}")
       end
 
       # Build the reflection prompt content

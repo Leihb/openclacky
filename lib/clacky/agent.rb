@@ -395,7 +395,7 @@ module Clacky
               # Add user feedback as a new user message with system_injected marker
               @history.append({
                 role: "user",
-                content: "STOP. The user has a question/feedback for you: #{action_result[:feedback]}\n\nPlease respond to the user's question/feedback before continuing with any actions.",
+                content: "The user has a question/feedback for you: #{action_result[:feedback]}\n\nPlease respond to the user's question/feedback before continuing with any actions.",
                 system_injected: true
               })
               # Continue loop to let agent respond to feedback

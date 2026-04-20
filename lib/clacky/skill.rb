@@ -36,6 +36,11 @@ module Clacky
     attr_reader :fork_agent, :model, :forbidden_tools, :auto_summarize
     attr_reader :brand_skill, :brand_config
 
+    # Source location of this skill — set by SkillLoader after registration.
+    # One of: :default, :global_claude, :global_clacky, :project_claude, :project_clacky, :brand
+    # @return [Symbol, nil]
+    attr_accessor :source
+
     # Warnings accumulated during load (e.g. name was invalid and fell back to dir name).
     # Non-empty means the skill loaded but something was auto-corrected.
     # @return [Array<String>]
