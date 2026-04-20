@@ -144,12 +144,13 @@ module Clacky
 
       raise_error(response) unless response.status == 200
       check_html_response(response)
-      MessageFormat::Bedrock.parse_response(JSON.parse(response.body))
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      MessageFormat::Bedrock.parse_response(parsed_body)
     end
 
     def parse_simple_bedrock_response(response)
       raise_error(response) unless response.status == 200
-      data = JSON.parse(response.body)
+      data = safe_json_parse(response.body, context: "LLM response")
       (data.dig("output", "message", "content") || [])
         .select { |b| b["text"] }
         .map { |b| b["text"] }
@@ -167,12 +168,13 @@ module Clacky
 
       raise_error(response) unless response.status == 200
       check_html_response(response)
-      MessageFormat::Anthropic.parse_response(JSON.parse(response.body))
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      MessageFormat::Anthropic.parse_response(parsed_body)
     end
 
     def parse_simple_anthropic_response(response)
       raise_error(response) unless response.status == 200
-      data = JSON.parse(response.body)
+      data = safe_json_parse(response.body, context: "LLM response")
       (data["content"] || []).select { |b| b["type"] == "text" }.map { |b| b["text"] }.join("")
     end
 
@@ -188,12 +190,15 @@ module Clacky
 
       raise_error(response) unless response.status == 200
       check_html_response(response)
-      MessageFormat::OpenAI.parse_response(JSON.parse(response.body))
+      
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      MessageFormat::OpenAI.parse_response(parsed_body)
     end
 
     def parse_simple_openai_response(response)
       raise_error(response) unless response.status == 200
-      JSON.parse(response.body)["choices"].first["message"]["content"]
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      parsed_body["choices"].first["message"]["content"]
     end
 
     # ── Prompt caching helpers ────────────────────────────────────────────────
@@ -310,19 +315,19 @@ module Clacky
         # Also, Bedrock returns ThrottlingException as 400 instead of 429.
         if error_message.match?(/ThrottlingException|unavailable|quota/i)
           hint = error_message.match?(/quota/i) ? " (possibly out of credits)" : ""
-          raise RetryableError, "Rate limit or service issue (400): #{error_message}#{hint}"
+          raise RetryableError, "[LLM] Rate limit or service issue: #{error_message}#{hint}"
         end
 
         # True bad request — our message was malformed. Roll back history so the
         # broken message is not replayed on the next user turn.
-        raise BadRequestError, "API request failed (400): #{error_message}"
-      when 401 then raise AgentError, "Invalid API key"
-      when 402 then raise AgentError, "Billing or payment issue (possibly out of credits): #{error_message}"
-      when 403 then raise AgentError, "Access denied: #{error_message}"
-      when 404 then raise AgentError, "API endpoint not found: #{error_message}"
-      when 429 then raise RetryableError, "Rate limit exceeded, please wait a moment"
-      when 500..599 then raise RetryableError, "LLM service temporarily unavailable (#{response.status}), retrying..."
-      else raise AgentError, "Unexpected error (#{response.status}): #{error_message}"
+        raise BadRequestError, "[LLM] Client request error: #{error_message}"
+      when 401 then raise AgentError, "[LLM] Invalid API key"
+      when 402 then raise AgentError, "[LLM] Billing or payment issue (possibly out of credits): #{error_message}"
+      when 403 then raise AgentError, "[LLM] Access denied: #{error_message}"
+      when 404 then raise AgentError, "[LLM] API endpoint not found: #{error_message}"
+      when 429 then raise RetryableError, "[LLM] Rate limit exceeded, please wait a moment"
+      when 500..599 then raise RetryableError, "[LLM] Service temporarily unavailable (#{response.status}), retrying..."
+      else raise AgentError, "[LLM] Unexpected error (#{response.status}): #{error_message}"
       end
     end
 
@@ -330,7 +335,7 @@ module Clacky
     def check_html_response(response)
       body = response.body.to_s.lstrip
       if body.start_with?("<!DOCTYPE", "<!doctype", "<html", "<HTML")
-        raise RetryableError, "LLM service temporarily unavailable (received HTML error page), retrying..."
+        raise RetryableError, "[LLM] Service temporarily unavailable (received HTML error page), retrying..."
       end
     end
 
@@ -345,6 +350,32 @@ module Clacky
       error_body.dig("error", "message")&.then { |m| return m } if error_body["error"].is_a?(Hash)
       error_body["message"]&.then             { |m| return m }
       error_body["error"].is_a?(String) ? error_body["error"] : (raw_body.to_s[0..200] + (raw_body.to_s.length > 200 ? "..." : ""))
+    end
+
+    # Parse JSON with user-friendly error messages.
+    # @param json_string [String] the JSON string to parse
+    # @param context [String] a description of what's being parsed (e.g., "LLM response")
+    # @return [Hash, Array] the parsed JSON
+    # @raise [RetryableError] if parsing fails (indicates a malformed LLM response)
+    def safe_json_parse(json_string, context: "response")
+      JSON.parse(json_string)
+    rescue JSON::ParserError => e
+      # Transform technical JSON parsing errors into user-friendly messages.
+      # These are usually caused by:
+      #   1. Incomplete/truncated LLM response (network issue, timeout)
+      #   2. LLM service returned malformed data
+      #   3. Proxy/gateway corruption
+      error_detail = if json_string.to_s.strip.empty?
+        "received empty response"
+      elsif json_string.to_s.bytesize > 500
+        "response was truncated or malformed (#{json_string.to_s.bytesize} bytes received)"
+      else
+        "response format is invalid"
+      end
+
+      raise RetryableError, "[LLM] Failed to parse #{context}: #{error_detail}. " \
+                           "This usually means the AI service returned incomplete or corrupted data. " \
+                           "The request will be retried automatically."
     end
 
     # ── Utilities ─────────────────────────────────────────────────────────────

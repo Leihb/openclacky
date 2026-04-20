@@ -92,7 +92,7 @@ module Clacky
           else
             @ui&.show_progress(phase: "done")
             # Don't show_error here — let the outer rescue block handle it to avoid duplicates
-            raise AgentError, "Network connection failed after #{max_retries} retries: #{e.message}"
+            raise AgentError, "[LLM] Network connection failed after #{max_retries} retries: #{e.message}"
           end
 
         rescue RetryableError => e
@@ -129,7 +129,7 @@ module Clacky
         else
           @ui&.show_progress(phase: "done")
           # Don't show_error here — let the outer rescue block handle it to avoid duplicates
-          raise AgentError, "LLM service unavailable after #{current_max} retries"
+          raise AgentError, "[LLM] Service unavailable after #{current_max} retries"
         end
         ensure
           @ui&.show_progress(phase: "done")
