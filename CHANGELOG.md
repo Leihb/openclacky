@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.34] - 2026-04-21
+
+### Added
+- **Model switcher in Web UI**: switch AI models mid-session from a dropdown in the settings panel — previously required restarting the session
+- **Advanced session creation options**: when creating a new session in Web UI, you can now configure permission mode, thinking verbosity, disable skills/tools, and choose specific models — no need to reconfigure after the session starts
+- **Session pinning**: pin important sessions to the top of the session list in Web UI for quick access — pinned sessions stay at the top regardless of recent activity
+- **Session error retry**: when a session encounters an error (network, API issue, etc.), a retry button now appears in Web UI so you can resume without restarting the entire session
+
+### Improved
+- **Error message clarity**: all LLM API errors now prefixed with `[LLM]` to distinguish AI service issues from local tool errors — makes debugging faster
+- **Skill auto-creator trigger logic**: skill auto-creation now only triggers after user task iterations (not slash commands or skill invocations) — reduces unnecessary skill creation attempts for one-off commands
+
+### Fixed
+- **System prompt injection for slash commands**: fixed system prompt duplication bug where invoking a skill via slash command (e.g., `/code-explorer`) could inject the system prompt twice, causing prompt bloat
+
 ## [0.9.33] - 2026-04-20
 
 ### Fixed
