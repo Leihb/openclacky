@@ -91,7 +91,7 @@ module Clacky
             retry
           else
             @ui&.show_progress(phase: "done")
-            @ui&.show_error("Network failed after #{max_retries} retries: #{e.message}")
+            # Don't show_error here — let the outer rescue block handle it to avoid duplicates
             raise AgentError, "Network connection failed after #{max_retries} retries: #{e.message}"
           end
 
@@ -122,16 +122,15 @@ module Clacky
               e.message,
               progress_type: "retrying",
               phase: "active",
-              metadata: { attempt: retries, total: current_max }
-            )
-            sleep retry_delay
-            retry
-          else
-            @ui&.show_progress(phase: "done")
-            @ui&.show_error("LLM service unavailable after #{current_max} retries. Please try again later.")
-            raise AgentError, "LLM service unavailable after #{current_max} retries"
-          end
-
+            metadata: { attempt: retries, total: current_max }
+          )
+          sleep retry_delay
+          retry
+        else
+          @ui&.show_progress(phase: "done")
+          # Don't show_error here — let the outer rescue block handle it to avoid duplicates
+          raise AgentError, "LLM service unavailable after #{current_max} retries"
+        end
         ensure
           @ui&.show_progress(phase: "done")
         end
