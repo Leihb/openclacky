@@ -238,7 +238,11 @@ module Clacky
       # The injected lite model is runtime-only (not persisted to config.yml)
       inject_provider_lite_model(models)
 
-      new(models: models)
+      # Find the index of the model marked as "default" (type: default)
+      # Fall back to 0 if no model has type: default
+      default_index = models.find_index { |m| m["type"] == "default" } || 0
+
+      new(models: models, current_model_index: default_index)
     end
 
     # Auto-inject a lite model entry if the default model's provider supports one

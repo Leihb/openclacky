@@ -1821,6 +1821,8 @@ module Clacky
             type:             m["type"]
           }
         end
+        # Filter out auto-injected models (like lite) from UI display
+        models.reject! { |m| @agent_config.models[m[:index]]["auto_injected"] }
         json_response(res, 200, { models: models, current_index: @agent_config.current_model_index })
       end
 
