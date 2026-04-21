@@ -2218,7 +2218,14 @@ module Clacky
         return unless @registry.exist?(session_id)
 
         session = @registry.get(session_id)
-        return if session[:status] == :running
+        
+        # If session is running, interrupt it first (mimics CLI behavior)
+        if session[:status] == :running
+          interrupt_session(session_id)
+          # Wait briefly for the thread to catch the interrupt and update status
+          # This ensures the agent loop exits cleanly before starting the new task
+          sleep 0.1
+        end
 
         agent = nil
         @registry.with_session(session_id) { |s| agent = s[:agent] }

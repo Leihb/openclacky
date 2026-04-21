@@ -167,10 +167,12 @@ module Clacky
 
         Clacky::Logger.info("[ChannelManager] Routing to session #{session_id[0, 8]} (status=#{session[:status]})")
 
+        # If session is running, interrupt it automatically (mimics CLI behavior)
         if session[:status] == :running
-          Clacky::Logger.info("[ChannelManager] Session busy, rejecting message")
-          adapter.send_text(event[:chat_id], "Still working on the previous task. Send `/stop` to interrupt.")
-          return
+          Clacky::Logger.info("[ChannelManager] Session busy, interrupting previous task")
+          @interrupt_session.call(session_id)
+          # Wait briefly for the thread to catch the interrupt and update status
+          sleep 0.1
         end
 
         agent  = session[:agent]
