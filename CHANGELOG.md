@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.35] - 2026-04-23
+
+### Added
+- **Unified Terminal tool**: merged the old `safe_shell` and `shell` tools into a single `terminal` tool with persistent PTY sessions — the agent can now keep a shell session alive across tool calls, send input to running prompts, poll long-running commands, and safely interrupt them (`Ctrl+C` / `Ctrl+D`). Replaces 1000+ lines of duplicated shell-handling logic with a cleaner, better-tested implementation.
+- **Access key authentication for server mode**: start the Web UI server with `--access-key <key>` (or `CLACKY_ACCESS_KEY` env var) to require a login before anyone can open sessions — safe to expose the Web UI over the network or to share a running instance
+- **Session debug download**: from the Web UI you can now download a full session bundle (messages, tool calls, config) as a zip for debugging or sharing — useful for bug reports and post-mortems
+- **Scheduler now saves session state**: scheduled/cron tasks now persist their session after each run, so you can inspect what the scheduled task actually did from the Web UI just like a normal session
+- **Web UI visual redesign**: substantial redesign of the sidebar, session list, settings panel, and theme — cleaner spacing, better contrast in both light and dark modes, smoother transitions
+- **Web UI & channel message interrupt**: you can now cancel an in-progress agent reply from the Web UI or from an IM channel (Feishu/WeCom/WeChat) mid-flight instead of waiting for it to finish
+- **Terminal tool UI tips**: the Web UI now surfaces helpful inline tips when the agent is running a terminal command (e.g. "waiting for input", "process still running"), making long-running commands easier to follow
+
+### Improved
+- **Smaller tool descriptions**: trimmed the system-prompt footprint of `terminal`, `browser`, and `todo_manager` tool descriptions by ~40% — fewer tokens burned on every API call, slightly faster startup, and meaningfully cheaper sessions over time
+- **Download fallback for skills & brand assets**: when the primary platform download host is unreachable (common in certain regions), the client now automatically falls back to a secondary URL — skill installs and brand asset fetches succeed in more network environments
+- **Session cost shows "N/A" for unknown-price models**: instead of displaying `$0.00` when a model's pricing isn't registered, sessions now show "N/A" so you can tell the difference between "free call" and "we don't know the cost"
+- **Faster, more accurate progress updates**: removed a delay in the progress spinner so the "Agent is thinking..." and tool-running indicators update immediately on state changes instead of a second later
+- **No Claude-specific skill auto-loading**: removed legacy logic that special-cased loading `.claude/` skills at startup — skill loading is now uniform regardless of provider, reducing surprise behavior and confusing "unknown skill" errors
+
+### Fixed
+- **`file://` links now render and open correctly** (C-5552, C-5553): file:// links are no longer stripped during streaming in the Web UI, and clicking them now opens the file via the backend (including proper foreground focus on WSL via `cmd.exe /c start`). Also fixes silent drop of `file://` links in the CLI.
+- **Idle `Ctrl+C` no longer crashes the CLI**: pressing Ctrl+C while the CLI is idle (no task running) now exits cleanly instead of raising an error
+- **Session pinned status persists correctly** (C-5556): pinning a session in the Web UI now survives server restarts and is correctly restored from disk
+- **Brand skill names follow language switch**: brand-supplied skill names in the Web UI sidebar now update immediately when you toggle the UI language (previously stuck in the initial language until reload)
+- **New sessions get the default model**: fixed a case where newly created sessions could end up on a different model than the configured default; the "lite UI" mode is no longer automatically forced either
+
+### More
+- Large refactor of the UI2 `LayoutManager` + new `OutputBuffer` for cleaner CLI output line handling
+- Agent progress-emission refactor for more consistent spinner/tool state reporting across Web, CLI, and channel UIs
+- Removed the `safe_shell_spec` and `shell_spec` suites; replaced with a single, comprehensive `terminal_spec` (500+ lines of coverage)
+
 ## [0.9.34] - 2026-04-21
 
 ### Added
