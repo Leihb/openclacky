@@ -51,6 +51,7 @@ module Clacky
         @progress_thread = nil
         @progress_start_time = nil
         @progress_message = nil
+        @progress_id = nil  # OutputBuffer id of the current progress entry
         @last_diff_lines = nil
       end
 
@@ -219,15 +220,19 @@ module Clacky
         append_output(output)
       end
 
-      # Update the last line in output area (for progress indicator)
+      # Update the progress entry's content. Uses the tracked @progress_id
+      # (set by show_progress) — no "last line" assumption anymore.
       # @param content [String] Content to update
       def update_progress_line(content)
-        @layout.update_last_line(content)
+        return unless @progress_id
+        @layout.replace_entry(@progress_id, content)
       end
 
-      # Clear the progress line (remove last line)
+      # Clear the progress entry (if any).
       def clear_progress_line
-        @layout.remove_last_line
+        return unless @progress_id
+        @layout.remove_entry(@progress_id)
+        @progress_id = nil
       end
 
       # Update todos display
@@ -530,6 +535,9 @@ module Clacky
 
           if final_msg
             update_progress_line(@renderer.render_progress(final_msg))
+            # Release the id — the final summary line now lives on as a
+            # normal output entry; subsequent output must not touch it.
+            @progress_id = nil
           else
             clear_progress_line
           end
@@ -537,6 +545,22 @@ module Clacky
         end
 
         # ── "active": start or update spinner ───────────────────────────────────────────
+        # "Idempotent re-entry" case: a progress slot is already live AND the
+        # caller didn't specify anything meaningful (no message, no metadata,
+        # same progress_type). This happens by design — Agent#run emits
+        # show_progress eagerly for fast feedback, then call_llm emits it
+        # again before the actual API call. We must NOT reset the verb /
+        # elapsed-time / ticker in that case, otherwise the user sees the
+        # message hop randomly (Percolating… → Pondering…) and the counter
+        # restart from 0s. Just return — the existing ticker keeps running.
+        is_bare_reentry = message.nil? &&
+                          metadata.empty? &&
+                          progress_type.to_s == "thinking" &&
+                          @progress_id &&
+                          @layout.live_entry?(@progress_id) &&
+                          @progress_thread&.alive?
+        return if is_bare_reentry
+
         stop_progress_thread
 
         # "thinking" updates session bar; "retrying"/"idle_compress" are background — leave it alone
@@ -557,8 +581,22 @@ module Clacky
           quiet_type ? @renderer.render_progress(msg) : @renderer.render_working(msg)
         }
 
-        append_output("") if prefix_newline
-        append_output(render_active.call("#{@progress_message}… (Ctrl+C to interrupt)"))
+        initial_content = render_active.call("#{@progress_message}… (Ctrl+C to interrupt)")
+
+        # If a progress slot is already live (e.g. transitioning from
+        # "retrying" back to "thinking", or any caller-supplied message
+        # change), reuse its position by replacing in place. Otherwise
+        # append a fresh entry. Either way @progress_id ends up pointing
+        # at the current slot.
+        if @progress_id && @layout.live_entry?(@progress_id)
+          @layout.replace_entry(@progress_id, initial_content)
+        else
+          append_output("") if prefix_newline
+          # Capture the id so the background thread can update exactly
+          # this entry (no "last line" assumption — new output can appear
+          # after it and we'll still hit the right line).
+          @progress_id = append_output(initial_content)
+        end
 
         # Background thread: update elapsed time every 0.5s
         @progress_thread = Thread.new do
@@ -709,29 +747,37 @@ module Clacky
         @inline_input = inline_input
 
         # Add inline input line to output (use layout to track position)
-        @layout.append_output(inline_input.render)
+        inline_id = @layout.append_output(inline_input.render)
         @layout.position_inline_input_cursor(inline_input)
 
-        # Collect input (blocks until user presses Enter)
-        result_text = inline_input.collect
+        result_text = nil
+        begin
+          # Collect input (blocks until user presses Enter).
+          # May raise AgentInterrupted if main thread Thread#raises the
+          # worker mid-pop — we MUST still restore input state in ensure.
+          result_text = inline_input.collect
+        ensure
+          # Clean up - remove the inline input lines (handle wrapped lines).
+          # Use the tracked id so removal is safe even when more output
+          # was appended in between.
+          @layout.remove_entry(inline_id) if inline_id
 
-        # Clean up - remove the inline input lines (handle wrapped lines)
-        line_count = inline_input.line_count
-        @layout.remove_last_line(line_count)
+          # Deactivate InlineInput and restore the main InputArea. This
+          # MUST run even on exception so the user can type after
+          # interrupting a confirmation prompt.
+          @inline_input = nil
+          @input_area.resume
+          @layout.recalculate_layout
+          @layout.render_all
+        end
 
-        # Append the final response to output
+        # Append the final response to output (only on normal return)
         if result_text.nil?
           append_output(theme.format_text("  [Cancelled]", :error))
         else
           display_text = result_text.empty? ? (default ? "y" : "n") : result_text
           append_output(theme.format_text("  #{display_text}", :success))
         end
-
-        # Deactivate and clean up
-        @inline_input = nil
-        @input_area.resume
-        @layout.recalculate_layout
-        @layout.render_all
 
         # Parse result
         return nil if result_text.nil?  # Cancelled
@@ -1098,6 +1144,9 @@ module Clacky
           @progress_thread      = nil  # detach; thread exits on its next tick
           if saved_message && elapsed_time > 0
             update_progress_line(@renderer.render_progress("#{saved_message}… (#{elapsed_time}s)"))
+            # Release the id so subsequent output doesn't touch this final
+            # summary line.
+            @progress_id = nil
           else
             clear_progress_line
           end

@@ -1,192 +1,343 @@
 # frozen_string_literal: true
 
 require_relative "screen_buffer"
-require_relative "../utils/limit_stack"
+require_relative "output_buffer"
 require_relative "../utils/encoding"
 
 module Clacky
   module UI2
-    # LayoutManager manages screen layout with split areas (output area on top, input area on bottom)
+    # LayoutManager coordinates the split-screen layout:
+    #   [ scrollable output area ]
+    #   [ gap / todo / input (fixed) ]
+    #
+    # Responsibilities:
+    # - Own an OutputBuffer (logical source of truth for output content).
+    # - Translate buffer mutations into screen paints, handling:
+    #   * Native terminal scrolling when output overflows the output area.
+    #   * Committing scrolled lines to the buffer (so they are never repainted
+    #     from the buffer again — prevents the classic "double render on
+    #     scroll up" bug).
+    # - Keep the fixed area (gap + todo + input) pinned at the bottom of the
+    #   screen, repainting it only when it is dirty.
+    #
+    # Public API (id-based, preferred):
+    #   append(content, kind: :text) -> id     # add entry, returns id
+    #   replace_entry(id, content)              # edit entry's content
+    #   remove_entry(id)                        # drop entry
+    #
+    # Legacy API (shims, still used by InlineInput / progress):
+    #   append_output(content) -> id            # alias for append
+    #   update_last_line(content, old_n, id: nil)  # uses id if given
+    #   remove_last_line(n, id: nil)               # uses id if given
     class LayoutManager
-      attr_reader :screen, :input_area, :todo_area
+      attr_reader :screen, :input_area, :todo_area, :buffer
 
       def initialize(input_area:, todo_area: nil)
-        @screen = ScreenBuffer.new
-        @input_area = input_area
-        @todo_area = todo_area
+        @screen       = ScreenBuffer.new
+        @input_area   = input_area
+        @todo_area    = todo_area
+        @buffer       = OutputBuffer.new
         @render_mutex = Mutex.new
-        @output_row = 0  # Track current output row position
-        @last_fixed_area_height = 0  # Track previous fixed area height to detect shrinkage
-        @fullscreen_mode = false  # Track if in fullscreen mode
-        @resize_pending = false  # Flag to indicate resize is pending
-        @output_buffer = Utils::LimitStack.new(max_size: 500)  # Buffer to store output lines with auto-rolling
+
+        @output_row              = 0  # Next output row to paint into
+        @last_fixed_area_height  = 0
+        @fullscreen_mode         = false
+        @resize_pending          = false
+
+        # Tracks the most recent append's id so the legacy
+        # update_last_line / remove_last_line shims still work without the
+        # caller threading an id through.
+        @last_append_id          = nil
 
         calculate_layout
         setup_resize_handler
       end
 
-      # Calculate layout dimensions based on screen size and component heights
+      # -----------------------------------------------------------------------
+      # Layout math
+      # -----------------------------------------------------------------------
+
       def calculate_layout
-        todo_height = @todo_area&.height || 0
+        todo_height  = @todo_area&.height || 0
         input_height = @input_area.required_height
-        gap_height = 1  # Blank line between output and input
+        gap_height   = 1
 
-        # Layout: output -> gap -> todo -> input (with its own separators and status)
         @output_height = screen.height - gap_height - todo_height - input_height
-        @output_height = [1, @output_height].max  # Minimum 1 line for output
+        @output_height = [1, @output_height].max
 
-        @gap_row = @output_height
-        @todo_row = @gap_row + gap_height
+        @gap_row   = @output_height
+        @todo_row  = @gap_row + gap_height
         @input_row = @todo_row + todo_height
 
-        # Update component dimensions
         @input_area.row = @input_row
       end
 
-      # Recalculate layout (called when input height changes)
-      def recalculate_layout
+      def fixed_area_height
+        todo_h  = @todo_area&.height || 0
+        input_h = @input_area.required_height
+        1 + todo_h + input_h
+      end
+
+      def fixed_area_start_row
+        screen.height - fixed_area_height
+      end
+
+      # -----------------------------------------------------------------------
+      # Public output API (id-based)
+      # -----------------------------------------------------------------------
+
+      # Append an output entry. Returns the entry id so callers can later
+      # replace_entry / remove_entry. Multi-line content is wrapped and
+      # stored as one logical entry.
+      def append(content, kind: :text)
+        return nil if content.nil?
+        content = sanitize(content)
+
         @render_mutex.synchronize do
-          # Save old layout values before recalculating
-          old_gap_row = @gap_row  # This is the old fixed_area_start
-          old_input_row = @input_row
+          lines = wrap_content_to_lines(content)
+          id    = @buffer.append(lines, kind: kind)
+          @last_append_id = id
 
-          calculate_layout
+          paint_new_lines(lines) unless @fullscreen_mode
+          render_fixed_areas
+          screen.flush
+          id
+        end
+      end
 
-          # If layout changed, clear old fixed area and re-render at new position
-          if @input_row != old_input_row
-            # Clear old fixed area lines (from old gap_row to screen bottom)
-            ([old_gap_row, 0].max...screen.height).each do |row|
-              screen.move_cursor(row, 0)
-              screen.clear_line
-            end
+      # Legacy: append, return id (callers that ignore it still work).
+      def append_output(content)
+        append(content)
+      end
 
-            # When input is paused (InlineInput active), fixed_area_start_row has grown
-            # (input_area.required_height returns 0 while paused), so the cleared rows
-            # now belong to the output area. Re-render output from buffer to fill them in.
-            if input_area.paused?
-              render_output_from_buffer
+      # Replace an existing entry's content. The screen is updated in place
+      # if the entry still lives in the output area; otherwise (committed
+      # to scrollback) this is a silent no-op.
+      def replace_entry(id, content)
+        return if id.nil? || content.nil?
+        content = sanitize(content)
+
+        @render_mutex.synchronize do
+          entry = @buffer.entry_by_id(id)
+          return if entry.nil? || entry.committed
+
+          old_lines = entry.lines.dup
+          new_lines = wrap_content_to_lines(content)
+          @buffer.replace(id, new_lines)
+
+          repaint_entry_in_place(entry, old_lines, new_lines) unless @fullscreen_mode
+          render_fixed_areas
+          screen.flush
+        end
+      end
+
+      # Is this id still a live (not yet committed to scrollback) entry?
+      # Cheap probe callers use before deciding between replace vs append.
+      def live_entry?(id)
+        return false if id.nil?
+        @buffer.live?(id)
+      end
+
+      # Remove an entry. If it's the last live entry, the screen area it
+      # occupied is cleared and the output cursor rolls back.
+      def remove_entry(id)
+        return if id.nil?
+
+        @render_mutex.synchronize do
+          entry = @buffer.entry_by_id(id)
+          return if entry.nil? || entry.committed
+
+          height = entry.height
+          # Check whether this entry is the tail of live entries. Only tail
+          # removal is cheap — mid-buffer removal would require a full
+          # output repaint. In practice only the progress / inline-input
+          # entries are removed, and they are always the tail.
+          is_tail = @buffer.live_entries.last&.id == id
+
+          @buffer.remove(id)
+          @last_append_id = nil if @last_append_id == id
+
+          unless @fullscreen_mode
+            if is_tail
+              clear_tail_rows(height)
             else
-              # Re-render fixed areas at new position
-              render_fixed_areas
+              # Non-tail removal: rebuild the entire output area from buffer
+              render_output_from_buffer
             end
-            screen.flush
+          end
+
+          render_fixed_areas
+          screen.flush
+        end
+      end
+
+      # -----------------------------------------------------------------------
+      # Legacy shims (kept for InlineInput + other callers that don't carry ids)
+      # -----------------------------------------------------------------------
+
+      # Update the most recently appended entry. Prefer passing +id:+; when
+      # omitted the last-append id is used. +old_line_count+ is ignored
+      # (buffer knows the true height).
+      def update_last_line(content, old_line_count = nil, id: nil)
+        target = id || @last_append_id
+        replace_entry(target, content) if target
+      end
+
+      # Remove the most recently appended entry (or the given id).
+      def remove_last_line(line_count = 1, id: nil)
+        target = id || @last_append_id
+        remove_entry(target) if target
+      end
+
+      # -----------------------------------------------------------------------
+      # Paint primitives (private)
+      # -----------------------------------------------------------------------
+
+      # Paint fresh lines into the output area, scrolling via native \n when
+      # we reach the fixed area. CRUCIAL INVARIANT: every time we scroll,
+      # we tell the buffer "N oldest live lines just moved into scrollback"
+      # so they are NEVER re-painted from the buffer again. This is what
+      # eliminates the double-render bug.
+      private def paint_new_lines(lines)
+        max_output_row = fixed_area_start_row
+
+        lines.each do |line|
+          if @output_row >= max_output_row
+            # Scroll the terminal by emitting a real \n at the very bottom.
+            # That pushes the top visible row into the native scrollback
+            # buffer — exactly where the user will see it on scroll-up.
+            screen.move_cursor(screen.height - 1, 0)
+            print "\n"
+
+            # Tell the buffer one line of live content just left the screen.
+            # Committed entries become untouchable, so a later full repaint
+            # (resize, fixed-area height change, fullscreen exit) will NOT
+            # re-emit them and duplicate them in scrollback.
+            @buffer.commit_oldest_lines(1)
+
+            @output_row = max_output_row - 1
+
+            # The fixed area got scrolled up too — restore it. Don't trigger
+            # an output rebuild; the buffer's tail hasn't changed.
+            render_fixed_areas(skip_buffer_rerender: true)
+          end
+
+          screen.move_cursor(@output_row, 0)
+          screen.clear_line
+          print line
+          @output_row += 1
+        end
+      end
+
+      # Repaint a single entry in place after its content changed.
+      # Handles both grow and shrink. If the new content would overflow
+      # into the fixed area, we scroll up to make room (same rules as
+      # paint_new_lines — scrolled rows get committed to scrollback).
+      private def repaint_entry_in_place(entry, old_lines, new_lines)
+        old_n = old_lines.length
+        new_n = new_lines.length
+        return if @output_row == 0
+
+        start_row = @output_row - old_n
+        start_row = 0 if start_row < 0
+
+        max_output_row = fixed_area_start_row
+
+        # Grow + would overflow → scroll first
+        if new_n > old_n
+          needed_end = start_row + new_n
+          if needed_end > max_output_row
+            overflow = needed_end - max_output_row
+            overflow.times do
+              screen.move_cursor(screen.height - 1, 0)
+              print "\n"
+              @buffer.commit_oldest_lines(1)
+            end
+            start_row      -= overflow
+            start_row       = 0 if start_row < 0
+            @output_row     = [start_row + old_n, max_output_row].min
+            render_fixed_areas(skip_buffer_rerender: true)
           end
         end
-      end
 
-      # Render all layout areas
-      def render_all
-        @render_mutex.synchronize do
-          render_all_internal
+        # Clear the rows the entry currently occupies
+        (start_row...@output_row).each do |row|
+          screen.move_cursor(row, 0)
+          screen.clear_line
         end
-      end
 
-      # Render output area - with native scroll, just ensure input stays in place
-      def render_output
-        @render_mutex.synchronize do
-          # Output is written directly, just need to re-render fixed areas
-          render_fixed_areas
-          screen.flush
+        # Paint the new content
+        cur = start_row
+        new_lines.each do |line|
+          screen.move_cursor(cur, 0)
+          print line
+          cur += 1
         end
+        @output_row = start_row + new_n
+
+        # If content shrank, extra rows below may still hold the old content
+        # if they were outside the cleared range — but since we cleared the
+        # full old span above, nothing extra is needed here.
       end
 
-      # Render just the input area
-      def render_input
-        @render_mutex.synchronize do
-          # Clear and re-render entire fixed area to ensure consistency
-          render_fixed_areas
-          screen.flush
+      # Clear the last N rows of the output area (used by remove_entry on tail).
+      private def clear_tail_rows(n)
+        return if n <= 0 || @output_row == 0
+
+        start_row = @output_row - n
+        start_row = 0 if start_row < 0
+
+        (start_row...@output_row).each do |row|
+          screen.move_cursor(row, 0)
+          screen.clear_line
         end
+        @output_row = start_row
       end
 
-      # Re-render everything from scratch (useful after modal dialogs)
-      def rerender_all
-        @render_mutex.synchronize do
-          # Clear entire screen
-          screen.clear_screen
-
-          # Re-render output from buffer
-          render_output_from_buffer
-
-          # Re-render fixed areas at new positions
-          render_fixed_areas
-          screen.flush
-        end
-      end
-
-      # Render output area from buffer (clears and re-renders last N lines)
+      # Repaint the entire output area from the buffer's live entries.
+      # Only called on layout changes (resize, fixed-area height change,
+      # /clear, fullscreen exit) — never on a normal append path.
       private def render_output_from_buffer
         max_output_row = fixed_area_start_row
 
-        # Clear output area
+        # Wipe the output area
         (0...max_output_row).each do |row|
           screen.move_cursor(row, 0)
           screen.clear_line
         end
 
-        # Re-render from buffer (show last N lines that fit)
+        # Fill from the buffer's tail (live lines only — committed lines
+        # are already in terminal scrollback and MUST NOT be repainted).
+        lines = @buffer.tail_lines(max_output_row)
         @output_row = 0
-        visible_lines = [@output_buffer.size, max_output_row].min
-
-        @output_buffer.last(visible_lines).each do |line|
+        lines.each do |line|
           screen.move_cursor(@output_row, 0)
           print line
           @output_row += 1
         end
       end
 
-      # Position cursor for inline input in output area
-      # @param inline_input [Components::InlineInput] InlineInput component
-      def position_inline_input_cursor(inline_input)
-        return unless inline_input
-
-        # Use InlineInput's method to calculate cursor position (handles continuation prompt correctly)
-        width = screen.width
-        wrap_row, wrap_col = inline_input.cursor_position_for_display(width)
-
-        # Get the number of lines InlineInput occupies (considering wrapping)
-        line_count = inline_input.line_count(width)
-
-        # InlineInput starts at @output_row - line_count
-        # Cursor is at wrap_row within that
-        cursor_row = @output_row - line_count + wrap_row
-        cursor_col = wrap_col
-
-        # Move terminal cursor to the correct position
-        screen.move_cursor(cursor_row, cursor_col)
-        screen.flush
-      end
-
-      # Update todos and re-render
-      # @param todos [Array<Hash>] Array of todo items
-      def update_todos(todos)
-        return unless @todo_area
-
-        @render_mutex.synchronize do
-          old_height = @todo_area.height
-          old_gap_row = @gap_row
-
-          @todo_area.update(todos)
-          new_height = @todo_area.height
-
-          # Recalculate layout if height changed
-          if old_height != new_height
-            calculate_layout
-
-            # Clear old fixed area lines (from old gap_row to screen bottom)
-            ([old_gap_row, 0].max...screen.height).each do |row|
-              screen.move_cursor(row, 0)
-              screen.clear_line
-            end
-          end
-
-          # Render fixed areas at new position
-          render_fixed_areas
-          screen.flush
+      # Wrap user content into screen-width visual lines using the existing
+      # ANSI-aware helper. Guarantees at least one line (possibly empty).
+      private def wrap_content_to_lines(content)
+        raw_lines = content.split("\n", -1)
+        wrapped   = []
+        raw_lines.each do |rl|
+          wrapped.concat(wrap_long_line(rl))
         end
+        wrapped = [""] if wrapped.empty?
+        wrapped
       end
 
-      # Initialize the screen (render initial content)
+      private def sanitize(content)
+        return content if content.valid_encoding?
+        Clacky::Utils::Encoding.sanitize_utf8(content)
+      end
+
+      # -----------------------------------------------------------------------
+      # Lifecycle + layout
+      # -----------------------------------------------------------------------
+
       def initialize_screen
         screen.clear_screen
         screen.hide_cursor
@@ -194,288 +345,198 @@ module Clacky
         render_all
       end
 
-      # Cleanup the screen (restore cursor)
       def cleanup_screen
         @render_mutex.synchronize do
-          # Clear fixed areas (gap + todo + input)
           fixed_start = fixed_area_start_row
           (fixed_start...screen.height).each do |row|
             screen.move_cursor(row, 0)
             screen.clear_line
           end
-
-          # Move cursor to start of a new line after last output
-          # Use \r to ensure we're at column 0, then move down
           screen.move_cursor([@output_row, 0].max, 0)
-          print "\r"  # Carriage return to column 0
+          print "\r"
           screen.show_cursor
           screen.flush
         end
       end
 
-      # Clear output area (for /clear command)
+      # /clear: wipe output area + buffer, keep fixed area.
       def clear_output
         @render_mutex.synchronize do
-          # Clear all lines in output area (from 0 to where fixed area starts)
           max_row = fixed_area_start_row
           (0...max_row).each do |row|
             screen.move_cursor(row, 0)
             screen.clear_line
           end
-
-          # Reset output position to beginning
-          @output_row = 0
-
-          # Clear the output buffer so re-renders don't restore old content
-          @output_buffer.clear
-
-          # Re-render fixed areas to ensure they stay in place
+          @output_row     = 0
+          @last_append_id = nil
+          @buffer.clear
           render_fixed_areas
           screen.flush
         end
       end
 
-      # Append content to output area
-      # This is the main output method - handles scrolling and fixed area preservation
-      # @param content [String] Content to append (can be multi-line)
-      def append_output(content)
-        return if content.nil?
-
-        # Scrub any invalid byte sequences before they reach the render pipeline.
-        # wrap_long_line calls each_char which raises ArgumentError on invalid UTF-8.
-        content = Clacky::Utils::Encoding.sanitize_utf8(content) unless content.valid_encoding?
-
+      # Recalculate layout after input height changed. If the layout moved,
+      # clear the old fixed area rows and re-render at the new position.
+      def recalculate_layout
         @render_mutex.synchronize do
-          lines = content.split("\n", -1)  # -1 to keep trailing empty strings
+          old_gap_row   = @gap_row
+          old_input_row = @input_row
 
-          lines.each_with_index do |line, index|
-            # Wrap long lines to prevent display issues
-            wrapped_lines = wrap_long_line(line)
+          calculate_layout
 
-            wrapped_lines.each do |wrapped_line|
-              write_output_line(wrapped_line)
+          if @input_row != old_input_row
+            ([old_gap_row, 0].max...screen.height).each do |row|
+              screen.move_cursor(row, 0)
+              screen.clear_line
             end
-          end
 
-          # Re-render fixed areas to ensure they stay at bottom
+            if input_area.paused?
+              # Input paused (InlineInput active) — fixed area shrank, so the
+              # cleared rows are now part of the output area. Repaint from
+              # buffer to fill them in.
+              render_output_from_buffer
+            else
+              render_fixed_areas
+            end
+            screen.flush
+          end
+        end
+      end
+
+      def render_all
+        @render_mutex.synchronize { render_all_internal }
+      end
+
+      def render_output
+        @render_mutex.synchronize do
           render_fixed_areas
           screen.flush
         end
       end
 
-      # Update the last N lines in output area (for inline input updates)
-      # @param content [String] Content to update (may contain newlines for wrapped lines)
-      # @param old_line_count [Integer] Number of lines currently occupied (for clearing)
-      def update_last_line(content, old_line_count = 1)
+      def render_input
         @render_mutex.synchronize do
-          # Fullscreen owns the alternate screen; skip main-screen updates
-          return if @fullscreen_mode
+          render_fixed_areas
+          screen.flush
+        end
+      end
 
-          return if @output_row == 0  # No output yet
+      def rerender_all
+        @render_mutex.synchronize do
+          screen.clear_screen
+          render_output_from_buffer
+          render_fixed_areas
+          screen.flush
+        end
+      end
 
-          lines = content.split("\n", -1)
-          new_line_count = lines.length
+      # Restore cursor to input area (used after dialogs).
+      def restore_cursor_to_input
+        input_row = fixed_area_start_row + 1 + (@todo_area&.height || 0)
+        input_area.position_cursor(input_row)
+        screen.show_cursor
+      end
 
-          # Calculate start row (last N lines)
-          start_row = @output_row - old_line_count
-          start_row = 0 if start_row < 0
+      # Position cursor for inline input in output area.
+      def position_inline_input_cursor(inline_input)
+        return unless inline_input
+        width = screen.width
+        wrap_row, wrap_col = inline_input.cursor_position_for_display(width)
+        line_count = inline_input.line_count(width)
 
-          # If lines grew, check if we would overflow into the fixed area and scroll if needed
-          if new_line_count > old_line_count
-            max_output_row = fixed_area_start_row
-            needed_end_row = start_row + new_line_count
+        cursor_row = @output_row - line_count + wrap_row
+        cursor_col = wrap_col
+        screen.move_cursor(cursor_row, cursor_col)
+        screen.flush
+      end
 
-            if needed_end_row > max_output_row
-              # Calculate how many extra rows we need
-              overflow = needed_end_row - max_output_row
+      # Update todos display; recalculates layout if height changed.
+      def update_todos(todos)
+        return unless @todo_area
 
-              # Scroll the terminal by printing newlines at the bottom of the output area
-              overflow.times do
-                screen.move_cursor(screen.height - 1, 0)
-                print "\n"
-              end
+        @render_mutex.synchronize do
+          old_height  = @todo_area.height
+          old_gap_row = @gap_row
 
-              # Adjust start_row and output_row upward after scroll
-              start_row -= overflow
-              start_row = 0 if start_row < 0
-              @output_row = [start_row + old_line_count, max_output_row].min
+          @todo_area.update(todos)
+          new_height = @todo_area.height
 
-              # Re-render fixed areas after scroll to prevent corruption.
-              # Skip buffer re-render to avoid duplicating content in scrollback.
-              render_fixed_areas(skip_buffer_rerender: true)
-            end
-          end
-
-          # Clear all lines that will be updated
-          (start_row...@output_row).each do |row|
-            screen.move_cursor(row, 0)
-            screen.clear_line
-          end
-
-          # Remove old lines from buffer
-          old_line_count.times do
-            @output_buffer.pop if @output_buffer.size > 0
-          end
-
-          # Re-render the content
-          current_row = start_row
-
-          lines.each do |line|
-            screen.move_cursor(current_row, 0)
-            print line
-            # Add updated line to buffer
-            @output_buffer << line
-            current_row += 1
-          end
-
-          # Update output_row to new line count
-          @output_row = start_row + new_line_count
-
-          # Clear any remaining old lines if new content has fewer lines
-          # This handles the case where content shrinks (e.g., delete from 2 lines to 1 line)
-          old_end_row = @output_row + (old_line_count - new_line_count)
-          if old_end_row > @output_row && old_end_row <= start_row + old_line_count
-            # Clear the extra old lines
-            (@output_row...old_end_row).each do |row|
+          if old_height != new_height
+            calculate_layout
+            ([old_gap_row, 0].max...screen.height).each do |row|
               screen.move_cursor(row, 0)
               screen.clear_line
             end
           end
 
-          # Re-render fixed areas to restore cursor position in input area.
-          # Skip buffer re-render: the content was written directly above, so
-          # re-rendering from buffer would duplicate it in the terminal scrollback.
-          render_fixed_areas(skip_buffer_rerender: true)
+          render_fixed_areas
           screen.flush
         end
       end
 
-      # Remove the last N lines from output area
-      # @param line_count [Integer] Number of lines to remove (default: 1)
-      def remove_last_line(line_count = 1)
-        @render_mutex.synchronize do
-          # Fullscreen owns the alternate screen; skip main-screen updates
-          return if @fullscreen_mode
 
-          return if @output_row == 0  # No output to remove
 
-          # Calculate start row for removal
-          start_row = @output_row - line_count
-          start_row = 0 if start_row < 0
+      # -----------------------------------------------------------------------
+      # Fixed area (gap + todo + input) rendering
+      # -----------------------------------------------------------------------
 
-          # Clear all lines being removed
-          (start_row...@output_row).each do |row|
-            screen.move_cursor(row, 0)
-            screen.clear_line
-          end
+      # Repaint gap + todo + input at the bottom of the screen.
+      #
+      # @param skip_buffer_rerender [Boolean] When true, skip repainting the
+      #   output area from the buffer even if the fixed-area height changed.
+      #   Used by the scroll path in paint_new_lines — the caller has just
+      #   written the correct content directly; a full buffer repaint would
+      #   duplicate it in terminal scrollback.
+      def render_fixed_areas(skip_buffer_rerender: false)
+        # When input is paused (InlineInput active), the "input area" is
+        # rendered inline with output. Nothing to paint down here.
+        return if input_area.paused?
+        return if @fullscreen_mode
 
-          # Also remove from output buffer to prevent re-rendering
-          line_count.times do
-            @output_buffer.pop if @output_buffer.size > 0
-          end
+        current_fixed_height = fixed_area_height
+        start_row            = fixed_area_start_row
+        gap_row              = start_row
+        todo_row             = gap_row + 1
 
-          # Update output_row
-          @output_row = start_row
-
-          # Re-render fixed areas to ensure consistency.
-          # Skip buffer re-render: lines were removed both from screen and buffer above,
-          # re-rendering would push stale content back into the terminal scrollback.
-          render_fixed_areas(skip_buffer_rerender: true)
-          screen.flush
+        # Fixed-area height changed (e.g. multi-line input appeared or
+        # command-suggestions popped) → repaint the output from buffer so
+        # nothing is hidden.
+        if !skip_buffer_rerender &&
+           @last_fixed_area_height > 0 &&
+           @last_fixed_area_height != current_fixed_height
+          render_output_from_buffer
         end
+        @last_fixed_area_height = current_fixed_height
+
+        # gap line
+        screen.move_cursor(gap_row, 0)
+        screen.clear_line
+
+        # todo
+        @todo_area.render(start_row: todo_row) if @todo_area&.visible?
+
+        # input (renders its own visual cursor)
+        input_row = todo_row + (@todo_area&.height || 0)
+        input_area.render(start_row: input_row, width: screen.width)
       end
 
-      # Scroll output area up (legacy no-op)
-      # @param lines [Integer] Number of lines to scroll
-      def scroll_output_up(lines = 1)
-        # No-op - terminal handles scrolling natively
-      end
-
-      # Scroll output area down (legacy no-op)
-      # @param lines [Integer] Number of lines to scroll
-      def scroll_output_down(lines = 1)
-        # No-op - terminal handles scrolling natively
-      end
-
-      # Handle window resize
-      private def handle_resize
-        # Record old dimensions before updating to detect shrink vs grow
-        old_height = screen.height
-        old_width = screen.width
-
-        # Update terminal dimensions and recalculate layout
-        screen.update_dimensions
-        calculate_layout
-
-        # When shrinking: full reset (clears scrollback too), otherwise just clear current screen
-        shrinking = screen.height < old_height || screen.width < old_width
-        screen.clear_screen(mode: shrinking ? :reset : :current)
-
-        # Re-render all output from buffer
-        @output_row = 0
-        max_output_row = fixed_area_start_row
-
-        # Calculate how many lines we can show from the end of buffer
-        visible_lines = [@output_buffer.size, max_output_row].min
-
-        # Render the last N lines that fit in the output area
-        @output_buffer.last(visible_lines).each do |line|
-          screen.move_cursor(@output_row, 0)
-          print line
-          @output_row += 1
-        end
-
-        # Sync @last_fixed_area_height so render_fixed_areas won't think the height
-        # changed and trigger a second render_output_from_buffer call
-        @last_fixed_area_height = fixed_area_height
-
-        # Re-render fixed areas at new positions
+      private def render_all_internal
         render_fixed_areas
         screen.flush
       end
 
-      # Write a single line to output area
-      # Handles scrolling when reaching fixed area
-      # @param line [String] Single line to write (should not contain newlines)
-      def write_output_line(line)
-        # Add to buffer so content is available when returning from fullscreen
-        @output_buffer << line
+      # Legacy no-ops — terminal handles native scroll natively.
+      def scroll_output_up(_lines = 1); end
+      def scroll_output_down(_lines = 1); end
 
-        # Fullscreen owns the alternate screen; skip rendering to avoid corruption
-        return if @fullscreen_mode
 
-        # Calculate where fixed area starts (this is where output area ends)
-        max_output_row = fixed_area_start_row
 
-        # If we're about to write into the fixed area, scroll first
-        if @output_row >= max_output_row
-          # Trigger terminal scroll by printing newline at bottom
-          screen.move_cursor(screen.height - 1, 0)
-          print "\n"
+      # -----------------------------------------------------------------------
+      # Wrapping helpers (ANSI-aware, East-Asian-width aware)
+      # -----------------------------------------------------------------------
 
-          # After scroll, position to write at the last row of output area
-          @output_row = max_output_row - 1
-
-          # Re-render fixed areas after scroll to prevent corruption.
-          # Skip buffer re-render: new line hasn't been drawn yet; re-rendering from
-          # buffer would put a duplicate into the scrollback (the \n above already
-          # pushed previous content up, so a full buffer repaint here would repeat it).
-          render_fixed_areas(skip_buffer_rerender: true)
-        end
-
-        # Now write the line at current position
-        screen.move_cursor(@output_row, 0)
-        screen.clear_line
-        print line
-
-        # Move to next row for next write
-        @output_row += 1
-      end
-
-      # Wrap a long line into multiple lines based on terminal width
-      # Considers display width of multi-byte characters (e.g., Chinese characters)
-      # @param line [String] Line to wrap
-      # @return [Array<String>] Array of wrapped lines
+      # Wrap a long line into multiple lines based on terminal width.
+      # Considers display width of multi-byte characters (e.g., Chinese characters).
       def wrap_long_line(line)
         return [""] if line.nil? || line.empty?
 
@@ -485,55 +546,40 @@ module Clacky
         # Strip ANSI codes for width calculation
         visible_line = line.gsub(/\e\[[0-9;]*m/, '')
 
-        # Check if line needs wrapping
         display_width = calculate_display_width(visible_line)
         return [line] if display_width <= max_width
 
-        # Line needs wrapping - split by considering display width
-        wrapped = []
+        wrapped      = []
         current_line = ""
         current_width = 0
-        ansi_codes = []  # Track ANSI codes to carry over
+        ansi_codes   = []
 
-        # Extract ANSI codes and text segments
         segments = line.split(/(\e\[[0-9;]*m)/)
 
         segments.each do |segment|
           if segment =~ /^\e\[[0-9;]*m$/
-            # ANSI code - add to current codes
             ansi_codes << segment
             current_line += segment
           else
-            # Text segment - process character by character
             segment.each_char do |char|
               char_width = char_display_width(char)
-
               if current_width + char_width > max_width && !current_line.empty?
-                # Complete current line
                 wrapped << current_line
-                # Start new line with carried-over ANSI codes
                 current_line = ansi_codes.join
                 current_width = 0
               end
-
               current_line += char
               current_width += char_width
             end
           end
         end
 
-        # Add remaining content
         wrapped << current_line unless current_line.empty? || current_line == ansi_codes.join
-
         wrapped.empty? ? [""] : wrapped
       end
 
-      # Calculate display width of a single character
-      # @param char [String] Single character
-      # @return [Integer] Display width (1 or 2)
       def char_display_width(char)
         code = char.ord
-        # East Asian Wide and Fullwidth characters take 2 columns
         if (code >= 0x1100 && code <= 0x115F) ||
            (code >= 0x2329 && code <= 0x232A) ||
            (code >= 0x2E80 && code <= 0x303E) ||
@@ -553,90 +599,96 @@ module Clacky
         end
       end
 
-      # Calculate display width of a string (considering multi-byte characters)
-      # @param text [String] Text to calculate
-      # @return [Integer] Display width
       def calculate_display_width(text)
         width = 0
-        text.each_char do |char|
-          width += char_display_width(char)
-        end
+        text.each_char { |c| width += char_display_width(c) }
         width
       end
 
-      # Calculate fixed area height (gap + todo + input)
-      def fixed_area_height
-        todo_height = @todo_area&.height || 0
-        input_height = @input_area.required_height
-        1 + todo_height + input_height  # gap + todo + input
-      end
+      # -----------------------------------------------------------------------
+      # Resize handling
+      # -----------------------------------------------------------------------
 
-      # Calculate the starting row for fixed areas (from screen bottom)
-      def fixed_area_start_row
-        screen.height - fixed_area_height
-      end
+      private def handle_resize
+        old_height = screen.height
+        old_width  = screen.width
 
-      # Render fixed areas (gap, todo, input) at screen bottom
-      # @param skip_buffer_rerender [Boolean] When true, skip the render_output_from_buffer
-      #   even if fixed_area_height changed. Use this when the caller has already written
-      #   the correct content directly (update_last_line, remove_last_line) to avoid
-      #   re-rendering buffer content that would duplicate entries in the terminal scrollback.
-      def render_fixed_areas(skip_buffer_rerender: false)
-        # When input is paused (InlineInput active), don't render fixed areas
-        # The InlineInput is rendered inline with output
-        return if input_area.paused?
+        screen.update_dimensions
+        calculate_layout
 
-        # Do not corrupt the alternate screen while in fullscreen mode
-        return if @fullscreen_mode
+        shrinking = screen.height < old_height || screen.width < old_width
+        screen.clear_screen(mode: shrinking ? :reset : :current)
 
-        current_fixed_height = fixed_area_height
-        start_row = fixed_area_start_row
-        gap_row = start_row
-        todo_row = gap_row + 1
-        input_row = todo_row + (@todo_area&.height || 0)
+        # Repaint from buffer — only live (uncommitted) lines, which is
+        # exactly what we want: committed content already sits in the
+        # native scrollback above.
+        render_output_from_buffer
 
-        # Detect height changes and re-render output area if needed.
-        # Skip when the caller (update_last_line / remove_last_line) has already
-        # written the correct content directly — re-rendering would push duplicate
-        # content into the terminal scrollback, causing repeated lines on scroll-up.
-        if !skip_buffer_rerender && @last_fixed_area_height > 0 && @last_fixed_area_height != current_fixed_height
-          # Fixed area height changed - re-render output area from buffer
-          # This prevents output content from being hidden when fixed area grows
-          # (e.g., multi-line input, command suggestions appearing)
-          render_output_from_buffer
-        end
-
-        # Update last height for next comparison
-        @last_fixed_area_height = current_fixed_height
-
-        # Render gap line
-        screen.move_cursor(gap_row, 0)
-        screen.clear_line
-
-        # Render todo
-        if @todo_area&.visible?
-          @todo_area.render(start_row: todo_row)
-        end
-
-        # Render input (InputArea renders its own visual cursor via render_line_with_cursor)
-        input_area.render(start_row: input_row, width: screen.width)
-      end
-
-      # Internal render all (without mutex)
-      def render_all_internal
-        # Output flows naturally, just render fixed areas
+        # Sync so render_fixed_areas won't think height changed and
+        # trigger a second repaint.
+        @last_fixed_area_height = fixed_area_height
         render_fixed_areas
         screen.flush
       end
 
-      # Restore cursor to input area
-      def restore_cursor_to_input
-        input_row = fixed_area_start_row + 1 + (@todo_area&.height || 0)
-        input_area.position_cursor(input_row)
-        screen.show_cursor
+      private def setup_resize_handler
+        Signal.trap("WINCH") { @resize_pending = true }
+      rescue ArgumentError => e
+        warn "WINCH signal already trapped: #{e.message}"
       end
 
-      # Restore screen from fullscreen mode (re-render everything)
+      def process_pending_resize
+        return unless @resize_pending
+        @resize_pending = false
+        handle_resize_safely
+      end
+
+      private def handle_resize_safely
+        @render_mutex.synchronize { handle_resize }
+      rescue => e
+        warn "Resize error: #{e.message}"
+        warn e.backtrace.first(5).join("\n") if e.backtrace
+      end
+
+      # -----------------------------------------------------------------------
+      # Fullscreen (alternate screen buffer)
+      # -----------------------------------------------------------------------
+
+      def fullscreen_mode?
+        @fullscreen_mode
+      end
+
+      def enter_fullscreen(lines, hint: "Press Ctrl+O to return")
+        @render_mutex.synchronize do
+          return if @fullscreen_mode
+          @fullscreen_mode = true
+          @fullscreen_hint = hint
+
+          # Switch to alternate screen, clear it, position top-left.
+          print "\e[?1049h\e[2J\e[H"
+          $stdout.flush
+          render_fullscreen_content(lines)
+        end
+      end
+
+      def refresh_fullscreen(lines)
+        @render_mutex.synchronize do
+          return unless @fullscreen_mode
+          print "\e[2J\e[H"
+          render_fullscreen_content(lines)
+        end
+      end
+
+      def exit_fullscreen
+        @render_mutex.synchronize do
+          return unless @fullscreen_mode
+          @fullscreen_mode = false
+          @fullscreen_hint = nil
+          print "\e[?1049l"
+          $stdout.flush
+        end
+      end
+
       def restore_screen
         @render_mutex.synchronize do
           screen.clear_screen
@@ -645,129 +697,27 @@ module Clacky
         end
       end
 
-      # Check if in fullscreen mode
-      # @return [Boolean]
-      def fullscreen_mode?
-        @fullscreen_mode
-      end
-
-      # Enter fullscreen mode with alternate screen buffer
-      # @param lines [Array<String>] Lines to display
-      # @param hint [String] Hint message at bottom
-      def enter_fullscreen(lines, hint: "Press Ctrl+O to return")
-        @render_mutex.synchronize do
-          return if @fullscreen_mode
-
-          @fullscreen_mode = true
-          @fullscreen_hint = hint
-
-          # Enter alternate screen buffer and do a full clean:
-          #   \e[?1049h  - switch to alternate screen buffer (separate from primary)
-          #   \e[2J      - erase the entire visible screen
-          #   \e[H       - move cursor to top-left
-          # The alternate screen buffer has no scrollback history by design, so
-          # there is nothing to scroll up to once we clear the visible area.
-          print "\e[?1049h\e[2J\e[H"
-          $stdout.flush
-
-          render_fullscreen_content(lines)
-        end
-      end
-
-      # Refresh fullscreen content in-place (for real-time updates without re-entering alt screen)
-      # @param lines [Array<String>] Updated lines to display
-      def refresh_fullscreen(lines)
-        @render_mutex.synchronize do
-          return unless @fullscreen_mode
-
-          # Move cursor to top-left and erase visible area, then redraw
-          print "\e[2J\e[H"
-          render_fullscreen_content(lines)
-        end
-      end
-
-      # Exit fullscreen mode and restore previous screen
-      def exit_fullscreen
-        @render_mutex.synchronize do
-          return unless @fullscreen_mode
-
-          @fullscreen_mode = false
-          @fullscreen_hint = nil
-
-          # Exit alternate screen buffer (automatically restores previous screen content)
-          print "\e[?1049l"
-          $stdout.flush
-        end
-      end
-
-      # Render lines to the alternate screen (called by enter_fullscreen / refresh_fullscreen)
-      # Fills the entire screen: content at top, hint pinned at the very bottom row.
-      # This prevents the terminal from showing any blank scrollable area above the hint.
-      # @param lines [Array<String>] Lines to render
       private def render_fullscreen_content(lines)
         term_height = screen.height
         term_width  = screen.width
 
-        # Reserve the bottom row for the hint bar
-        content_rows = term_height - 1
-
-        # Trim or pad lines to exactly fill the content area
+        content_rows  = term_height - 1
         display_lines = lines.first(content_rows)
 
-        # Print each content line, padded with spaces to full terminal width so
-        # no stale characters from a previous render remain on the right side.
         display_lines.each do |line|
-          # Strip trailing whitespace then pad to terminal width (ignoring ANSI codes for width calc)
           visible = line.chomp.gsub(/\e\[[0-9;]*m/, "")
           padding = [term_width - visible.length, 0].max
           print line.chomp + (" " * padding) + "\r\n"
         end
 
-        # Fill any remaining content rows with blank lines so nothing from a
-        # previous render bleeds through when content shrinks.
         blank_row = " " * term_width
-        (display_lines.length...content_rows).each do
-          print blank_row + "\r\n"
-        end
+        (display_lines.length...content_rows).each { print blank_row + "\r\n" }
 
-        # Pin the hint bar at the very bottom row using absolute cursor positioning.
-        # \e[{row};{col}H moves to the given 1-based row/col.
         hint_text = "\e[36m#{@fullscreen_hint}\e[0m"
         print "\e[#{term_height};1H#{hint_text}\e[0K"
-
         $stdout.flush
       end
 
-      # Setup handler for window resize
-      # Note: Signal handlers run in trap context where many operations are restricted
-      private def setup_resize_handler
-        Signal.trap("WINCH") do
-          # Simply set a flag - actual resize handling happens in main thread
-          @resize_pending = true
-        end
-      rescue ArgumentError => e
-        # Signal already trapped (shouldn't happen now)
-        warn "WINCH signal already trapped: #{e.message}"
-      end
-
-      # Check and process pending resize (should be called from main thread periodically)
-      def process_pending_resize
-        return unless @resize_pending
-
-        @resize_pending = false
-        handle_resize_safely
-      end
-
-      # Thread-safe wrapper for handle_resize
-      private def handle_resize_safely
-        @render_mutex.synchronize do
-          handle_resize
-        end
-      rescue => e
-        # Catch and log errors to prevent resize from crashing the app
-        warn "Resize error: #{e.message}"
-        warn e.backtrace.first(5).join("\n") if e.backtrace
-      end
     end
   end
 end
