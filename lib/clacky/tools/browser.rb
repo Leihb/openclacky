@@ -29,35 +29,11 @@ module Clacky
     # When the selected page has been closed, mcp_call automatically retries once.
     class Browser < Base
       self.tool_name = "browser"
-      self.tool_description = <<~DESC
-        Control the browser for automation tasks (login, form submission, UI interaction, scraping).
-        For simple page fetch or search, prefer web_fetch or web_search instead.
-
-        Uses your real Chrome browser with existing logins & cookies. Requires Chrome 146+.
-
-        ACTIONS:
-        - snapshot   → get accessibility tree with element refs. ALWAYS run before interacting.
-        - act        → interact with page: click, dblclick, type, fill, press, hover, scroll, drag, select, wait, evaluate, click_at
-        - open       → open URL in a new tab
-        - navigate   → navigate current tab to URL
-        - tabs       → list open tabs
-        - focus      → switch to a tab by target_id
-        - close      → close a tab by target_id
-        - screenshot → EXPENSIVE. Only use when user explicitly asks to "see" the page. Use ref= to capture a single element instead.
-        - status     → check if browser is running
-
-        SNAPSHOT WORKFLOW — always snapshot first:
-        - action="snapshot", interactive=true          → interactive elements only (recommended)
-        - action="snapshot", interactive=true, compact=true → compact interactive
-
-        ACT EXAMPLES:
-        - click:    ref="e1"
-        - click_at: x=100, y=200  → coordinate click, use when ref-based click fails (React/virtual lists)
-        - fill:     ref="e1", text="value"
-        - press:    key="Enter"
-        - scroll:   direction="down", amount=300
-        - wait:     ms=2000 OR selector=".spinner"
-        - evaluate: js="document.title"
+      self.tool_description = <<~DESC.strip
+        Control user's real Chrome (146+) for web automation. Prefer web_fetch/web_search for read-only pages.
+        Actions: snapshot | act | open | navigate | tabs | focus | close | screenshot | status.
+        Always snapshot(interactive:true) before act. screenshot is EXPENSIVE — use ref= for a single element.
+        act kinds: click, dblclick, type, fill, press, hover, scroll, drag, select, wait, evaluate, click_at (coord fallback).
       DESC
       self.tool_category = "web"
       self.tool_parameters = {
@@ -65,55 +41,31 @@ module Clacky
         properties: {
           action: {
             type: "string",
-            enum: %w[snapshot act open navigate tabs focus close screenshot status],
-            description: "Action to perform."
-          },
-          interactive: {
-            type: "boolean",
-            description: "snapshot: only include interactive elements."
-          },
-          compact: {
-            type: "boolean",
-            description: "snapshot: remove empty structural elements."
-          },
-          depth: {
-            type: "integer",
-            description: "snapshot: max tree depth."
-          },
-          selector: {
-            type: "string",
-            description: "act wait: CSS selector to wait for."
+            enum: %w[snapshot act open navigate tabs focus close screenshot status]
           },
           kind: {
             type: "string",
             enum: %w[click dblclick type fill press hover drag select scroll wait evaluate click_at],
-            description: "act: interaction kind."
+            description: "act: interaction kind"
           },
-          ref: {
-            type: "string",
-            description: "act: element ref from snapshot (e.g. 'e1'). screenshot: capture only this element (much cheaper)."
-          },
-          text:      { type: "string",  description: "act type/fill: text to enter." },
-          key:       { type: "string",  description: "act press: key (e.g. 'Enter')." },
-          direction: {
-            type: "string",
-            enum: %w[up down left right],
-            description: "act scroll: direction."
-          },
-          amount:     { type: "integer", description: "act scroll: pixels." },
-          ms:         { type: "integer", description: "act wait: milliseconds." },
-          js:         { type: "string",  description: "act evaluate: JS expression." },
-          target_ref: { type: "string",  description: "act drag: destination ref." },
-          values: {
-            type: "array",
-            items: { type: "string" },
-            description: "act select: option values."
-          },
-          x:         { type: "number",  description: "act click_at: x coordinate in pixels." },
-          y:         { type: "number",  description: "act click_at: y coordinate in pixels." },
-          url:       { type: "string",  description: "open/navigate: URL." },
-          target_id: { type: "string",  description: "focus/close: tab id from tabs action." },
-          full_page: { type: "boolean", description: "screenshot: capture full scrollable page." }
+          ref:         { type: "string",  description: "element ref from snapshot (e.g. 'e1'); screenshot: single element" },
+          text:        { type: "string",  description: "act type/fill text" },
+          key:         { type: "string",  description: "act press key (e.g. 'Enter')" },
+          direction:   { type: "string",  enum: %w[up down left right], description: "act scroll" },
+          amount:      { type: "integer", description: "act scroll pixels" },
+          ms:          { type: "integer", description: "act wait ms" },
+          selector:    { type: "string",  description: "act wait CSS selector" },
+          js:          { type: "string",  description: "act evaluate JS" },
+          target_ref:  { type: "string",  description: "act drag destination ref" },
+          values:      { type: "array",   items: { type: "string" }, description: "act select options" },
+          x:           { type: "number",  description: "click_at x px" },
+          y:           { type: "number",  description: "click_at y px" },
+          url:         { type: "string",  description: "open/navigate URL" },
+          target_id:   { type: "string",  description: "focus/close tab id" },
+          interactive: { type: "boolean", description: "snapshot: interactive only" },
+          compact:     { type: "boolean", description: "snapshot: compact" },
+          depth:       { type: "integer", description: "snapshot: max depth" },
+          full_page:   { type: "boolean", description: "screenshot: full page" }
         },
         required: ["action"]
       }

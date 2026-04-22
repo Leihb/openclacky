@@ -169,11 +169,27 @@ module Clacky
       "/#{identifier}"
     end
 
-    # Get the description for context loading
-    # Returns the description from frontmatter, or first paragraph of content
+    # Maximum length for a skill's description when injected into the system
+    # prompt. Descriptions longer than this are truncated to protect the token
+    # budget — a good description is a trigger hint, not a tutorial. Authors
+    # still see their full description via `skill.description`; only the
+    # system-prompt rendering is truncated.
+    #
+    # Anthropic's hard limit is 1024, but empirically ~300 chars is enough for
+    # reliable triggering (including trigger-phrase lists); longer content
+    # belongs in the SKILL.md body.
+    DESCRIPTION_MAX_CHARS = 300
+
+    # Get the description for context loading.
+    # Returns the description from frontmatter (or first paragraph of content),
+    # hard-capped at {DESCRIPTION_MAX_CHARS} so a single overlong skill can't
+    # blow up the system prompt. Truncation is marked with an ellipsis.
     # @return [String]
     def context_description
-      @description || extract_first_paragraph
+      raw = @description || extract_first_paragraph
+      return raw if raw.nil? || raw.length <= DESCRIPTION_MAX_CHARS
+
+      raw[0, DESCRIPTION_MAX_CHARS - 1] + "…"
     end
 
     # Get all supporting files in the skill directory (excluding SKILL.md)

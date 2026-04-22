@@ -60,67 +60,29 @@ module Clacky
     class Terminal < Base
       self.tool_name = "terminal"
       self.tool_description = <<~DESC.strip
-        Execute shell commands with real PTY, interactive-prompt handling,
-        built-in safety (rm → trash, sudo blocked, secrets protected), and
-        long-running background session support.
+        Run shell commands via PTY. Safety: rm→trash, sudo blocked, secrets protected.
 
-        Call shapes:
-          1) { command: "ls -la" }                          → run + wait
-          2) { command: "rails s", background: true }       → run, return
-                                                              after ~2s with
-                                                              a session_id if
-                                                              still alive
-          3) { session_id: 3, input: "mypass\\n" }          → reply to prompt
-          4) { session_id: 7, input: "" }                   → poll new output
-          5) { session_id: 7, kill: true }                  → stop
+        Shapes:
+          {command}                       run + wait
+          {command, background:true}      long-running; returns session_id after ~2s if alive
+          {session_id, input:"pw\n"}      reply to prompt / poll (input:"")
+          {session_id, kill:true}         stop
 
-        Response contract:
-          - `exit_code` in response → finished
-          - `session_id` in response → still running; check `state`
-              "waiting"    = blocked on input, respond with {session_id, input}
-              "background" = long-running (you asked for it)
-              "timeout"    = took longer than `timeout` without blocking
-
-        Byte escapes in `input`: "\\x03" Ctrl-C, "\\x04" Ctrl-D,
-        "\\t" Tab, "\\x1b" Esc.
+        Response: exit_code = done; session_id = running (state: waiting/background/timeout).
+        input supports byte escapes: \x03 Ctrl-C, \x04 Ctrl-D, \t Tab, \x1b Esc.
       DESC
       self.tool_category = "system"
       self.tool_parameters = {
         type: "object",
         properties: {
-          command: {
-            type: "string",
-            description: "Shell command to execute. Use this to START a new command. Mutually exclusive with session_id."
-          },
-          background: {
-            type: "boolean",
-            description: "Declare that the command is expected to keep running (dev server, watcher, REPL that stays open). Collects ~2s of output then returns with a session_id if the process is still alive. If it exits in those 2s (crash / immediate failure), returns normally with exit_code."
-          },
-          session_id: {
-            type: "integer",
-            description: "Continue a running session. Use the id returned from a prior call. Must be paired with `input` (or `kill`)."
-          },
-          input: {
-            type: "string",
-            description: "Input to send to the running session. Typically ends with \\n. Empty string = poll for new output without sending anything. Byte escapes supported (\\x03 = Ctrl-C)."
-          },
-          cwd: {
-            type: "string",
-            description: "Working directory when starting a new command. Ignored when session_id is given."
-          },
-          env: {
-            type: "object",
-            description: "Extra environment variables when starting a new command. Ignored when session_id is given.",
-            additionalProperties: { type: "string" }
-          },
-          timeout: {
-            type: "integer",
-            description: "Max seconds to wait for a foreground command to finish or block. Default 60. Ignored for background (always ~2s)."
-          },
-          kill: {
-            type: "boolean",
-            description: "If true with session_id, kill the session."
-          }
+          command:    { type: "string",  description: "Shell command. Starts a new run. Mutually exclusive with session_id." },
+          background: { type: "boolean", description: "Expect long-running (dev server, watcher). Returns session_id if still alive after ~2s." },
+          session_id: { type: "integer", description: "Continue a running session. Pair with input or kill." },
+          input:      { type: "string",  description: "Input to running session (usually ends with \n). \"\" = poll." },
+          cwd:        { type: "string",  description: "Working dir for new command." },
+          env:        { type: "object",  description: "Extra env vars for new command.", additionalProperties: { type: "string" } },
+          timeout:    { type: "integer", description: "Max seconds to wait (default 60). Ignored when background." },
+          kill:       { type: "boolean", description: "Kill the session_id." }
         }
       }
 
@@ -764,6 +726,14 @@ module Clacky
       # ---------------------------------------------------------------------
       # Display helpers
       # ---------------------------------------------------------------------
+
+      # Max visible length of a command inside the tool-call summary line.
+      # Keeps the "terminal(...)" summary on a single UI row even when the
+      # underlying command spans multiple lines (heredocs, multi-line ruby
+      # -e blocks, etc.). The full command is still executed — only the
+      # display is shortened.
+      DISPLAY_COMMAND_MAX_CHARS = 80
+
       def format_call(args)
         cmd  = args[:command] || args["command"]
         sid  = args[:session_id] || args["session_id"]
@@ -782,9 +752,21 @@ module Clacky
             "terminal(send #{preview.inspect})"
           end
         elsif cmd
-          bg ? "terminal(#{cmd}, background)" : "terminal(#{cmd})"
+          display_cmd = compact_command_for_display(cmd)
+          bg ? "terminal(#{display_cmd}, background)" : "terminal(#{display_cmd})"
         else
           "terminal(?)"
+        end
+      end
+
+      # Collapse newlines and runs of whitespace into single spaces, then
+      # truncate with an ellipsis so the command fits on one line in the UI.
+      private def compact_command_for_display(cmd)
+        one_line = cmd.to_s.gsub(/\s+/, " ").strip
+        if one_line.length > DISPLAY_COMMAND_MAX_CHARS
+          "#{one_line[0, DISPLAY_COMMAND_MAX_CHARS - 3]}..."
+        else
+          one_line
         end
       end
 

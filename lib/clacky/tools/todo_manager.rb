@@ -7,7 +7,7 @@ module Clacky
   module Tools
     class TodoManager < Base
       self.tool_name = "todo_manager"
-      self.tool_description = "Manage TODO items for task planning and tracking. IMPORTANT: This tool is ONLY for planning - after adding all TODOs, you MUST immediately start executing them using other tools (write, edit, shell, etc). DO NOT stop after adding TODOs!"
+      self.tool_description = "Plan and track multi-step tasks."
       self.tool_category = "task_management"
       self.tool_parameters = {
         type: "object",
@@ -15,26 +15,16 @@ module Clacky
           action: {
             type: "string",
             enum: ["add", "list", "complete", "remove", "clear"],
-            description: "Action to perform: 'add' (add new todo(s)), 'list' (show all todos), 'complete' (mark as done), 'remove' (delete todo), 'clear' (remove all todos)"
+            description: "add | list | complete | remove | clear"
           },
           tasks: {
             type: "array",
             items: { type: "string" },
-            description: "Array of task descriptions to add (for 'add' action). Example: ['Task 1', 'Task 2', 'Task 3']"
+            description: "add: multiple task descriptions"
           },
-          task: {
-            type: "string",
-            description: "Single task description (for 'add' action). Use 'tasks' array for adding multiple tasks at once."
-          },
-          id: {
-            type: "integer",
-            description: "The task ID (required for 'complete' and 'remove' actions)"
-          },
-          ids: {
-            type: "array",
-            items: { type: "integer" },
-            description: "Array of task IDs for batch removal (for 'remove' action). Example: [1, 3, 5]"
-          }
+          task: { type: "string",  description: "add: single task description" },
+          id:   { type: "integer", description: "complete/remove: task id" },
+          ids:  { type: "array", items: { type: "integer" }, description: "remove: batch task ids" }
         },
         required: ["action"]
       }

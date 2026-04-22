@@ -479,6 +479,23 @@ RSpec.describe Clacky::Tools::Terminal do
     it "formats a kill invocation" do
       expect(tool.format_call(session_id: 3, kill: true)).to eq("terminal(stop)")
     end
+
+    it "collapses multi-line commands into a single line" do
+      multi_line_cmd = "ruby -e '\nputs 1\nputs 2\n'"
+      result = tool.format_call(command: multi_line_cmd)
+      expect(result).not_to include("\n")
+      expect(result).to eq("terminal(ruby -e ' puts 1 puts 2 ')")
+    end
+
+    it "truncates very long commands with an ellipsis" do
+      long_cmd = "echo " + ("x" * 200)
+      result = tool.format_call(command: long_cmd)
+      # summary must fit on one line and end with an ellipsis
+      expect(result).not_to include("\n")
+      expect(result).to end_with("...)")
+      # "terminal(" prefix + 80 char budget + ")" ≈ 90 chars, well under a wrapped row
+      expect(result.length).to be <= "terminal(".length + Clacky::Tools::Terminal::DISPLAY_COMMAND_MAX_CHARS + 1
+    end
   end
 
   describe "#format_result" do
