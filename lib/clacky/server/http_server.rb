@@ -771,9 +771,12 @@ module Clacky
             }
           end
           json_response(res, 200, {
-            ok:      true,
-            skills:  local_skills,
-            warning: "Could not reach the license server. Showing locally installed skills only."
+            ok:           true,
+            skills:       local_skills,
+            # warning_code lets the frontend render a localized message.
+            # `warning` is kept for back-compat and as an English fallback.
+            warning_code: "remote_unavailable",
+            warning:      "Could not reach the license server. Showing locally installed skills only."
           })
         end
       end

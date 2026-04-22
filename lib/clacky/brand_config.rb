@@ -533,9 +533,11 @@ module Clacky
       dest_dir = File.join(brand_skills_dir, slug)
       FileUtils.mkdir_p(dest_dir)
 
-      # Download the zip file to a temp path
+      # Download the zip file to a temp path via PlatformHttpClient so the
+      # primary → fallback host failover applies uniformly to every download.
       tmp_zip = File.join(brand_skills_dir, "#{slug}.zip")
-      download_file(url, tmp_zip)
+      dl = platform_client.download_file(url, tmp_zip)
+      raise dl[:error].to_s unless dl[:success]
 
       # Extract into dest_dir (overwrite existing files).
       # Auto-detect whether the zip has a single root folder to strip.
@@ -1072,32 +1074,14 @@ module Clacky
     end
 
     # Download a remote URL to a local file path.
+    #
+    # Deprecated: this method now delegates to
+    # Clacky::PlatformHttpClient#download_file so that every brand-skill download
+    # benefits from primary → fallback host failover. Kept as a thin wrapper
+    # so existing callers / tests that stub it continue to work.
     private def download_file(url, dest, max_redirects: 10)
-      require "net/http"
-      require "uri"
-
-      uri = URI.parse(url)
-      max_redirects.times do
-        Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https",
-                        open_timeout: 15, read_timeout: 60) do |http|
-          http.request_get(uri.request_uri) do |resp|
-            case resp.code.to_i
-            when 200
-              File.open(dest, "wb") { |f| resp.read_body { |chunk| f.write(chunk) } }
-              return
-            when 301, 302, 303, 307, 308
-              location = resp["location"]
-              raise "Redirect with no Location header" if location.nil? || location.empty?
-
-              uri = URI.parse(location)
-              break  # break out of Net::HTTP.start, re-enter loop with new uri
-            else
-              raise "HTTP #{resp.code}"
-            end
-          end
-        end
-      end
-      raise "Too many redirects"
+      result = platform_client.download_file(url, dest)
+      raise result[:error].to_s unless result[:success]
     end
 
     # Persist installed skill metadata to brand_skills.json.
