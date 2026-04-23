@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.36] - 2026-04-24
+
+### Fixed
+- **Session deletion now works correctly**: fixed disk-based session deletion that was failing with proper error handling in the Web UI (C-9d1ea93)
+- **Model switching improved**: better model ID validation and normalization when switching models in Web UI — handles various ID formats correctly (C-b61e22e)
+- **Terminal tool word wrapping**: fixed terminal output word wrapping issues that could break long command outputs (C-5989d02)
+- **Heartbeat mechanism stability**: improved async heartbeat logic in server mode for more reliable connection status tracking (C-5989d02)
+
+### Improved
+- **UI polish**: removed session topbar clutter and added empty state messages for better first-time user experience (C-003d613)
+- **Cleaner logging**: reduced noisy debug logs in skill manager for quieter operation (C-c27bbec)
+
 ## [0.9.35] - 2026-04-23
 
 ### Added
