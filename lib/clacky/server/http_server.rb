@@ -606,6 +606,52 @@ module Clacky
 
       # ── Brand API ─────────────────────────────────────────────────────────────
 
+      # Process-wide mutex guarding heartbeat trigger state.
+      # Used by #trigger_async_heartbeat! to ensure only one heartbeat Thread is
+      # in flight at a time, no matter how many concurrent /api/brand/status
+      # requests arrive from the Web UI poller.
+      BRAND_HEARTBEAT_MUTEX   = Mutex.new
+      # Tracks whether a heartbeat Thread is currently running.
+      @@brand_heartbeat_inflight = false
+
+      # Fire a heartbeat in a background Thread without blocking the caller.
+      #
+      # Contract:
+      #   * Only one heartbeat Thread may be running at any moment across the
+      #     whole process. If one is already in flight, this call is a no-op.
+      #   * The caller never waits: it returns immediately after (at most)
+      #     spawning the Thread.
+      #   * The Thread rescues everything so a network failure cannot kill the
+      #     server or leak an exception through the web stack.
+      def trigger_async_heartbeat!
+        BRAND_HEARTBEAT_MUTEX.synchronize do
+          if @@brand_heartbeat_inflight
+            Clacky::Logger.debug("[Brand] heartbeat already in flight, skipping")
+            return
+          end
+          @@brand_heartbeat_inflight = true
+        end
+
+        Thread.new do
+          Clacky::Logger.info("[Brand] async heartbeat starting...")
+          begin
+            brand  = Clacky::BrandConfig.load
+            result = brand.heartbeat!
+            if result[:success]
+              Clacky::Logger.info("[Brand] async heartbeat OK")
+            else
+              Clacky::Logger.warn("[Brand] async heartbeat failed — #{result[:message]}")
+            end
+          rescue StandardError => e
+            Clacky::Logger.warn("[Brand] async heartbeat raised: #{e.class}: #{e.message}")
+          ensure
+            BRAND_HEARTBEAT_MUTEX.synchronize do
+              @@brand_heartbeat_inflight = false
+            end
+          end
+        end
+      end
+
       # GET /api/brand/status
       # Returns whether brand activation is needed.
       # Mirrors the onboard/status pattern so the frontend can gate on it.
@@ -634,17 +680,15 @@ module Clacky
           return
         end
 
-        # Send heartbeat if interval has elapsed (once per day)
+        # Send heartbeat asynchronously if interval has elapsed (once per day).
+        #
+        # We must NOT block this HTTP response on the heartbeat call: a slow or
+        # unreachable license server would otherwise stall the Web UI's first
+        # paint for up to ~92s (2 hosts × 2 attempts × 23s timeout). The fresh
+        # expires_at / last_heartbeat will be picked up on the next /api/brand/status
+        # poll, which is sufficient for a once-per-day check.
         if brand.heartbeat_due?
-          Clacky::Logger.info("[Brand] api_brand_status: heartbeat due, sending...")
-          result = brand.heartbeat!
-          if result[:success]
-            Clacky::Logger.info("[Brand] api_brand_status: heartbeat OK")
-          else
-            Clacky::Logger.warn("[Brand] api_brand_status: heartbeat failed — #{result[:message]}")
-          end
-          # Reload after heartbeat to pick up updated expires_at / last_heartbeat
-          brand = Clacky::BrandConfig.load
+          trigger_async_heartbeat!
         else
           Clacky::Logger.debug("[Brand] api_brand_status: heartbeat not due yet")
         end

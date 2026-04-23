@@ -271,25 +271,44 @@ module Clacky
         end
 
         if brand.heartbeat_due?
-          Clacky::Logger.info("[Brand] check_brand_license_cli: heartbeat due, sending...")
-          result = brand.heartbeat!
-          if result[:success]
-            Clacky::Logger.info("[Brand] check_brand_license_cli: heartbeat OK")
-          else
-            Clacky::Logger.warn("[Brand] check_brand_license_cli: heartbeat failed — #{result[:message]} grace_exceeded=#{brand.grace_period_exceeded?}")
-            unless result[:success]
-              if brand.grace_period_exceeded?
-                say ""
-                say "WARNING: Could not reach the #{brand.product_name} license server.", :yellow
-                say "License has been offline for more than 3 days. Please check your connection.", :yellow
-                say ""
+          # Fire-and-forget heartbeat in a background thread.
+          #
+          # Rationale: a slow/unreachable license server would otherwise block
+          # CLI startup for up to ~92s (2 hosts × 2 attempts × 23s timeout)
+          # before the user sees the prompt. Heartbeat is "best-effort" by
+          # design — its only job is to refresh `last_heartbeat` / `expires_at`
+          # on disk for the next run's grace-period calculation. Missing a
+          # single heartbeat is harmless; the next launch will try again.
+          #
+          # Consequence: if this run was going to trigger the
+          # grace_period_exceeded warning, the user will see it on the *next*
+          # launch instead of this one. Acceptable trade-off.
+          Clacky::Logger.info("[Brand] check_brand_license_cli: heartbeat due, dispatching async...")
+          Thread.new do
+            begin
+              result = brand.heartbeat!
+              if result[:success]
+                Clacky::Logger.info("[Brand] async heartbeat OK")
               else
-                say "(License heartbeat failed - will retry tomorrow.)", :cyan
+                Clacky::Logger.warn("[Brand] async heartbeat failed — #{result[:message]}")
               end
+            rescue StandardError => e
+              Clacky::Logger.warn("[Brand] async heartbeat raised: #{e.class}: #{e.message}")
             end
           end
         else
           Clacky::Logger.debug("[Brand] check_brand_license_cli: heartbeat not due yet")
+        end
+
+        # Surface the grace-period warning based on *already-persisted* state
+        # (computed from last_heartbeat on disk). This works whether the
+        # previous run's heartbeat succeeded, failed, or was interrupted —
+        # grace_period_exceeded? reads last_heartbeat, not this run's result.
+        if brand.grace_period_exceeded?
+          say ""
+          say "WARNING: Could not reach the #{brand.product_name} license server.", :yellow
+          say "License has been offline for more than 3 days. Please check your connection.", :yellow
+          say ""
         end
       end
 

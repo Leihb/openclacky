@@ -274,7 +274,7 @@ module Clacky
         raw = read_log_slice(session.log_file, start_offset, new_offset)
         cleaned = OutputCleaner.clean(raw)
         cleaned = cleaned.sub(session.marker_regex, "").rstrip if session.marker_regex
-        cleaned = strip_command_echo(cleaned)
+        cleaned = strip_command_echo(cleaned, marker_token: session.marker_token)
         truncated = false
         if cleaned.bytesize > MAX_LLM_OUTPUT_CHARS
           cleaned = cleaned.byteslice(0, MAX_LLM_OUTPUT_CHARS) + "\n...[output truncated]"
@@ -336,23 +336,97 @@ module Clacky
       # The shell may echo the wrapper line we injected (`{ USER_CMD; }; ...;
       # printf "__CLACKY_DONE_..."`) before running it. When stty -echo is
       # honoured (bash/fresh pty) this is a no-op; when it isn't (zsh ZLE
-      # sometimes re-enables echo on reuse) we strip the wrapper echo.
+      # sometimes re-enables echo on reuse, or the user sent input to a
+      # running session) we strip the wrapper echo wherever it appears.
       #
-      # Note: when the PTY is in cooked mode and echoes the wrapper, the
-      # terminal *interprets* the backslash-n escape pairs inside the
-      # double-quoted printf format, so the wrapper echo spans multiple
-      # real \n lines — not just two. We match lazily up to the closing
-      # `"$__clacky_ec"` quote so we catch the entire echoed wrapper.
-      private def strip_command_echo(text)
+      # Observed variants of the echoed wrapper:
+      #
+      #   1) Multi-line, starting the buffer (PTY in cooked mode, expanded
+      #      \n escapes inside printf's double-quoted format string):
+      #        { USER_CMD
+      #        }; __clacky_ec=$?; printf "
+      #        __CLACKY_DONE_<token>_%s__
+      #        " "$__clacky_ec"
+      #
+      #   2) Single-line / partially-truncated (PTY width wrap or partial
+      #      char drop ate the leading `{` or first chars of the command):
+      #        ails runner foo.rb ... }; __clacky_ec=$?; printf " __CLACKY_DONE_<token>_%s__ " "$__clacky_ec"
+      #
+      #   3) Embedded mid-stream when re-echoed (e.g. after session re-use
+      #      or after a user input: call landed in a shell that re-enabled
+      #      echo). Same shape as (1) or (2) but not anchored to the start.
+      #
+      # We handle all three by running two passes:
+      #   * an anchored multi-line strip (keeps the legacy behaviour and is
+      #     cheapest when stty -echo silently failed);
+      #   * a token-aware global strip that removes any remaining echoed
+      #     wrapper fragment anywhere in the buffer. The token makes this
+      #     safe: the real completion marker was already removed via
+      #     session.marker_regex above, so any surviving occurrence of
+      #     __CLACKY_DONE_<token>_ is by definition an echoed wrapper.
+      private def strip_command_echo(text, marker_token: nil)
         return text if text.nil? || text.empty?
-        # Match the whole echoed wrapper, however many lines the terminal
-        # expanded its \n escapes into:
-        #   { USER_CMD
-        #   }; __clacky_ec=$?; printf "
-        #   __CLACKY_DONE_<token>_%s__
-        #   " "$__clacky_ec"
-        # Anchored at the start; non-greedy across newlines via /m.
+
+        # Pass 1: anchored strip — the full wrapper echoed at the start,
+        # possibly spanning multiple real newlines.
         text = text.sub(/\A\{.*?"\$__clacky_ec"\s*\n?/m, "")
+
+        # Pass 2: token-aware global strip — remove any leftover wrapper
+        # echo fragment, wherever it sits. Requires the session token so
+        # we never touch unrelated user output that happens to mention
+        # `__clacky_ec`.
+        if marker_token && !marker_token.empty?
+          token_re = Regexp.escape(marker_token)
+
+          # 2a. Multi-line shape: walk back from __CLACKY_DONE_<token> to
+          # the opening `{` of the wrapper (start of line or start of
+          # buffer) and forward to the closing `"$__clacky_ec"`.
+          text = text.gsub(
+            /(?:^|(?<=\n))\{[^\n]*\n(?:[^\n]*\n)*?[^\n]*__CLACKY_DONE_#{token_re}_[^\n]*\n[^\n]*"\$__clacky_ec"[^\n]*\n?/,
+            ""
+          )
+
+          # 2b. Single-line shape: everything collapsed onto one line.
+          # Strip from the wrapper's `}; __clacky_ec=$?` pivot (or the
+          # opening `{` if still present on that line) through the end of
+          # the printf invocation (`"$__clacky_ec"`).
+          text = text.gsub(
+            /[^\n]*\}; *__clacky_ec=\$\?; *printf[^\n]*__CLACKY_DONE_#{token_re}_[^\n]*"\$__clacky_ec"[^\n]*\n?/,
+            ""
+          )
+
+          # 2c. Last-resort: a bare marker-format fragment on its own,
+          # without the `}; printf ...` prefix (e.g. terminal wrapped the
+          # echo such that only the tail survived). Drop lines that
+          # contain the literal `__CLACKY_DONE_<token>_%s__` format —
+          # the real marker has `\d+` in place of `%s` so this only hits
+          # echoed wrappers.
+          text = text.gsub(/^.*__CLACKY_DONE_#{token_re}_%s__.*\n?/, "")
+        end
+
+        # Pass 3: token-INDEPENDENT fingerprint strip — PTY width-wrap
+        # can chop the `__CLACKY_DONE_<token>_%s__` format string out of
+        # printf entirely, leaving e.g. `}; __clacky_ec=$?; printf " " "$__clacky_ec"`.
+        # None of the token-aware patterns above catch that. The pair
+        # `}; __clacky_ec=$?` (opening pivot) and `"$__clacky_ec"` (printf
+        # tail) are our wrapper's unique fingerprints — `__clacky_ec` is a
+        # private double-underscore var name that user code effectively
+        # never emits — so we strip anything between them (non-greedy,
+        # multiline-aware) to also handle width-wrap that inserted
+        # real \n breaks inside the echo.
+        text = text.gsub(
+          /[^\n]*\}; *__clacky_ec=\$\?.*?"\$__clacky_ec"[^\n]*\n?/m,
+          ""
+        )
+
+        # Pass 4: bare pivot with no printf tail at all (extreme
+        # truncation cut off everything after `__clacky_ec=$?`). Still a
+        # reliable fingerprint thanks to the `__clacky_ec` var name.
+        text = text.gsub(
+          /[^\n]*\}; *__clacky_ec=\$\?;?[^\n]*\n?/,
+          ""
+        )
+
         text
       end
 

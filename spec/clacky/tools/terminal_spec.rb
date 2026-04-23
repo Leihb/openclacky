@@ -545,6 +545,87 @@ RSpec.describe Clacky::Tools::Terminal do
   end
 
   # ---------------------------------------------------------------------------
+  # strip_command_echo: PTY wrapper-echo removal
+  # ---------------------------------------------------------------------------
+  # When `stty -echo` silently fails (zsh ZLE re-enabling echo on session
+  # reuse, cooked PTY mode, line-wrap truncation, etc.), the shell echoes
+  # back the full wrapper line we inject around every user command:
+  #
+  #     { USER_CMD\n}; __clacky_ec=$?; printf "\n__CLACKY_DONE_<tok>_%s__\n" "$__clacky_ec"
+  #
+  # strip_command_echo must remove that echoed wrapper — in all its observed
+  # shapes — without ever touching legitimate user output.
+  describe "#strip_command_echo" do
+    let(:token) { "6fbad5cb5904a3b5" }
+
+    def strip(text, token: nil)
+      tool.send(:strip_command_echo, text, marker_token: token)
+    end
+
+    it "strips a single-line wrapper echo even when the leading `{` was dropped by PTY width-wrap" do
+      # Reproduces the real-world report: rails runner command, width-wrapped
+      # so the terminal ate the first `{ r`, collapsed \n escapes to spaces.
+      input = %(ails runner script/reconcile_stripe_payments.rb 2>&1 | tail -80 }; __clacky_ec=$?; printf " __CLACKY_DONE_#{token}_%s__ " "$__clacky_ec"\n) \
+              "actual output line 1\n" \
+              "actual output line 2\n"
+
+      expect(strip(input, token: token)).to eq("actual output line 1\nactual output line 2\n")
+    end
+
+    it "strips a multi-line anchored wrapper echo (legacy behaviour, no token needed)" do
+      input = "{ echo hi\n}; __clacky_ec=$?; printf \"\n__CLACKY_DONE_#{token}_%s__\n\" \"$__clacky_ec\"\nhi\n"
+      expect(strip(input, token: token)).to eq("hi\n")
+    end
+
+    it "strips a wrapper echo that appears mid-stream, not anchored to the start" do
+      input = "previous output\n" \
+              "{ echo hi\n}; __clacky_ec=$?; printf \"\n__CLACKY_DONE_#{token}_%s__\n\" \"$__clacky_ec\"\nhi\n"
+      expect(strip(input, token: token)).to eq("previous output\nhi\n")
+    end
+
+    it "does not touch user output that mentions __clacky_ec but lacks the session token" do
+      input = "my script prints __clacky_ec=$? for debugging\nnext line\n"
+      expect(strip(input, token: token)).to eq(input)
+    end
+
+    it "strips a wrapper-shaped echo even when the token is different or missing" do
+      # PTY width-wrap can truncate the token or even the entire
+      # `__CLACKY_DONE_..._%s__` format out of the printf format argument.
+      # The `}; __clacky_ec=$?; printf ... "$__clacky_ec"` fingerprint is
+      # unique enough that we strip it on sight regardless of token.
+      input = "real output\n{ echo hi\n}; __clacky_ec=$?; printf \"\n__CLACKY_DONE_OTHER_%s__\n\" \"$__clacky_ec\"\nhi\n"
+      expect(strip(input, token: token)).to eq("real output\n{ echo hi\nhi\n")
+    end
+
+    it "strips a wrapper echo where the __CLACKY_DONE marker format was truncated away entirely" do
+      # Real-world: rails / cat commands so long that PTY width-wrap
+      # shredded the printf format, leaving only `printf \" \" \"$__clacky_ec\"`
+      # with the marker gone. Token-aware patterns don't match this, so
+      # the token-independent fingerprint pass must catch it.
+      input = %(d -c 2000 }; __clacky_ec=$?; printf " " "$__clacky_ec" brand_skills.json pptx ---\n) \
+              "---\n" \
+              "{\"pptx\":{\"version\":\"1.0.1\"}}\n"
+
+      expect(strip(input, token: token)).to eq("---\n{\"pptx\":{\"version\":\"1.0.1\"}}\n")
+    end
+
+    it "strips a wrapper echo where the entire printf was truncated, leaving only the `}; __clacky_ec=$?` pivot" do
+      input = "tail -80 }; __clacky_ec=$?\nactual output\n"
+      expect(strip(input, token: token)).to eq("actual output\n")
+    end
+
+    it "falls back to the legacy anchored strip when no token is supplied" do
+      input = "{ echo hi\n}; __clacky_ec=$?; printf \"\n__CLACKY_DONE_xxx_%s__\n\" \"$__clacky_ec\"\nhi\n"
+      expect(strip(input, token: nil)).to eq("hi\n")
+    end
+
+    it "handles nil and empty input" do
+      expect(strip(nil, token: token)).to be_nil
+      expect(strip("", token: token)).to eq("")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # OutputCleaner (kept here, independent utility)
   # ---------------------------------------------------------------------------
   describe Clacky::Tools::Terminal::OutputCleaner do
