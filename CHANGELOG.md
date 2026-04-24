@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.38] - 2026-04-24
+
+### Fixed
+- **Access key now persists correctly via cookie**. When the Web UI server was configured with `--access-key`, the key entered at login was stored only in `localStorage` — but WebSocket connections and some API requests read the key from cookies. This mismatch caused authenticated sessions to sporadically lose access (e.g. WebSocket falling back to unauthorized). The auth flow now writes the key to both `localStorage` _and_ a `clacky_access_key` cookie, and probes the server using the cookie. Incorrect keys are cleared from both stores before retry. Up to 3 attempts are allowed before giving up.
+
+### More
+- Auth prompt input field now uses `type="password"` while the user is typing (reverts to text after), preventing shoulder-surfing
+
 ## [0.9.37] - 2026-04-24
 
 ### Fixed
