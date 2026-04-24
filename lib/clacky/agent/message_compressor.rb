@@ -125,8 +125,25 @@ module Clacky
     end
 
     def parse_compressed_result(result, chunk_path: nil)
-      # Return the compressed result as a single assistant message
-      # Keep the <summary> tags as they provide semantic context
+      # Return the compressed result as a single user message (role: "user").
+      #
+      # Why role:"user" instead of "assistant":
+      #   When all original user messages get archived into the chunk during compression
+      #   (e.g. a long single-turn `/slash` task), the rebuilt history can end up as
+      #   `system → assistant(summary) → assistant(tool_calls) → tool → …` with NO user
+      #   message anywhere. Strict providers (notably DeepSeek V4 thinking mode) reject
+      #   this as a malformed turn structure with a misleading
+      #   "reasoning_content must be passed back" 400 error.
+      #
+      # Marking it as a user message gives the conversation a valid turn boundary.
+      # `system_injected: true` ensures the UI's replay_history still hides it from
+      # the chat panel (the real-user filter excludes system_injected messages), while
+      # INTERNAL_FIELDS in MessageHistory strips the marker before the API payload is
+      # built — so DeepSeek/OpenAI/Anthropic only see a plain `{role:"user", content:…}`.
+      #
+      # The `compressed_summary: true` flag is preserved so that replay_history still
+      # routes this message through the chunk-expansion path (which keys off that flag,
+      # not the role).
       content = result.to_s.strip
 
       if content.empty?
@@ -142,7 +159,17 @@ module Clacky
           content_without_topics = content_without_topics + anchor
         end
 
-        [{ role: "assistant", content: content_without_topics, compressed_summary: true, chunk_path: chunk_path }]
+        # Prefix lets the model recognise this is injected context, not a user utterance.
+        framed_content = "[Compressed conversation summary — previous turns archived]\n\n" \
+                         "#{content_without_topics}"
+
+        [{
+          role: "user",
+          content: framed_content,
+          compressed_summary: true,
+          chunk_path: chunk_path,
+          system_injected: true
+        }]
       end
     end
   end

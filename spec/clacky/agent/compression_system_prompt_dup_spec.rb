@@ -154,7 +154,7 @@ RSpec.describe "Compression system-prompt duplication bug" do
       # Simulate what handle_compression_response does:
       #   1. replace history with small rebuilt version
       #   2. reset @previous_total_tokens to estimated new size
-      small_messages = [system_msg, { role: "assistant", content: "<summary>All previous work summarised.</summary>", compressed_summary: true }]
+      small_messages = [system_msg, { role: "user", content: "<summary>All previous work summarised.</summary>", compressed_summary: true, system_injected: true }]
       agent.history.replace_all(small_messages)
       agent.previous_total_tokens = agent.history.estimate_tokens  # THE FIX
 

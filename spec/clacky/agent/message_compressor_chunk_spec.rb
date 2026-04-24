@@ -231,7 +231,8 @@ RSpec.describe "Compression chunk MD archiving" do
           chunk_path: chunk_path
         )
 
-        summary_msg = result.find { |m| m[:role] == "assistant" }
+        summary_msg = result.find { |m| m[:compressed_summary] }
+        expect(summary_msg[:role]).to eq("user")
         expect(summary_msg[:content]).to include(chunk_path)
         expect(summary_msg[:content]).to include("file_reader")
         expect(summary_msg[:chunk_path]).to eq(chunk_path)
@@ -247,20 +248,109 @@ RSpec.describe "Compression chunk MD archiving" do
           chunk_path: nil
         )
 
-        summary_msg = result.find { |m| m[:role] == "assistant" }
+        summary_msg = result.find { |m| m[:compressed_summary] }
+        expect(summary_msg[:role]).to eq("user")
         expect(summary_msg[:content]).not_to include("file_reader")
         expect(summary_msg[:chunk_path]).to be_nil
       end
 
-      it "sets compressed_summary: true on the rebuilt assistant message" do
+      it "sets compressed_summary: true on the rebuilt summary message (role: user)" do
         result = compressor.rebuild_with_compression(
           "<summary>Summary</summary>",
           original_messages: [system_msg],
           recent_messages: [recent_msg],
           chunk_path: nil
         )
-        summary_msg = result.find { |m| m[:role] == "assistant" }
+        summary_msg = result.find { |m| m[:compressed_summary] }
+        expect(summary_msg[:role]).to eq("user")
         expect(summary_msg[:compressed_summary]).to be true
+        # system_injected keeps it hidden from UI replay
+        expect(summary_msg[:system_injected]).to be true
+      end
+    end
+
+    # Regression: a previous implementation placed the compressed summary as
+    # `role: "assistant"` right after the `system` message. If the very next
+    # kept message was also an assistant (e.g. because the last user turn had
+    # already been archived into the chunk), the rebuilt history sent to the
+    # API contained two consecutive assistant messages — and worse, an
+    # `assistant + tool_calls` chain with no preceding user anchor. OpenAI-
+    # compatible providers reject this with 400 "tool_use ids found without
+    # tool_result blocks" / "messages must alternate".
+    #
+    # The summary must be `role: "user"` so it acts as the anchor for any
+    # orphaned assistant/tool_result messages that follow it.
+    describe "#rebuild_with_compression history structure (regression)" do
+      let(:compressor) { described_class.new(nil) }
+      let(:system_msg) { { role: "system", content: "System prompt" } }
+
+      # Helper: flatten rebuilt history into a role sequence for assertions
+      def role_sequence(messages)
+        messages.map { |m| m[:role].to_s }
+      end
+
+      it "never produces two consecutive assistant messages after compression" do
+        # Scenario: the chunk swallowed the trailing user turn; recent_messages
+        # starts with an assistant message carrying tool_calls.
+        recent = [
+          { role: "assistant", content: "", tool_calls: [{ id: "t1", name: "shell", arguments: {} }] },
+          { role: "tool",      content: "output", tool_call_id: "t1" },
+          { role: "assistant", content: "Done." }
+        ]
+
+        result = compressor.rebuild_with_compression(
+          "<summary>Earlier work summary</summary>",
+          original_messages: [system_msg],
+          recent_messages: recent,
+          chunk_path: "/tmp/fake-chunk-1.md"
+        )
+
+        roles = role_sequence(result)
+        # Walk the sequence and assert no two adjacent assistants
+        roles.each_cons(2) do |a, b|
+          expect([a, b]).not_to eq(%w[assistant assistant]),
+            "found consecutive assistants in rebuilt history: #{roles.inspect}"
+        end
+      end
+
+      it "places a user message before any assistant-with-tool_calls chain" do
+        # This is the exact shape that triggered the production 400 error:
+        # system → [summary] → assistant(tool_calls) → tool → assistant
+        recent = [
+          { role: "assistant", content: "", tool_calls: [{ id: "t1", name: "shell", arguments: {} }] },
+          { role: "tool",      content: "ok", tool_call_id: "t1" }
+        ]
+
+        result = compressor.rebuild_with_compression(
+          "<summary>Prior conversation</summary>",
+          original_messages: [system_msg],
+          recent_messages: recent,
+          chunk_path: "/tmp/fake-chunk-1.md"
+        )
+
+        # Find the first assistant message that carries tool_calls
+        first_tool_call_idx = result.index { |m| m[:role] == "assistant" && !Array(m[:tool_calls]).empty? }
+        expect(first_tool_call_idx).not_to be_nil
+
+        # Every assistant+tool_calls must have at least one user message somewhere before it
+        preceding = result[0...first_tool_call_idx]
+        expect(preceding.any? { |m| m[:role] == "user" }).to be(true),
+          "no user anchor before assistant(tool_calls); got roles: #{role_sequence(result).inspect}"
+      end
+
+      it "rebuilt history starts with system then user (summary acts as user anchor)" do
+        recent = [{ role: "assistant", content: "hello" }]
+
+        result = compressor.rebuild_with_compression(
+          "<summary>s</summary>",
+          original_messages: [system_msg],
+          recent_messages: recent,
+          chunk_path: nil
+        )
+
+        expect(result[0][:role]).to eq("system")
+        expect(result[1][:role]).to eq("user")
+        expect(result[1][:compressed_summary]).to be true
       end
     end
   end
