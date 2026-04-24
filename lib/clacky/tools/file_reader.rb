@@ -86,8 +86,10 @@ module Clacky
             }
           end
 
-          # Read text file with optional line range
-          all_lines = File.readlines(expanded_path)
+          # Read text file with optional line range.
+          # Scrub invalid UTF-8 bytes (e.g. GBK-encoded files) so downstream
+          # JSON.generate / history persistence won't blow up later.
+          all_lines = File.readlines(expanded_path).map! { |line| safe_utf8(line) }
           total_lines = all_lines.size
 
           # Calculate start index (convert 1-indexed to 0-indexed)
@@ -313,7 +315,11 @@ module Clacky
       # List first-level directory contents (files and directories)
       private def list_directory_contents(path)
         begin
-          entries = Dir.entries(path).reject { |entry| entry == "." || entry == ".." }
+          # Scrub entry names — filenames on disk may contain non-UTF-8 bytes
+          # (e.g. GBK/Shift-JIS names on macOS/Linux) which would poison history.
+          entries = Dir.entries(path)
+                       .map { |entry| safe_utf8(entry) }
+                       .reject { |entry| entry == "." || entry == ".." }
 
           # Separate files and directories
           files = []
@@ -352,6 +358,16 @@ module Clacky
             error: "Error reading directory: #{e.message}"
           }
         end
+      end
+
+      # Scrub invalid UTF-8 byte sequences so the result survives
+      # JSON.generate (session replay, API responses).
+      # Invalid bytes are replaced with U+FFFD (�). Valid UTF-8 is
+      # returned untouched via the fast path.
+      private def safe_utf8(str)
+        return str if str.nil?
+        return str if str.encoding == Encoding::UTF_8 && str.valid_encoding?
+        str.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}")
       end
     end
   end

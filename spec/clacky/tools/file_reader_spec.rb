@@ -2,6 +2,7 @@
 
 require "tempfile"
 require "tmpdir"
+require "json"
 
 RSpec.describe Clacky::Tools::FileReader do
   let(:tool) { described_class.new }
@@ -400,6 +401,46 @@ RSpec.describe Clacky::Tools::FileReader do
       expect(formatted).to be_a(String)
       expect(formatted).to include("text content")
       expect(formatted).to include("/tmp/foo.rb")
+    end
+  end
+
+  describe "UTF-8 safety" do
+    it "scrubs invalid UTF-8 bytes in file content (e.g. GBK-encoded files)" do
+      Dir.mktmpdir do |dir|
+        file_path = File.join(dir, "gbk.txt")
+        # GBK bytes for "你好" — illegal as UTF-8
+        File.binwrite(file_path, "\xC4\xE3\xBA\xC3\n")
+
+        result = tool.execute(path: file_path)
+
+        expect(result[:error]).to be_nil
+        content = result[:content]
+        expect(content.encoding).to eq(Encoding::UTF_8)
+        expect(content.valid_encoding?).to be(true)
+        # JSON.generate must not raise — this is the exact downstream failure
+        # that produced "500: source sequence is illegal/malformed utf-8".
+        expect { JSON.generate(data: content) }.not_to raise_error
+      end
+    end
+
+    it "scrubs invalid UTF-8 bytes in directory entry names" do
+      # macOS APFS/HFS+ enforce UTF-8 filenames, so we can't create a bad
+      # filename on disk portably. Stub Dir.entries to simulate Linux filesystems
+      # where non-UTF-8 names are possible.
+      Dir.mktmpdir do |dir|
+        bad_name = "\xC4\xE3\xBA\xC3.txt".b  # BINARY encoding, invalid UTF-8
+        allow(Dir).to receive(:entries).with(dir).and_return([".", "..", bad_name])
+        # File.directory? should still work for "." check and return false for the fake name
+        allow(File).to receive(:directory?).and_call_original
+        allow(File).to receive(:directory?).with(File.join(dir, bad_name).encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}")).and_return(false)
+
+        result = tool.execute(path: dir)
+
+        expect(result[:is_directory]).to be(true)
+        expect(result[:content].encoding).to eq(Encoding::UTF_8)
+        expect(result[:content].valid_encoding?).to be(true)
+        expect { JSON.generate(data: result[:content]) }.not_to raise_error
+      end
     end
   end
 end

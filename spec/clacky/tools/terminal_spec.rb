@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "shellwords"
+require "tmpdir"
 
 # Specs for the redesigned, unified Terminal tool.
 # Contract recap:
@@ -622,6 +623,44 @@ RSpec.describe Clacky::Tools::Terminal do
     it "handles nil and empty input" do
       expect(strip(nil, token: token)).to be_nil
       expect(strip("", token: token)).to eq("")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # .run_sync — internal Ruby synchronous-capture API
+  # ---------------------------------------------------------------------------
+  describe ".run_sync" do
+    it "returns [output, exit_code] for a fast command" do
+      output, exit_code = described_class.run_sync("echo hello-sync", timeout: 10)
+      expect(exit_code).to eq(0)
+      expect(output).to include("hello-sync")
+    end
+
+    it "captures a non-zero exit code" do
+      _output, exit_code = described_class.run_sync("sh -c 'exit 7'", timeout: 10)
+      expect(exit_code).to eq(7)
+    end
+
+    it "waits through an idle window longer than DEFAULT_IDLE_MS and still returns exit_code" do
+      # This is the exact shape that broke 0.9.36 upgrade: a command that
+      # stays silent past the 3s idle threshold, then finishes.
+      # sleep 5 produces NO output for 5s — #execute alone would return
+      # {session_id: ..., exit_code: nil}; #run_sync must poll and wait.
+      start = Time.now
+      _output, exit_code = described_class.run_sync("sleep 5 && echo done", timeout: 30)
+      elapsed = Time.now - start
+
+      expect(exit_code).to eq(0)
+      expect(elapsed).to be >= 4.5   # actually waited
+    end
+
+    it "forwards cwd" do
+      Dir.mktmpdir do |dir|
+        output, exit_code = described_class.run_sync("pwd", timeout: 10, cwd: dir)
+        expect(exit_code).to eq(0)
+        # On macOS /tmp is symlinked to /private/tmp; compare via realpath.
+        expect(File.realpath(output.strip)).to eq(File.realpath(dir))
+      end
     end
   end
 

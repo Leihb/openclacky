@@ -422,6 +422,131 @@ RSpec.describe Clacky::Server::HttpServer do
       end
     end
 
+    # Regression: 0.9.37 fix for silent api_key wipe.
+    #
+    # Repro of the user-reported bug: when the Web UI saves ANY model, the
+    # frontend POSTs the full _models array. /api/config only ever returns
+    # api_key_masked (never api_key), so every non-edited row is sent back
+    # with no api_key field at all — only the row being saved carries a key.
+    # Before the fix, the backend's `"api_key" => api_key.to_s` path would
+    # silently rewrite every non-edited row's api_key to "" because
+    # `nil.to_s` doesn't include "****".
+    it "preserves existing api_key for rows whose api_key field is omitted" do
+      # Two models: default + a second one. We save only the default; the
+      # second row arrives with no api_key field (exactly what the browser
+      # sends for non-edited cards).
+      agent_config.models << {
+        "id"       => "model-2-id",
+        "model"    => "second-model",
+        "api_key"  => "sk-second-key-must-survive",
+        "base_url" => "https://api2.example.com"
+      }
+
+      with_server(agent_config: agent_config) do |server|
+        default_id = agent_config.models[0]["id"]
+        second_id  = "model-2-id"
+
+        payload = {
+          models: [
+            {
+              id:               default_id,
+              model:            "test-model",
+              base_url:         "https://api.example.com",
+              api_key:          "sk-test****abcd",  # masked — user didn't retype
+              anthropic_format: true,
+              type:             "default"
+            },
+            {
+              # Second row — exactly what the browser sends for a card the
+              # user didn't touch: NO api_key field at all.
+              id:               second_id,
+              model:            "second-model",
+              base_url:         "https://api2.example.com",
+              anthropic_format: false
+            }
+          ]
+        }
+        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        # CRITICAL: the un-edited row's api_key MUST NOT be wiped
+        second = agent_config.models.find { |m| m["id"] == second_id }
+        expect(second).not_to be_nil
+        expect(second["api_key"]).to eq("sk-second-key-must-survive")
+
+        # And the default row's key is also intact (masked placeholder path)
+        default = agent_config.models.find { |m| m["id"] == default_id }
+        expect(default["api_key"]).to eq("sk-testkey1234567890abcd")
+      end
+    end
+
+    # Regression: same root cause, different shape. An explicit empty string
+    # (e.g. the browser sends api_key: "" because of a stale DOM read) must
+    # also NOT wipe the stored key for an existing model.
+    it "preserves existing api_key when incoming api_key is blank for an existing row" do
+      with_server(agent_config: agent_config) do |server|
+        existing_id  = agent_config.models[0]["id"]
+        original_key = agent_config.api_key
+
+        payload = {
+          models: [{
+            id:               existing_id,
+            model:            "test-model",
+            base_url:         "https://api.example.com",
+            api_key:          "",  # explicit blank — must be treated as "omitted"
+            anthropic_format: true,
+            type:             "default"
+          }]
+        }
+        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        expect(agent_config.api_key).to eq(original_key)
+      end
+    end
+
+    # Happy path counterpart: a BRAND-NEW model (no id) with no api_key is
+    # legitimately created with an empty key (user will fill it in later).
+    # This guards against over-correcting the fix above.
+    it "still allows brand-new models to be created with an empty api_key" do
+      with_server(agent_config: agent_config) do |server|
+        existing_id = agent_config.models[0]["id"]
+
+        payload = {
+          models: [
+            {
+              id:               existing_id,
+              model:            "test-model",
+              base_url:         "https://api.example.com",
+              api_key:          "sk-test****abcd",
+              anthropic_format: true,
+              type:             "default"
+            },
+            {
+              # No id → brand-new model; no api_key → user hasn't filled it
+              model:            "new-model",
+              base_url:         "https://api.new.com",
+              anthropic_format: false
+            }
+          ]
+        }
+        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        expect(agent_config.models.length).to eq(2)
+        new_model = agent_config.models.find { |m| m["model"] == "new-model" }
+        expect(new_model).not_to be_nil
+        expect(new_model["api_key"]).to eq("")  # correctly blank for new model
+        expect(new_model["id"]).to be_a(String) # a fresh uuid was minted
+      end
+    end
+
     it "returns 400 when body is missing models array" do
       with_server(agent_config: agent_config) do |server|
         req = fake_req(method: "POST", path: "/api/config", body: { foo: "bar" })

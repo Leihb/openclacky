@@ -930,8 +930,12 @@ module Clacky
         key.empty? ? nil : key
       end
 
-      # Extract bearer token / query param / cookie from a WEBrick request.
-      # Priority: Authorization: Bearer > ?access_key= > Cookie clacky_access_key
+      # Extract bearer token or query param from a WEBrick request.
+      # Priority: Authorization: Bearer > ?access_key=
+      # The query string form is only used by WebSocket connections, which
+      # cannot set custom headers from the browser. All HTTP clients —
+      # including the web UI (via a fetch interceptor in auth.js) — use the
+      # Authorization header.
       private def extract_key(req)
         auth = req["Authorization"].to_s.strip
         if auth.start_with?("Bearer ")
@@ -942,10 +946,6 @@ module Clacky
         query = URI.decode_www_form(req.query_string.to_s).to_h
         token = query["access_key"].to_s.strip
         return token unless token.empty?
-
-        req.cookies.each do |c|
-          return c.value if c.name == "clacky_access_key" && !c.value.to_s.empty?
-        end
 
         nil
       end
@@ -1119,7 +1119,18 @@ module Clacky
       end
 
       # Broadcast final upgrade result with appropriate log message.
+      #
+      # Defensive post-check: if `run_shell` reported failure but the gem
+      # is in fact now installed at the latest version, reverse the verdict.
+      # This guards against false negatives from the Terminal idle-poll
+      # mechanism (see: 0.9.36 upgrade failure bug).
       private def finish_upgrade(success, fallback_hint: "gem update openclacky")
+        if !success && gem_actually_upgraded?
+          Clacky::Logger.warn("[Upgrade] run_shell reported failure, but installed version matches latest — treating as success.")
+          broadcast_all(type: "upgrade_log", line: "\n(Verified: the new version is installed — reclassifying as success.)\n")
+          success = true
+        end
+
         if success
           Clacky::Logger.info("[Upgrade] Success!")
           broadcast_all(type: "upgrade_log", line: "\n✓ Upgrade successful! Please restart the server to apply the new version.\n")
@@ -1129,6 +1140,22 @@ module Clacky
           broadcast_all(type: "upgrade_log", line: "\n✗ Upgrade failed. Please try manually: #{fallback_hint}\n")
           broadcast_all(type: "upgrade_complete", success: false)
         end
+      end
+
+      # Check whether the latest published version of openclacky is already
+      # installed locally. Used as a post-upgrade sanity check so a flaky
+      # run_shell result doesn't mask a successful install.
+      # Returns false on any error (conservative — don't fabricate success).
+      private def gem_actually_upgraded?
+        latest = fetch_latest_version_from_rubygems_api
+        return false unless latest
+
+        out, exit_code = run_shell("gem list openclacky -i -v #{latest}", timeout: 30)
+        return false unless exit_code&.zero?
+        out.to_s.strip.downcase == "true"
+      rescue StandardError => e
+        Clacky::Logger.warn("[Upgrade] gem_actually_upgraded? error: #{e.message}")
+        false
       end
 
       # POST /api/restart
@@ -1242,18 +1269,11 @@ module Clacky
       # Run a shell command via the unified Terminal tool and return
       # [output, exit_code] — drop-in replacement for Open3.capture2e.
       #
-      # Uses Terminal#execute so the command inherits the user's real
-      # login shell (rbenv/mise shims, configured gem mirrors, etc.).
-      # On timeout / still-running, returns [output_so_far, nil].
-      #
-      # The command is routed through the Security layer like any other
-      # Terminal call; server-side commands (`gem ...`, `curl -fsSL ... -o ...`)
-      # pass through unchanged.
+      # Delegates to Terminal.run_sync which handles the idle-poll loop
+      # internally (see its docs for why that's needed — this wrapper used
+      # to re-implement it wrong and caused the 0.9.36 upgrade bug).
       private def run_shell(command, timeout: 120)
-        result = Clacky::Tools::Terminal.new.execute(command: command, timeout: timeout)
-        output    = result[:output].to_s
-        exit_code = result[:exit_code] # nil when the session is still running
-        [output, exit_code]
+        Clacky::Tools::Terminal.run_sync(command, timeout: timeout)
       end
 
       # ── Channel API ───────────────────────────────────────────────────────────
@@ -1915,18 +1935,32 @@ module Clacky
           # Lookup by id only. No id means a brand-new model — we mint one.
           existing = m["id"] && existing_by_id[m["id"]]
 
-          # Resolve api_key: if masked placeholder, keep the stored key
-          api_key = if m["api_key"].to_s.include?("****")
-                      existing&.dig("api_key")
+          # Resolve api_key with THREE cases (ordered, fail-safe):
+          #   1. Incoming key is the masked placeholder ("sk-ab12****...5678")
+          #      → user didn't retype; keep the stored key.
+          #   2. Incoming key is missing/blank AND we have an existing model
+          #      → the browser omitted api_key for non-edited rows; keep the
+          #        stored key. This is the critical 0.9.37 fix — without it,
+          #        saving one model silently wiped api_keys of all others,
+          #        because the frontend only ever hydrates api_key for the
+          #        row currently being edited (/api/config returns only
+          #        api_key_masked, never api_key).
+          #   3. Otherwise: user typed a new key (or this is a brand-new
+          #      model); use the incoming value.
+          incoming_key = m["api_key"].to_s
+          api_key = if incoming_key.include?("****")
+                      existing&.dig("api_key").to_s
+                    elsif incoming_key.empty? && existing
+                      existing["api_key"].to_s
                     else
-                      m["api_key"]
+                      incoming_key
                     end
 
           {
             "id"               => (existing && existing["id"]) || SecureRandom.uuid,
             "model"            => m["model"].to_s,
             "base_url"         => m["base_url"].to_s,
-            "api_key"          => api_key.to_s,
+            "api_key"          => api_key,
             "anthropic_format" => m["anthropic_format"] || false,
             "type"             => m["type"]
           }.tap { |h| h.delete("type") if h["type"].nil? || h["type"].to_s.empty? }

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 RSpec.describe Clacky::MessageHistory do
   subject(:history) { described_class.new }
 
@@ -338,6 +340,45 @@ RSpec.describe Clacky::MessageHistory do
       result = history.to_a
       result.clear
       expect(history.size).to eq(1) # original not affected
+    end
+  end
+
+  describe "UTF-8 sanitization on append" do
+    it "scrubs invalid UTF-8 bytes from string content" do
+      # GBK bytes for "你好" — illegal as UTF-8. Use .b + .dup to escape
+      # the frozen-string-literal pragma and produce a mutable UTF-8-tagged string.
+      dirty = ("prefix".b + "\xC4\xE3\xBA\xC3".b + "suffix".b).force_encoding("UTF-8")
+      expect(dirty.valid_encoding?).to be(false)
+
+      history.append(user_msg(dirty))
+      stored = history.to_a.last[:content]
+
+      expect(stored.encoding).to eq(Encoding::UTF_8)
+      expect(stored.valid_encoding?).to be(true)
+      expect(stored).to start_with("prefix")
+      expect(stored).to end_with("suffix")
+      expect { JSON.generate(history.to_a) }.not_to raise_error
+    end
+
+    it "scrubs invalid UTF-8 bytes deep inside nested structures" do
+      dirty = "\xC4\xE3\xBA\xC3".b.force_encoding("UTF-8")
+      msg = {
+        role: "tool",
+        tool_results: [{ tool_use_id: "tc_1", content: dirty }],
+        task_id: 1, created_at: Time.now.to_f
+      }
+      history.append(msg)
+
+      stored_content = history.to_a.last[:tool_results].first[:content]
+      expect(stored_content.valid_encoding?).to be(true)
+      expect { JSON.generate(history.to_a) }.not_to raise_error
+    end
+
+    it "leaves valid UTF-8 messages as the same object (preserves object identity)" do
+      # This is critical for rollback_before which uses m.equal?(message).
+      msg = user_msg("你好世界")
+      history.append(msg)
+      expect(history.to_a.last).to equal(msg)  # same Hash instance
     end
   end
 end

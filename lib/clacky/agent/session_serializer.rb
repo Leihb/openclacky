@@ -243,7 +243,12 @@ module Clacky
         end
         visited = visited.dup.add(canonical)
 
-        raw = File.read(resolved)
+        # Scrub invalid UTF-8 bytes defensively — chunk files written before
+        # the 0.9.37 fix may contain poisoned bytes from file_reader results.
+        raw = File.read(resolved).then do |s|
+          s.encoding == Encoding::UTF_8 && s.valid_encoding? ? s :
+            s.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}")
+        end
 
         # Parse YAML front matter to get archived_at for synthetic timestamps
         archived_at = nil

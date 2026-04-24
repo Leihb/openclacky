@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.37] - 2026-04-24
+
+### Fixed
+- **Critical: saving one model in Web UI Settings silently wiped other models' API keys.** The 0.9.36 index→id refactor (commit `b61e22e`) rebuilt each model hash from scratch on save (`"api_key" => api_key.to_s`), dropping the old `existing["api_key"] = api_key if api_key` guard. Combined with `/api/config` returning only `api_key_masked` (never `api_key`), every non-edited row in the POST body arrived with `api_key: undefined` — the backend then rewrote those rows' keys to `""`. Now `api_save_config` has three explicit cases for resolving `api_key`: (1) masked placeholder → keep stored key, (2) **missing/blank on an existing row → keep stored key (this fix)**, (3) otherwise use incoming value. Brand-new models (no `id`) still create with an empty key as before.
+- **Critical: in-app upgrade no longer falsely reports failure.** The 0.9.36 upgrade flow shared a PTY helper (`run_shell`) with the new unified Terminal tool, which — by design — returns early with a `session_id` when command output stays quiet for 3 seconds. Long-running `gem install` operations routinely hit this during dependency resolution, causing the Web UI to show `✗ Upgrade failed.` even when the gem installed successfully. `run_shell` now delegates to a new `Terminal.run_sync` Ruby API that polls until the command truly completes, and `finish_upgrade` additionally re-checks the installed gem version as a defensive fallback.
+- **Critical: "历史记录获取失败 (500: source sequence is illegal/malformed utf-8)" when opening a session.** When `file_reader` / `edit` / `grep` / `glob` encountered a file with non-UTF-8 bytes (e.g. GBK-encoded text or a Chinese Windows-exported CSV), the dirty bytes flowed through tool results into the agent history and session chunks on disk. Later, when `GET /api/sessions/:id/messages` replayed that history, `JSON.generate` would blow up on the invalid byte sequence and return 500. Now every IO source point scrubs invalid bytes to U+FFFD (`�`) at read time: `file_reader` (both content and directory entry names), `edit`, `grep` (`File.foreach` + context `readlines`), `glob` (`Dir.glob` path strings), `session_serializer` (chunk md replay), and `tool_executor` (diff preview). A defense-in-depth layer in `MessageHistory#append` / `#replace_all` recursively sanitizes every string that enters the message tree — so even a future tool that forgets to scrub cannot poison the session.
+- **New `Terminal.run_sync` internal API** for Ruby callers that need synchronous command capture (drop-in replacement for `Open3.capture2e`, but using the same PTY + login-shell + Security pipeline as the AI-facing tool).
+
 ## [0.9.36] - 2026-04-24
 
 ### Fixed

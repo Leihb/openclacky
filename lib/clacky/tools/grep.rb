@@ -271,8 +271,10 @@ module Clacky
       def search_file(file, regex, context_lines, max_matches)
         matches = []
 
-        # Use File.foreach for memory-efficient line-by-line reading
-        File.foreach(file, chomp: true).with_index do |line, index|
+        # Use File.foreach for memory-efficient line-by-line reading.
+        # Scrub invalid UTF-8 bytes so results survive JSON encoding.
+        File.foreach(file, chomp: true).with_index do |raw_line, index|
+          line = safe_utf8(raw_line)
           # Stop if we have enough matches for this file
           break if matches.length >= max_matches
 
@@ -302,7 +304,7 @@ module Clacky
 
       # Get context lines around a match
       def get_line_context(file, match_index, context_lines)
-        lines = File.readlines(file, chomp: true)
+        lines = File.readlines(file, chomp: true).map! { |l| safe_utf8(l) }
         start_line = [0, match_index - context_lines].max
         end_line = [lines.length - 1, match_index + context_lines].min
 
@@ -324,6 +326,13 @@ module Clacky
         context
       rescue StandardError
         nil
+      end
+
+      # Scrub invalid UTF-8 byte sequences (see file_reader.rb for rationale).
+      private def safe_utf8(str)
+        return str if str.nil?
+        return str if str.encoding == Encoding::UTF_8 && str.valid_encoding?
+        str.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}")
       end
     end
   end

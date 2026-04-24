@@ -84,6 +84,7 @@ module Clacky
           always_ignored_dirs = Clacky::Utils::FileIgnoreHelper::ALWAYS_IGNORED_DIRS
 
           all_matches = Dir.glob(full_pattern, File::FNM_DOTMATCH)
+                           .map { |p| p.encoding == Encoding::UTF_8 && p.valid_encoding? ? p : p.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}") }
                            .reject { |path| File.directory?(path) }
                            .reject { |path| path.end_with?(".", "..") }
                            .reject do |path|

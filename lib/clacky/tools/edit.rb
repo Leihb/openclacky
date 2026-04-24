@@ -44,7 +44,10 @@ module Clacky
         end
 
         begin
-          content = File.read(path)
+          # Scrub invalid UTF-8 bytes at read time — otherwise editing a file
+          # that contains non-UTF-8 bytes would poison history / error messages
+          # and cause JSON.generate to fail during replay.
+          content = safe_utf8(File.read(path))
 
           # Find matching string using layered strategy (shared with preview)
           match_result = Utils::StringMatcher.find_match(content, old_string)
@@ -126,6 +129,13 @@ module Clacky
 
         replacements = result[:replacements] || result["replacements"] || 1
         "Modified #{replacements} occurrence#{replacements > 1 ? "s" : ""}"
+      end
+
+      # Scrub invalid UTF-8 byte sequences (see file_reader.rb for rationale).
+      private def safe_utf8(str)
+        return str if str.nil?
+        return str if str.encoding == Encoding::UTF_8 && str.valid_encoding?
+        str.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}")
       end
     end
   end

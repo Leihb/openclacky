@@ -358,6 +358,7 @@ module Clacky
           @ui&.show_diff("", new_content, max_lines: 50)
         else
           old_content = File.read(expanded_path)
+          old_content = old_content.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}") unless old_content.encoding == Encoding::UTF_8 && old_content.valid_encoding?
           @ui&.show_diff(old_content, new_content, max_lines: 50)
         end
         nil

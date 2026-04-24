@@ -148,6 +148,71 @@ module Clacky
       end
 
       # ---------------------------------------------------------------------
+      # Internal Ruby API — synchronous capture
+      # ---------------------------------------------------------------------
+      #
+      # Run a shell command and BLOCK until it terminates, returning
+      # [output, exit_code]. Drop-in replacement for Open3.capture2e that
+      # goes through the same PTY + login-shell + Security pipeline used by
+      # the AI-facing tool (so rbenv/mise shims and gem mirrors work).
+      #
+      # Why this exists separately from #execute:
+      #
+      #   `execute` may return early with a :session_id the moment output
+      #   goes idle for DEFAULT_IDLE_MS (3s) — this is intentional for AI
+      #   agents (they can inspect progress, inject input, decide to kill).
+      #   Ruby callers like the HTTP server's upgrade flow only care about
+      #   "did it finish, with what output, what exit code" — they need
+      #   synchronous semantics. Previously each caller re-implemented the
+      #   poll loop (and 0.9.36's run_shell forgot to, causing the upgrade
+      #   failure bug).
+      #
+      # NOT exposed in tool_parameters — AI agents cannot invoke this.
+      #
+      # @param command [String]   the shell command to run
+      # @param timeout [Integer]  per-poll timeout AND the basis for the
+      #                           overall deadline (deadline = timeout + 60s)
+      # @param cwd     [String]   optional working directory
+      # @param env     [Hash]     optional env overrides
+      # @return [Array(String, Integer|nil)] [output, exit_code].
+      #         exit_code is nil only if the overall deadline was hit and
+      #         the session had to be force-killed.
+      def self.run_sync(command, timeout: 120, cwd: nil, env: nil)
+        terminal = new
+        result   = terminal.execute(
+          command: command,
+          timeout: timeout,
+          cwd:     cwd,
+          env:     env,
+        )
+        output   = result[:output].to_s
+
+        # Hard deadline in wall-clock terms — a genuinely stuck command
+        # must terminate. Each individual poll still carries `timeout`.
+        deadline = Time.now + timeout.to_i + 60
+
+        while result[:exit_code].nil? && result[:session_id] && Time.now < deadline
+          result = terminal.execute(
+            session_id: result[:session_id],
+            input:      "",
+            timeout:    timeout,
+          )
+          output += result[:output].to_s
+        end
+
+        # Deadline exceeded — best-effort cleanup so the session doesn't leak.
+        if result[:exit_code].nil? && result[:session_id]
+          begin
+            terminal.execute(session_id: result[:session_id], kill: true)
+          rescue StandardError
+            # swallow — cleanup is best-effort
+          end
+        end
+
+        [output, result[:exit_code]]
+      end
+
+      # ---------------------------------------------------------------------
       # 1) Start a new command
       # ---------------------------------------------------------------------
       private def do_start(command, cwd:, env:, timeout:, background:, idle_ms: DEFAULT_IDLE_MS)

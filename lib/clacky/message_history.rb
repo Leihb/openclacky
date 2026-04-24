@@ -34,7 +34,7 @@ module Clacky
       if message[:role] == "user"
         drop_dangling_tool_calls!
       end
-      @messages << message
+      @messages << deep_sanitize_utf8(message)
       self
     end
 
@@ -53,7 +53,7 @@ module Clacky
 
     # Replace the entire message list (used by compression rebuild).
     def replace_all(new_messages)
-      @messages = new_messages.dup
+      @messages = new_messages.map { |m| deep_sanitize_utf8(m) }
       self
     end
 
@@ -228,6 +228,47 @@ module Clacky
 
     private def strip_internal_fields(message)
       message.reject { |k, _| INTERNAL_FIELDS.include?(k) }
+    end
+
+    # Defense-in-depth: recursively scrub invalid UTF-8 bytes from every String
+    # stored in the message tree. Even if a tool forgets to scrub its output,
+    # nothing poisoned will ever reach session persistence or JSON.generate.
+    #
+    # Fast path: if the tree contains only valid UTF-8 strings, the original
+    # object is returned unchanged — preserving object identity for callers
+    # that rely on `equal?` (e.g. rollback_before).
+    # Slow path: any invalid byte triggers a rebuild with scrubbed strings
+    # (invalid bytes → U+FFFD).
+    private def deep_sanitize_utf8(obj)
+      case obj
+      when String
+        return obj if obj.encoding == Encoding::UTF_8 && obj.valid_encoding?
+        obj.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}")
+      when Hash
+        return obj unless contains_dirty_utf8?(obj)
+        obj.transform_values { |v| deep_sanitize_utf8(v) }
+      when Array
+        return obj unless contains_dirty_utf8?(obj)
+        obj.map { |v| deep_sanitize_utf8(v) }
+      else
+        obj
+      end
+    end
+
+    # Cheap recursive check: does this subtree contain any invalid-UTF-8 string?
+    # Short-circuits on first offender. Keeps the common case (all valid UTF-8)
+    # allocation-free.
+    private def contains_dirty_utf8?(obj)
+      case obj
+      when String
+        !(obj.encoding == Encoding::UTF_8 && obj.valid_encoding?)
+      when Hash
+        obj.any? { |_, v| contains_dirty_utf8?(v) }
+      when Array
+        obj.any? { |v| contains_dirty_utf8?(v) }
+      else
+        false
+      end
     end
   end
 end
