@@ -234,6 +234,81 @@ RSpec.describe Clacky::AgentConfig do
     end
   end
 
+  describe "#current_model_supports?" do
+    it "returns true when no models are configured (conservative default)" do
+      config = described_class.new(models: [])
+      expect(config.current_model_supports?(:vision)).to be true
+    end
+
+    it "returns true when current model has no base_url" do
+      # Defensive: a partial/invalid model entry shouldn't trigger a false-negative.
+      config = described_class.new(models: [{ "model" => "m-1" }])
+      expect(config.current_model_supports?(:vision)).to be true
+    end
+
+    it "returns true for a custom (non-preset) base_url" do
+      # Self-hosted or unknown endpoint: assume capabilities supported; the
+      # user knows their stack better than our preset list.
+      config = described_class.new(
+        models: [{ "api_key" => "x", "base_url" => "https://my-proxy.example/v1", "model" => "anything" }]
+      )
+      expect(config.current_model_supports?(:vision)).to be true
+    end
+
+    it "returns false for MiniMax (provider-level vision:false)" do
+      config = described_class.new(
+        models: [{ "api_key" => "x", "base_url" => "https://api.minimaxi.com/v1", "model" => "MiniMax-M2.7" }]
+      )
+      expect(config.current_model_supports?(:vision)).to be false
+    end
+
+    it "returns true for openclacky + Claude model" do
+      config = described_class.new(
+        models: [{ "api_key" => "x", "base_url" => "https://api.openclacky.com", "model" => "abs-claude-opus-4-7" }]
+      )
+      expect(config.current_model_supports?(:vision)).to be true
+    end
+
+    it "returns false for openclacky + DeepSeek model (model-level override)" do
+      config = described_class.new(
+        models: [{ "api_key" => "x", "base_url" => "https://api.openclacky.com", "model" => "dsk-deepseek-v4-pro" }]
+      )
+      expect(config.current_model_supports?(:vision)).to be false
+    end
+
+    it "tracks the currently-active model when multiple are configured" do
+      # Switching the current model must immediately change the answer —
+      # no caching, no stale state.
+      config = described_class.new(
+        models: [
+          { "id" => "a", "api_key" => "x", "base_url" => "https://api.openclacky.com", "model" => "abs-claude-opus-4-7" },
+          { "id" => "b", "api_key" => "x", "base_url" => "https://api.openclacky.com", "model" => "dsk-deepseek-v4-pro" }
+        ]
+      )
+
+      config.instance_variable_set(:@current_model_id, "a")
+      expect(config.current_model_supports?(:vision)).to be true
+
+      config.instance_variable_set(:@current_model_id, "b")
+      expect(config.current_model_supports?(:vision)).to be false
+    end
+
+    it "accepts either Symbol or String capability names" do
+      config = described_class.new(
+        models: [{ "api_key" => "x", "base_url" => "https://api.minimaxi.com/v1", "model" => "MiniMax-M2.7" }]
+      )
+      expect(config.current_model_supports?(:vision)).to be false
+      expect(config.current_model_supports?("vision")).to be false
+    end
+
+    it "returns true for an unknown capability name (conservative default)" do
+      config = described_class.new(
+        models: [{ "api_key" => "x", "base_url" => "https://api.minimaxi.com/v1", "model" => "MiniMax-M2.7" }]
+      )
+      expect(config.current_model_supports?(:some_future_cap)).to be true
+    end
+  end
+
   describe "#get_model" do
     let(:config) do
       described_class.new(

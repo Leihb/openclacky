@@ -655,6 +655,32 @@ module Clacky
       m
     end
 
+    # Query whether the *current* model supports a given capability.
+    #
+    # This is the single entry-point callers (Agent, downgrade pipeline, UI)
+    # should use instead of poking Providers directly. Benefits:
+    #   - Always reflects the current model — switching with `/model` takes
+    #     effect immediately, no caching, no stale warnings.
+    #   - Handles the "custom base_url / unknown provider" case with a
+    #     conservative default (assume supported), so self-hosted or new
+    #     providers don't get accidentally downgraded.
+    #
+    # @param capability [String, Symbol] capability name (e.g. :vision)
+    # @return [Boolean] true if supported (or unknown); false only when the
+    #   preset explicitly declares the capability as unsupported.
+    def current_model_supports?(capability)
+      m = current_model
+      # No model configured yet → nothing to judge; assume supported so we
+      # don't preemptively downgrade before a model is even picked.
+      return true unless m && m["base_url"]
+
+      provider_id = Clacky::Providers.find_by_base_url(m["base_url"])
+      # Custom / self-hosted base_url not in our preset list → be conservative.
+      return true unless provider_id
+
+      Clacky::Providers.supports?(provider_id, capability, model_name: m["model"])
+    end
+
     # Set a model's type (default or lite)
     # Ensures only one model has each type
     # @param index [Integer] the model index

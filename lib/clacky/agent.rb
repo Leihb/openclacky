@@ -265,9 +265,15 @@ module Clacky
         path = f[:path] || f["path"]
         name = f[:name] || f["name"]
         next f unless path && File.exist?(path.to_s)
+        # Preserve the downgrade_reason tag across the remap (process_path
+        # returns a fresh FileRef that doesn't know about it). Without this,
+        # the file_prompt builder can't emit the "not supported by model" /
+        # "too large" note for downgraded images.
+        downgrade_reason = f[:downgrade_reason] || f["downgrade_reason"]
         ref = Utils::FileProcessor.process_path(path, name: name)
         { name: ref.name, type: ref.type.to_s, path: ref.original_path,
-          preview_path: ref.preview_path, parse_error: ref.parse_error, parser_path: ref.parser_path }
+          preview_path: ref.preview_path, parse_error: ref.parse_error, parser_path: ref.parser_path,
+          downgrade_reason: downgrade_reason }
       end
 
       # Build display_files for replay: lightweight metadata so the UI can reconstruct
@@ -295,13 +301,14 @@ module Clacky
 
       unless all_meta_files.empty?
         file_prompt = all_meta_files.filter_map do |f|
-          name         = f[:name]         || f["name"]
-          type         = f[:type]         || f["type"]
-          path         = f[:path]         || f["path"]
-          preview_path = f[:preview_path] || f["preview_path"]
-          size_bytes   = f[:size_bytes]   || f["size_bytes"]
-          parse_error  = f[:parse_error]  || f["parse_error"]
-          parser_path  = f[:parser_path]  || f["parser_path"]
+          name             = f[:name]             || f["name"]
+          type             = f[:type]             || f["type"]
+          path             = f[:path]             || f["path"]
+          preview_path     = f[:preview_path]     || f["preview_path"]
+          size_bytes       = f[:size_bytes]       || f["size_bytes"]
+          parse_error      = f[:parse_error]      || f["parse_error"]
+          parser_path      = f[:parser_path]      || f["parser_path"]
+          downgrade_reason = f[:downgrade_reason] || f["downgrade_reason"]
 
           next unless name
 
@@ -309,6 +316,13 @@ module Clacky
           lines << "Size: #{format_size(size_bytes)}" if size_bytes
           lines << "Original: #{path}" if path
           lines << "Preview (Markdown): #{preview_path}" if preview_path
+
+          # Inline note explaining why an image was *not* sent as vision
+          # content. Colocated with the file info (not in system prompt) so
+          # it reflects the exact reason for *this* upload under *this*
+          # model — switching models later won't leave stale warnings.
+          note = downgrade_note_for(downgrade_reason)
+          lines << "Note: #{note}" if note
 
           # Parser failed — instruct LLM to fix and re-run
           if preview_path.nil? && parse_error
@@ -1209,12 +1223,29 @@ module Clacky
     # Resolve image files to vision data_urls.
     # Files with data_url: use as-is (already compressed by frontend or adapter).
     # Files with path: convert to data_url via FileProcessor.
-    # Oversized images (> MAX_IMAGE_BYTES) are downgraded to disk file refs.
-    # @return [Array<String>, Array<Hash>] [vision_urls, downgraded_disk_files]
+    #
+    # Downgrade to disk file refs (with a `downgrade_reason` tag) when:
+    #   - :provider_no_vision — current model does not support vision input
+    #     (e.g. MiniMax, Kimi, DeepSeek, or openclacky's DeepSeek sidecar).
+    #     The downgrade is capability-driven and reflects the *current* model;
+    #     switching models takes effect on the next run with no cached state.
+    #   - :too_large — base64 payload exceeds MAX_IMAGE_BYTES. Downgrading here
+    #     keeps a hot context window from blowing up on e.g. a 20MB screenshot.
+    #
+    # Both reasons share the same downgrade path; `file_prompt` will later
+    # emit a `Note:` line on the file entry explaining why the image isn't
+    # inline, so the LLM has colocated context (no system prompt pollution).
+    #
+    # @return [Array<Hash>, Array<Hash>] [vision_images, downgraded_disk_files]
     private def resolve_vision_images(image_files)
       require "base64"
       max_bytes = Utils::FileProcessor::MAX_IMAGE_BYTES
-      vision_images = []  # Array of { url:, name:, size_bytes: }
+      # Capability check once per run — current_model_supports? is cheap and
+      # delegates to Providers.supports? under the hood, always reflecting
+      # the current model (no stale state on `/model` switch).
+      vision_supported = @config.current_model_supports?(:vision)
+
+      vision_images = []  # Array of { url:, name:, size_bytes:, path: }
       downgraded    = []
 
       image_files.each do |f|
@@ -1228,8 +1259,10 @@ module Clacky
           byte_size = (b64_data.bytesize * 3) / 4
           raw       = Base64.decode64(b64_data)
           file_ref  = Utils::FileProcessor.save_image_to_disk(body: raw, mime_type: mime, filename: name)
-          if byte_size > max_bytes
-            downgraded << { name: name, path: file_ref.original_path, type: "image", mime_type: mime, size_bytes: byte_size }
+          reason    = downgrade_reason_for(vision_supported, byte_size, max_bytes)
+          if reason
+            downgraded << { name: name, path: file_ref.original_path, type: "image",
+                            mime_type: mime, size_bytes: byte_size, downgrade_reason: reason }
           else
             vision_images << { url: data_url, name: name, size_bytes: byte_size, path: file_ref.original_path }
           end
@@ -1238,8 +1271,10 @@ module Clacky
             data_url_from_path = Utils::FileProcessor.image_path_to_data_url(path)
             b64_data  = data_url_from_path.split(",", 2).last.to_s
             byte_size = (b64_data.bytesize * 3) / 4
-            if byte_size > max_bytes
-              downgraded << { name: name, path: path, type: "image", mime_type: mime, size_bytes: byte_size }
+            reason    = downgrade_reason_for(vision_supported, byte_size, max_bytes)
+            if reason
+              downgraded << { name: name, path: path, type: "image",
+                              mime_type: mime, size_bytes: byte_size, downgrade_reason: reason }
             else
               vision_images << { url: data_url_from_path, name: name, size_bytes: byte_size, path: path }
             end
@@ -1250,6 +1285,30 @@ module Clacky
       end
 
       [vision_images, downgraded]
+    end
+
+    # Decide whether an image must be downgraded to a disk ref, and if so why.
+    # Precedence: provider capability is checked first — a text-only model
+    # can't use the image at any size, so there's no point re-checking size.
+    # @return [Symbol, nil] :provider_no_vision | :too_large | nil (keep inline)
+    private def downgrade_reason_for(vision_supported, byte_size, max_bytes)
+      return :provider_no_vision unless vision_supported
+      return :too_large if byte_size > max_bytes
+      nil
+    end
+
+    # Human-readable note for a downgrade reason, embedded next to the file
+    # entry in the file_prompt. Kept intentionally terse and factual; the LLM
+    # will see this alongside the file's name/type/path so it can tell the
+    # user honestly why it can't see the image.
+    # @return [String, nil] note text, or nil for no note
+    private def downgrade_note_for(reason)
+      case reason&.to_sym
+      when :provider_no_vision
+        "The current model does not support vision input. Image content is not visible to the model; suggest switching to a vision-capable model if the user needs image analysis."
+      when :too_large
+        "Image was too large for inline delivery and has been saved to disk. Read it with a vision-capable tool/model if needed."
+      end
     end
 
     # Build user message content for LLM.

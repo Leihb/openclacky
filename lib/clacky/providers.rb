@@ -291,6 +291,52 @@ module Clacky
           normalized == preset_base || normalized.start_with?("#{preset_base}/")
         end&.first
       end
+
+      # Resolve the capabilities hash for a given provider+model.
+      #
+      # Resolution order (most specific wins):
+      #   1. PRESETS[provider_id]["model_capabilities"][model_name] — per-model
+      #      override, used when a single provider hosts a mix of capabilities
+      #      (e.g. openclacky serves both Claude [vision] and DeepSeek [text]).
+      #   2. PRESETS[provider_id]["capabilities"] — provider-wide defaults,
+      #      used when the whole lineup shares the same capabilities.
+      #   3. {} — no declaration; callers get the conservative default (true)
+      #      via `supports?`.
+      #
+      # Returns a plain Hash (always safe to inspect; never nil).
+      # @param provider_id [String] The provider identifier
+      # @param model_name [String, nil] Optional specific model for override lookup
+      # @return [Hash] capabilities mapping (e.g. { "vision" => true })
+      def capabilities(provider_id, model_name: nil)
+        preset = PRESETS[provider_id]
+        return {} unless preset
+
+        provider_caps = preset["capabilities"] || {}
+        return provider_caps.dup unless model_name
+
+        model_caps = preset.dig("model_capabilities", model_name) || {}
+        provider_caps.merge(model_caps)
+      end
+
+      # Check if a provider+model supports a capability.
+      # Unknown provider / missing capability declaration → returns true
+      # (conservative default: assume supported unless we explicitly say otherwise).
+      # This keeps custom base_urls working and avoids over-aggressive downgrades.
+      #
+      # @param provider_id [String] The provider identifier
+      # @param capability [String, Symbol] The capability name (e.g. :vision, "vision")
+      # @param model_name [String, nil] Optional specific model name
+      # @return [Boolean] true unless the preset explicitly says false
+      def supports?(provider_id, capability, model_name: nil)
+        preset = PRESETS[provider_id]
+        return true unless preset
+
+        key = capability.to_s
+        caps = capabilities(provider_id, model_name: model_name)
+        # When the capability is not declared at either level, default to true.
+        return true unless caps.key?(key)
+        caps[key] != false
+      end
     end
   end
 end

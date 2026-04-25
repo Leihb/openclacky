@@ -1,0 +1,103 @@
+# frozen_string_literal: true
+
+RSpec.describe Clacky::Providers do
+  describe ".capabilities" do
+    it "returns {} for an unknown provider" do
+      expect(described_class.capabilities("nope-provider")).to eq({})
+    end
+
+    it "returns the provider-level capabilities hash when no model override" do
+      # MiniMax declares vision: false at the provider level.
+      expect(described_class.capabilities("minimax")).to eq("vision" => false)
+    end
+
+    it "merges model-level override on top of provider-level defaults" do
+      # openclacky: provider default vision:true, but DeepSeek models override to false.
+      expect(described_class.capabilities("openclacky", model_name: "dsk-deepseek-v4-pro"))
+        .to eq("vision" => false)
+      expect(described_class.capabilities("openclacky", model_name: "abs-claude-opus-4-7"))
+        .to eq("vision" => true)
+    end
+
+    it "falls back to provider-level defaults for unknown model_name" do
+      # Unknown model under a known provider — use provider-level defaults.
+      expect(described_class.capabilities("minimax", model_name: "ghost-model"))
+        .to eq("vision" => false)
+    end
+
+    it "returns a fresh hash so callers cannot mutate internal state" do
+      caps = described_class.capabilities("minimax")
+      caps["vision"] = true
+      # Next call should still report the original value
+      expect(described_class.capabilities("minimax")).to eq("vision" => false)
+    end
+  end
+
+  describe ".supports?" do
+    context "for providers that declare vision: false at provider level" do
+      it "returns false for minimax" do
+        expect(described_class.supports?("minimax", :vision)).to be false
+      end
+
+      it "returns false for kimi" do
+        expect(described_class.supports?("kimi", :vision)).to be false
+      end
+
+      it "returns false for deepseekv4" do
+        expect(described_class.supports?("deepseekv4", :vision)).to be false
+      end
+    end
+
+    context "for providers that declare vision: true at provider level" do
+      it "returns true for openclacky (Claude model)" do
+        expect(described_class.supports?("openclacky", :vision,
+                                         model_name: "abs-claude-opus-4-7")).to be true
+      end
+
+      it "returns true for openclacky without a model_name (provider-wide default)" do
+        expect(described_class.supports?("openclacky", :vision)).to be true
+      end
+
+      it "returns true for clackyai-sea (Claude model)" do
+        expect(described_class.supports?("clackyai-sea", :vision,
+                                         model_name: "abs-claude-sonnet-4-5")).to be true
+      end
+    end
+
+    context "with model-level overrides" do
+      it "returns false for openclacky + DeepSeek models (vision-less sidecar)" do
+        expect(described_class.supports?("openclacky", :vision,
+                                         model_name: "dsk-deepseek-v4-pro")).to be false
+        expect(described_class.supports?("openclacky", :vision,
+                                         model_name: "dsk-deepseek-v4-flash")).to be false
+      end
+
+      it "returns false for clackyai-sea + DeepSeek models" do
+        expect(described_class.supports?("clackyai-sea", :vision,
+                                         model_name: "dsk-deepseek-v4-pro")).to be false
+      end
+    end
+
+    context "conservative default (unknown or undeclared)" do
+      it "returns true for an unknown provider_id" do
+        # Custom base_urls map to nil provider_id; assume capability supported
+        # rather than over-aggressively downgrading.
+        expect(described_class.supports?("nope-provider", :vision)).to be true
+      end
+
+      it "returns true for a provider that does not declare the capability at all" do
+        # anthropic preset has no capabilities block — default to true.
+        expect(described_class.supports?("anthropic", :vision)).to be true
+      end
+
+      it "returns true for a brand new capability name the presets don't know" do
+        expect(described_class.supports?("minimax", :some_future_capability)).to be true
+      end
+    end
+
+    it "accepts capability name as String or Symbol" do
+      expect(described_class.supports?("minimax", "vision")).to be false
+      expect(described_class.supports?("minimax", :vision)).to be false
+    end
+  end
+end
