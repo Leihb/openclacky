@@ -42,7 +42,11 @@ module Clacky
 
         @memory_prompt_injected = true
         @memory_updating = true
-        @ui&.show_progress("Updating long-term memory…")
+        # Hold onto the owned handle so +cleanup_memory_messages+ can
+        # finish it explicitly. This spans two methods, so +with_progress+
+        # (ensure-based) doesn't fit; we must be careful to always call
+        # cleanup_memory_messages (every call site already does).
+        @memory_progress = @ui&.start_progress(message: "Updating long-term memory…", style: :primary)
 
         @history.append({
           role: "user",
@@ -62,7 +66,10 @@ module Clacky
         @history.delete_where { |m| m[:memory_update] }
         @memory_prompt_injected = false
         @memory_updating = false
-        @ui&.show_progress(phase: "done")
+        if @memory_progress
+          @memory_progress.finish
+          @memory_progress = nil
+        end
       end
 
       private def memory_update_enabled?

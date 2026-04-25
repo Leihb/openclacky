@@ -15,11 +15,10 @@ module Clacky
       # Trigger compression during idle time (user-friendly, interruptible)
       # Returns true if compression was performed, false otherwise
       def trigger_idle_compression
-        # Check if we should compress (force mode)
+        # Check if we should compress (force mode) BEFORE opening any UI, so
+        # "skipped" doesn't flash a spinner on screen.
         compression_context = compress_messages_if_needed(force: true)
-        @ui&.show_progress("Idle detected. Compressing conversation to optimize costs...", progress_type: "idle_compress", phase: "active")
         if compression_context.nil?
-          @ui&.show_progress("Idle skipped.", progress_type: "idle_compress", phase: "done")
           Clacky::Logger.info(
             "Idle compression skipped",
             enable_compression: @config.enable_compression,
@@ -31,23 +30,44 @@ module Clacky
           return false
         end
 
-        # Insert compression message
+        # Own the progress indicator through +with_progress+: the ensure
+        # block guarantees the spinner/ticker is released even when the
+        # user interrupts mid-way (AgentInterrupted from current thread)
+        # or the LLM call fails. No more orphan gray tickers.
+        #
+        # When @ui is nil (tests / headless) we still need to run the
+        # compression work — safe-navigation with a block would silently
+        # skip it, so branch explicitly.
         compression_message = compression_context[:compression_message]
         @history.append(compression_message)
 
-        begin
-          # Execute compression using shared LLM call logic
-          response = call_llm
-          handle_compression_response(response, compression_context)
-          true
-        rescue Clacky::AgentInterrupted => e
-          @ui&.log("Idle compression canceled: #{e.message}", level: :info)
-          @history.rollback_before(compression_message)
-          false
-        rescue => e
-          @ui&.log("Idle compression failed: #{e.message}", level: :error)
-          @history.rollback_before(compression_message)
-          false
+        run_compression = lambda do |handle|
+          begin
+            response = call_llm
+            handle_compression_response(response, compression_context, progress: handle)
+            true
+          rescue Clacky::AgentInterrupted => e
+            @ui&.log("Idle compression canceled: #{e.message}", level: :info)
+            @history.rollback_before(compression_message)
+            false
+          rescue => e
+            @ui&.log("Idle compression failed: #{e.message}", level: :error)
+            @history.rollback_before(compression_message)
+            false
+          end
+        end
+
+        if @ui
+          result = nil
+          @ui.with_progress(
+            message: "Idle detected. Compressing conversation to optimize costs...",
+            style: :quiet
+          ) do |handle|
+            result = run_compression.call(handle)
+          end
+          result
+        else
+          run_compression.call(nil)
         end
       end
 
@@ -117,7 +137,14 @@ module Clacky
       end
 
       # Handle compression response and rebuild message list
-      def handle_compression_response(response, compression_context)
+      # @param response [Hash] LLM response
+      # @param compression_context [Hash] context returned by +compress_messages_if_needed+
+      # @param progress [#finish, nil] Owned progress handle from the caller's
+      #   with_progress block. When provided, the final summary message is
+      #   delivered via +progress.finish(final_message: ...)+ instead of the
+      #   legacy +show_progress(phase: "done")+ — this lets +ensure+ in the
+      #   caller guarantee cleanup even if this method raises mid-way.
+      def handle_compression_response(response, compression_context, progress: nil)
         # Extract compressed content from response
         compressed_content = response[:content]
 
@@ -168,7 +195,14 @@ module Clacky
         # Show compression info (use estimated tokens from rebuilt history)
         compression_summary = "History compressed (~#{compression_context[:original_token_count]} -> ~#{@history.estimate_tokens} tokens, " \
           "level #{compression_context[:compression_level]})"
-        @ui&.show_progress(compression_summary, progress_type: "idle_compress", phase: "done")
+        if progress
+          # Owned-handle path: the caller's ensure block will still call
+          # handle.finish; finishing here with a final_message means that
+          # later finish (with no final_message) is a no-op (idempotent).
+          progress.finish(final_message: compression_summary)
+        else
+          @ui&.show_progress(compression_summary, progress_type: "idle_compress", phase: "done")
+        end
       end
 
       # Get recent messages while preserving tool_calls/tool_results pairs.

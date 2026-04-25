@@ -530,21 +530,33 @@ module Clacky
         @ui&.show_info(
           "Message history compression starting (~#{compression_context[:original_token_count]} tokens, #{compression_context[:original_message_count]} messages) - Level #{compression_context[:compression_level]}"
         )
-        # Take over the progress slot with a compression-specific message.
-        # handle_compression_response will close it with the summary line on
-        # success; on failure the outer ensure below finalizes it.
-        @ui&.show_progress(
-          "Compressing message history...",
-          progress_type: "idle_compress",
-          phase: "active"
-        )
+
         compression_message = compression_context[:compression_message]
         @history.append(compression_message)
         compression_handled = false
+
+        # Open a dedicated quiet-style handle for the compression work.
+        # This sits on top of the outer thinking progress (if any); Plan B
+        # semantics detach the outer spinner until we finish here. On any
+        # exception the ensure block in with_progress guarantees the
+        # handle is released — no more orphan gray ticker colliding with
+        # a yellow ticker (the original flicker bug).
+        #
+        # NOTE: safe-navigation (+&.+) with blocks silently skips the
+        # block when the receiver is nil. We need the compression work to
+        # run even when @ui is nil (e.g. in tests), so branch explicitly.
         begin
-          response = call_llm
-          handle_compression_response(response, compression_context)
-          compression_handled = true
+          if @ui
+            @ui.with_progress(message: "Compressing message history...", style: :quiet) do |handle|
+              response = call_llm
+              handle_compression_response(response, compression_context, progress: handle)
+              compression_handled = true
+            end
+          else
+            response = call_llm
+            handle_compression_response(response, compression_context)
+            compression_handled = true
+          end
         ensure
           # If interrupted or failed, roll back the speculative compression message
           # so it doesn't pollute future conversation turns.
@@ -556,8 +568,6 @@ module Clacky
             # (with the user's new message as the last entry), producing consecutive user messages
             # that confuse the LLM into echoing compression instructions.
             @compression_level -= 1
-            # Close the compression progress slot so the spinner does not linger.
-            @ui&.show_progress(phase: "done")
           end
         end
         return nil
@@ -758,21 +768,17 @@ module Clacky
           args[:working_dir] = @working_dir if @working_dir
 
           # Show progress immediately for every tool execution so the user
-          # always knows the agent is working. (Previously we deferred this by
-          # 2 seconds to avoid flicker in the legacy CLI TUI; that trade-off is
-          # no longer desirable now that progress is a first-class UI state in
-          # the Web UI and structured JSON UIs.)
-          progress_shown = false
+          # always knows the agent is working. Using +with_progress+ wraps
+          # the execution in an +ensure+ block so the spinner/ticker is
+          # released even if the tool raises or the user interrupts.
+          result = nil
           if @ui
             progress_message = build_tool_progress_message(call[:name], args)
-            @ui.show_progress(progress_message, prefix_newline: false)
-            progress_shown = true
-          end
-
-          begin
+            @ui.with_progress(message: progress_message, style: :quiet) do
+              result = tool.execute(**args)
+            end
+          else
             result = tool.execute(**args)
-          ensure
-            @ui&.show_progress(phase: "done") if progress_shown
           end
 
           # Track modified files for Time Machine snapshots

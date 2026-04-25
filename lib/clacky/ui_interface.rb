@@ -36,6 +36,64 @@ module Clacky
     # metadata: extensible hash (e.g., {attempt: 3, total: 10} for retries)
     def show_progress(message = nil, prefix_newline: true, progress_type: "thinking", phase: "active", metadata: {}); end
 
+    # === Progress (v2: owned handles) ===
+    #
+    # Start a new progress indicator and return an owned handle. The caller
+    # is responsible for finishing it — use +with_progress+ (below) whenever
+    # possible to get ensure-based auto-close.
+    #
+    # @param message [String, nil] Initial progress message (nil picks a random thinking verb).
+    # @param style [Symbol] :primary (foreground, yellow, bumps sessionbar)
+    #   or :quiet (background, gray, no sessionbar change).
+    # @return [#update, #finish, #cancel] a ProgressHandle-like object.
+    #
+    # Default implementation degrades gracefully to the old show_progress API
+    # so UI implementations that haven't migrated still behave correctly.
+    def start_progress(message: nil, style: :primary)
+      progress_type = style == :primary ? "thinking" : "idle_compress"
+      show_progress(message, progress_type: progress_type, phase: "active")
+      LegacyProgressHandleAdapter.new(self, progress_type: progress_type)
+    end
+
+    # Run the given block with a progress indicator active. The handle is
+    # always finished in an +ensure+ block — exceptions (including
+    # AgentInterrupted) cannot leave the ticker or entry orphaned.
+    #
+    # @yieldparam handle the progress handle
+    def with_progress(message: nil, style: :primary)
+      handle = start_progress(message: message, style: style)
+      begin
+        yield handle
+      ensure
+        handle.finish
+      end
+    end
+
+    # Minimal adapter that lets UIs without a native ProgressHandle still
+    # participate in the new +with_progress+ API by delegating to the old
+    # +show_progress(phase: ...)+ contract. UI2::UIController overrides
+    # +start_progress+ directly with a native ProgressHandle, so this
+    # adapter is only used by plain/json/web/channel UIs.
+    class LegacyProgressHandleAdapter
+      def initialize(ui, progress_type:)
+        @ui = ui
+        @progress_type = progress_type
+        @closed = false
+      end
+
+      def update(message: nil, metadata: nil)
+        return if @closed
+        @ui.show_progress(message, progress_type: @progress_type, phase: "active", metadata: metadata || {})
+      end
+
+      def finish(final_message: nil)
+        return if @closed
+        @closed = true
+        @ui.show_progress(final_message, progress_type: @progress_type, phase: "done")
+      end
+      alias_method :cancel, :finish
+    end
+
     # === State updates ===
     def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil); end
     def update_todos(todos); end

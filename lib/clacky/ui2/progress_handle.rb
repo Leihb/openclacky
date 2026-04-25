@@ -1,0 +1,266 @@
+# frozen_string_literal: true
+
+require "monitor"
+
+module Clacky
+  module UI2
+    # An *owned* progress indicator.
+    #
+    # Why this exists
+    # ---------------
+    # The previous design had a single, globally-shared spinner slot on
+    # UiController (`@progress_id` / `@progress_thread` / `@progress_message`
+    # / `@progress_start_time`). Every caller — Agent#run, Agent#think,
+    # LlmCaller retry, idle compression, MemoryUpdater — wrote into the
+    # same slot and hoped to remember to close it. When control flow was
+    # interrupted (user types a new message during idle compression,
+    # AgentInterrupted is raised) a ticker thread would be left running
+    # and a new spinner would reuse the same entry, producing two
+    # concurrent tickers repainting the same line in different colors.
+    #
+    # In the new design each caller owns a ProgressHandle. The handle
+    # encapsulates:
+    #
+    # - its own OutputBuffer entry id (may become nil while another
+    #   handle is on top — see "Stack semantics" below);
+    # - its own ticker thread (exactly one per handle, stopped and
+    #   joined on +finish+);
+    # - its own message, style, start time;
+    #
+    # Owners (UiController) keep a stack of live handles and follow the
+    # protocol below.
+    #
+    # Owner protocol
+    # --------------
+    # An "owner" must respond to three methods:
+    #
+    #   register_progress(handle) -> Integer (entry_id) | nil
+    #     Called exactly once when the handle starts. The owner pushes
+    #     the handle onto its stack, creates an OutputBuffer entry, and
+    #     returns that entry id. Before pushing, the owner may detach
+    #     the previous top-of-stack (Plan B: its entry is removed from
+    #     the buffer until the new top finishes).
+    #
+    #   unregister_progress(handle, final_frame:) -> void
+    #     Called exactly once when the handle finishes. The owner pops
+    #     the handle from its stack, renders +final_frame+ into the
+    #     entry (or removes the entry if +final_frame+ is nil), and may
+    #     reattach the new top-of-stack if one exists.
+    #
+    #   render_frame(handle, frame) -> void
+    #     Called by the ticker (and by +update+) on every paint. The
+    #     owner is responsible for ignoring the call if +handle+ is not
+    #     currently top-of-stack — the handle itself does NOT know about
+    #     the stack.
+    #
+    # Stack semantics (Plan B)
+    # ------------------------
+    # When a new handle is pushed on top of an existing one, the lower
+    # handle's OutputBuffer entry is removed (owner calls
+    # +__detach_entry!+ on it). When the new top finishes, the owner
+    # re-creates an entry for the lower handle and calls
+    # +__reattach_entry!+ with the new id. This keeps the visible output
+    # clean: exactly one progress line on screen at a time, and no
+    # visual "stacking" of frozen progress lines.
+    #
+    # Thread safety
+    # -------------
+    # The handle uses a Monitor (reentrant) to serialize state changes
+    # between the caller thread and the ticker thread. Public methods
+    # (+start+, +update+, +finish+) are safe to call from any thread.
+    class ProgressHandle
+      # Default tick interval (seconds). Matches the old global spinner
+      # cadence. Tests may pass a smaller interval for speed.
+      DEFAULT_TICK_INTERVAL = 0.5
+
+      # Style hint for the renderer. The owner decides what colors to use;
+      # the handle only forwards the hint as part of the frame metadata
+      # so the renderer can pick between e.g. yellow "working" and gray
+      # "quiet" palettes.
+      #
+      #   :primary  — foreground task, should also update sessionbar
+      #   :quiet    — background task (idle compression, retries); does
+      #               NOT bump sessionbar to 'working'
+      VALID_STYLES = %i[primary quiet].freeze
+
+      attr_reader :entry_id, :message, :style, :start_time
+
+      # @param owner [#register_progress, #unregister_progress, #render_frame]
+      # @param message [String] Initial progress message.
+      # @param style [Symbol] :primary or :quiet (see VALID_STYLES).
+      # @param tick_interval [Float] Seconds between auto-renders.
+      # @param clock [#call] Test hook: returns current Time (default Time.now).
+      def initialize(owner:, message:, style: :primary, tick_interval: DEFAULT_TICK_INTERVAL, clock: -> { Time.now })
+        unless VALID_STYLES.include?(style)
+          raise ArgumentError, "unknown progress style: #{style.inspect} (valid: #{VALID_STYLES.inspect})"
+        end
+
+        @owner         = owner
+        @message       = message.to_s
+        @style         = style
+        @tick_interval = tick_interval
+        @clock         = clock
+
+        @entry_id      = nil
+        @start_time    = nil
+        @ticker        = nil
+        @state         = :fresh     # :fresh → :running → :closed
+        @metadata      = {}
+        @monitor       = Monitor.new
+      end
+
+      # Start rendering. Registers with the owner (allocating an entry id
+      # and pushing onto its stack) and launches the ticker thread.
+      #
+      # @return [self]
+      def start
+        @monitor.synchronize do
+          return self unless @state == :fresh
+
+          @state      = :running
+          @start_time = @clock.call
+          @entry_id   = @owner.register_progress(self)
+        end
+
+        # Fire one initial frame synchronously so the user sees the
+        # spinner immediately — no "blank line for half a second" bug.
+        render_now
+
+        start_ticker
+        self
+      end
+
+      # Change the message or metadata mid-flight. Safe to call from any
+      # thread. Triggers an immediate re-render (if top-of-stack; the
+      # owner will ignore the call otherwise).
+      #
+      # @param message [String, nil]
+      # @param metadata [Hash] Renderer-specific extras (e.g. retry counts).
+      def update(message: nil, metadata: nil)
+        @monitor.synchronize do
+          return if @state != :running
+          @message  = message.to_s if message
+          @metadata = metadata     if metadata
+        end
+        render_now
+      end
+
+      # Stop the ticker, render one final frame, and unregister from the
+      # owner. Idempotent — calling twice is a no-op.
+      #
+      # @param final_message [String, nil] Optional override for the last
+      #   frame. If nil, the handle composes "<message>… (<elapsed>s)".
+      def finish(final_message: nil)
+        snapshot = @monitor.synchronize do
+          return if @state != :running
+          @state = :closed
+          { message: final_message || @message, elapsed: elapsed_seconds }
+        end
+
+        stop_ticker
+        final_frame = compose_final_frame(snapshot[:message], snapshot[:elapsed])
+        @owner.unregister_progress(self, final_frame: final_frame)
+      end
+      alias_method :cancel, :finish
+
+      # True while the ticker thread is alive.
+      def ticker_alive?
+        t = @ticker
+        !!(t && t.alive?)
+      end
+
+      # True between +start+ and +finish+.
+      def running?
+        @monitor.synchronize { @state == :running }
+      end
+
+      # Compose the current visual frame. The owner gets this string via
+      # +render_frame+ and is responsible for writing it into the entry.
+      def current_frame
+        @monitor.synchronize do
+          compose_frame(@message, elapsed_seconds, @metadata)
+        end
+      end
+
+      # ---- owner-facing hooks (Plan B stack machinery) ----------------
+      #
+      # These double-underscore methods are part of the owner protocol.
+      # They are NOT meant for general callers.
+
+      # Owner calls this when this handle is being pushed below a new
+      # top. The handle loses its OutputBuffer entry until restored.
+      def __detach_entry!
+        @monitor.synchronize { @entry_id = nil }
+      end
+
+      # Owner calls this when this handle becomes top-of-stack again
+      # (the handle above finished). A fresh entry id is supplied.
+      def __reattach_entry!(new_entry_id)
+        @monitor.synchronize { @entry_id = new_entry_id }
+        render_now
+      end
+
+      # Test hook: force a synchronous render regardless of tick cadence.
+      def __force_render!
+        render_now
+      end
+
+      private def start_ticker
+        @ticker = Thread.new do
+          Thread.current.name = "progress-ticker-#{object_id}"
+          begin
+            loop do
+              sleep @tick_interval
+              break if @monitor.synchronize { @state != :running }
+              render_now
+            end
+          rescue StandardError
+            # Ticker must never crash the process — the caller's main
+            # thread still owns the real control flow.
+          end
+        end
+      end
+
+      private def stop_ticker
+        t = @ticker
+        return unless t
+        # The loop checks @state on each iteration, so once we're
+        # :closed the next wake-up exits cleanly. Give it 1s; if
+        # something is stuck, kill as a last resort.
+        joined = t.join(1.0)
+        t.kill unless joined
+        @ticker = nil
+      end
+
+      private def render_now
+        frame = current_frame
+        @owner.render_frame(self, frame)
+      rescue StandardError
+        # Rendering must never propagate.
+      end
+
+      private def elapsed_seconds
+        return 0 unless @start_time
+        (@clock.call - @start_time).to_i
+      end
+
+      # Live-frame format: "<message>… (<elapsed>s)"
+      # Metadata like { attempt:, total: } is appended as "[i/N]" when
+      # present, to keep renderer-agnostic callers (e.g. tests) readable.
+      private def compose_frame(message, elapsed, metadata)
+        parts = [message.to_s]
+        if metadata && (attempt = metadata[:attempt]) && (total = metadata[:total])
+          parts << "[#{attempt}/#{total}]"
+        end
+        head = parts.join(" ")
+        elapsed > 0 ? "#{head}… (#{elapsed}s)" : "#{head}…"
+      end
+
+      # Final frame (used by +finish+). Same as +compose_frame+ but we
+      # always include elapsed time so the last line carries a duration.
+      private def compose_final_frame(message, elapsed)
+        "#{message}… (#{elapsed}s)"
+      end
+    end
+  end
+end

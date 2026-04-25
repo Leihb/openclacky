@@ -22,6 +22,10 @@ module Clacky
       #   - API key with "clacky-" prefix (Clacky workspace key, proxied via Bedrock Converse)
       #   - Model ID with "abs-" prefix (Clacky AI proxy that speaks Bedrock Converse)
       def self.bedrock_api_key?(api_key, model)
+        # dsk- prefixed models use the OpenAI-compatible /chat/completions endpoint
+        # on the same Clacky proxy, not the Bedrock Converse /model/{model}/converse path.
+        return false if model.to_s.start_with?("dsk-")
+
         api_key.to_s.start_with?("ABSK", "clacky-") || model.to_s.start_with?("abs-")
       end
 

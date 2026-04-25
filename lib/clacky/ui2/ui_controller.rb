@@ -2,6 +2,7 @@
 
 require_relative "layout_manager"
 require_relative "view_renderer"
+require_relative "progress_handle"
 require_relative "components/input_area"
 require_relative "components/todo_area"
 require_relative "components/welcome_banner"
@@ -48,11 +49,15 @@ module Clacky
         @time_machine_callback = nil
         @tasks_count = 0
         @total_cost = 0.0
-        @progress_thread = nil
-        @progress_start_time = nil
-        @progress_message = nil
-        @progress_id = nil  # OutputBuffer id of the current progress entry
         @last_diff_lines = nil
+
+        # ── Progress subsystem (v2: owned handles, stacked) ──────────────
+        # Every progress indicator is an owned ProgressHandle. UiController
+        # is the "owner" in the handle protocol: it keeps a stack of live
+        # handles, only the top of which is rendered. See ProgressHandle
+        # for the full protocol and stack semantics.
+        @progress_stack = []
+        @progress_mutex = Mutex.new
       end
 
       # Start the UI controller
@@ -220,19 +225,19 @@ module Clacky
         append_output(output)
       end
 
-      # Update the progress entry's content. Uses the tracked @progress_id
-      # (set by show_progress) — no "last line" assumption anymore.
-      # @param content [String] Content to update
-      def update_progress_line(content)
-        return unless @progress_id
-        @layout.replace_entry(@progress_id, content)
+      # Update an OutputBuffer entry's content by id.
+      # @param id [Integer, nil] Entry id (no-op if nil or already committed)
+      # @param content [String] New content for the entry
+      private def update_entry(id, content)
+        return unless id
+        @layout.replace_entry(id, content)
       end
 
-      # Clear the progress entry (if any).
-      def clear_progress_line
-        return unless @progress_id
-        @layout.remove_entry(@progress_id)
-        @progress_id = nil
+      # Remove an OutputBuffer entry by id (no-op if nil or committed).
+      # @param id [Integer, nil]
+      private def remove_entry(id)
+        return unless id
+        @layout.remove_entry(id)
       end
 
       # Update todos display
@@ -500,129 +505,215 @@ module Clacky
 
       # Show progress indicator with dynamic elapsed time
       # @param message [String] Progress message (optional, will use random thinking verb if nil)
-      # Show or stop a progress indicator.
+      # ---------------------------------------------------------------------
+      # Progress indicator API (v2)
       #
-      # Rendering strategies by progress_type:
-      #   "thinking"      — spinner in yellow (render_working), session bar → 'working' (default)
-      #   "retrying"      — spinner in gray (render_progress), no session bar change;
-      #                     shows "attempt/total" from metadata: { attempt: N, total: M }
-      #   "idle_compress" — same as "retrying"; background work the user need not watch closely
+      # The preferred public API is +start_progress+ / +with_progress+, which
+      # returns a ProgressHandle the caller owns. Use +with_progress+ whenever
+      # possible — it uses +ensure+ to guarantee cleanup even on exceptions
+      # (e.g. AgentInterrupted during idle compression).
       #
-      # phase:
-      #   "active" — start/update the progress indicator (default)
-      #   "done"   — stop progress; auto-appends elapsed time to the final line
-      #
-      # @param message [String, nil] Progress message (nil uses a random thinking verb for "thinking")
-      # @param prefix_newline [Boolean] Prepend blank line before new progress line (default: true)
-      # @param progress_type [String] "thinking" | "retrying" | "idle_compress"
-      # @param phase [String] "active" | "done"
-      # @param metadata [Hash] { attempt: N, total: M } for "retrying" type
-      def show_progress(message = nil, prefix_newline: true, progress_type: "thinking", phase: "active", metadata: {})
-        # ── phase "done": stop progress and render final state ──────────────────────────
-        if phase.to_s == "done"
-          elapsed_time  = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
-          saved_message = @progress_message
+      # The legacy +show_progress(message, phase:, ...)+ method is kept as a
+      # thin shim for existing call sites that haven't been migrated yet.
+      # ---------------------------------------------------------------------
 
-          stop_progress_thread
-          @stdout_lines = nil
+      # Start a new progress indicator and return its owned handle.
+      #
+      # @param message [String] Initial progress message.
+      # @param style [Symbol] :primary (foreground, yellow, bumps sessionbar)
+      #   or :quiet (background, gray, no sessionbar change).
+      # @return [Clacky::UI2::ProgressHandle]
+      def start_progress(message: nil, style: :primary)
+        display = (message.nil? || message.to_s.strip.empty?) ? Clacky::THINKING_VERBS.sample : message.to_s
+        ProgressHandle.new(owner: self, message: display, style: style).start
+      end
 
-          # Prefer caller-supplied message; fall back to elapsed-time summary
-          final_msg = if message && !message.to_s.strip.empty?
-            message.to_s
-          elsif saved_message && elapsed_time > 0
-            "#{saved_message}… (#{elapsed_time}s)"
+      # Run the given block with a progress indicator active. The handle is
+      # always finished in an +ensure+ block, so exceptions (including
+      # Thread#raise) cannot leave the ticker or entry orphaned.
+      #
+      # @yieldparam handle [Clacky::UI2::ProgressHandle]
+      def with_progress(message: nil, style: :primary)
+        handle = start_progress(message: message, style: style)
+        begin
+          yield handle
+        ensure
+          handle.finish
+        end
+      end
+
+      # Returns true if any progress indicator is currently active.
+      def progress_active?
+        @progress_mutex.synchronize { !@progress_stack.empty? }
+      end
+
+      # Finish every active progress handle, top to bottom. Used by the
+      # interrupt path (Ctrl+C) so a single keypress guarantees the UI is
+      # quiescent regardless of how many nested/background progresses are
+      # running.
+      def interrupt_all_progress
+        # Snapshot outside the handle's finish() (which also grabs the
+        # mutex via unregister_progress) to avoid re-entrant lock issues.
+        handles = @progress_mutex.synchronize { @progress_stack.dup }
+        # Finish from top (newest) to bottom (oldest) so each top is the
+        # one currently rendering when it finishes.
+        handles.reverse_each(&:finish)
+        # Also drop legacy-shim handle registry so a subsequent
+        # show_progress(phase: "done") from unmigrated callers is a no-op.
+        @legacy_progress_handles&.clear
+      end
+
+      # ----- Owner protocol for ProgressHandle ----------------------------
+      #
+      # These three methods implement the contract described in
+      # ProgressHandle's class documentation. They are part of the public
+      # API only for ProgressHandle — external callers should use
+      # +start_progress+ / +with_progress+ instead.
+
+      # Called by ProgressHandle#start.
+      def register_progress(handle)
+        @progress_mutex.synchronize do
+          prev_top = @progress_stack.last
+          if prev_top
+            # Plan B: the lower handle loses its OutputBuffer entry until
+            # the new top finishes. We remove its on-screen line now and
+            # tell it to forget its id; we'll allocate a new id on restore.
+            remove_entry(prev_top.entry_id)
+            prev_top.__detach_entry!
           end
 
-          if final_msg
-            update_progress_line(@renderer.render_progress(final_msg))
-            # Release the id — the final summary line now lives on as a
-            # normal output entry; subsequent output must not touch it.
-            @progress_id = nil
+          @progress_stack.push(handle)
+          entry_id = append_output(render_for(handle))
+          update_sessionbar(status: 'working') if handle.style == :primary
+          entry_id
+        end
+      end
+
+      # Called by ProgressHandle#finish.
+      def unregister_progress(handle, final_frame:)
+        @progress_mutex.synchronize do
+          # If this handle still holds its entry (it's currently top), we
+          # render one last frame there and release the id. If it was
+          # previously detached (someone above is still active), its entry
+          # is already gone and the final_frame is simply dropped.
+          if handle.entry_id
+            if final_frame && !final_frame.to_s.strip.empty?
+              update_entry(handle.entry_id, @renderer.render_progress(final_frame))
+            else
+              remove_entry(handle.entry_id)
+            end
+          end
+
+          @progress_stack.delete(handle)
+
+          # Restore the new top, if any: allocate a fresh entry and let it
+          # resume rendering from where it left off.
+          if (restored = @progress_stack.last)
+            new_id = append_output(render_for(restored))
+            restored.__reattach_entry!(new_id)
           else
-            clear_progress_line
+            # No more progress handles — clear the "working" sessionbar.
+            # We only flip to idle if the handle that just finished was
+            # the one that brought us to working (style :primary). A quiet
+            # handle finishing never touches the sessionbar.
+            update_sessionbar(status: 'idle') if handle.style == :primary
           end
+        end
+      end
+
+      # Called by ProgressHandle's ticker and +update+. Writes +frame+ into
+      # the handle's entry iff it is currently top-of-stack. Non-top
+      # handles silently do nothing (their entry was detached in
+      # +register_progress+).
+      def render_frame(handle, frame)
+        @progress_mutex.synchronize do
+          return unless @progress_stack.last == handle
+          return unless handle.entry_id
+
+          has_output = @stdout_lines && !@stdout_lines.empty?
+          suffix = has_output ?
+            " (Ctrl+C to interrupt · Ctrl+O to view output)" :
+            " (Ctrl+C to interrupt)"
+          decorated = "#{frame}#{suffix}"
+
+          painted = handle.style == :primary ?
+            @renderer.render_working(decorated) :
+            @renderer.render_progress(decorated)
+          update_entry(handle.entry_id, painted)
+        end
+      end
+
+      # Render the very first frame of +handle+ (used when registering or
+      # restoring). Mirrors +render_frame+'s formatting minus the implicit
+      # elapsed-time tick (handle hasn't ticked yet).
+      private def render_for(handle)
+        frame = handle.current_frame
+        has_output = @stdout_lines && !@stdout_lines.empty?
+        suffix = has_output ?
+          " (Ctrl+C to interrupt · Ctrl+O to view output)" :
+          " (Ctrl+C to interrupt)"
+        decorated = "#{frame}#{suffix}"
+        handle.style == :primary ?
+          @renderer.render_working(decorated) :
+          @renderer.render_progress(decorated)
+      end
+
+      # ---------------------------------------------------------------------
+      # Legacy shim: show_progress(message, phase:, progress_type:, ...)
+      #
+      # This method preserves the pre-refactor API so existing call sites
+      # (Agent#run, Agent#think, LlmCaller retry, trigger_idle_compression,
+      # MemoryUpdater) keep working until they're migrated to the owned-
+      # handle API.
+      #
+      # Each progress_type owns its own handle slot so two concurrent
+      # background flows (e.g. idle compression + thinking) can coexist
+      # without stomping on each other — exactly the race that caused the
+      # yellow/gray flicker bug.
+      # ---------------------------------------------------------------------
+      def show_progress(message = nil, prefix_newline: true, progress_type: "thinking", phase: "active", metadata: {})
+        _ = prefix_newline # ignored in v2; layout is not the caller's concern
+
+        type = progress_type.to_s
+        style = %w[retrying idle_compress].include?(type) ? :quiet : :primary
+
+        @legacy_progress_handles ||= {}
+
+        if phase.to_s == "done"
+          handle = @legacy_progress_handles.delete(type)
+          handle&.finish(final_message: message)
           return
         end
 
-        # ── "active": start or update spinner ───────────────────────────────────────────
-        # "Idempotent re-entry" case: a progress slot is already live AND the
-        # caller didn't specify anything meaningful (no message, no metadata,
-        # same progress_type). This happens by design — Agent#run emits
-        # show_progress eagerly for fast feedback, then call_llm emits it
-        # again before the actual API call. We must NOT reset the verb /
-        # elapsed-time / ticker in that case, otherwise the user sees the
-        # message hop randomly (Percolating… → Pondering…) and the counter
-        # restart from 0s. Just return — the existing ticker keeps running.
-        is_bare_reentry = message.nil? &&
-                          metadata.empty? &&
-                          progress_type.to_s == "thinking" &&
-                          @progress_id &&
-                          @layout.live_entry?(@progress_id) &&
-                          @progress_thread&.alive?
-        return if is_bare_reentry
+        # "active" phase — start a new handle or update the existing one.
+        existing = @legacy_progress_handles[type]
+        if existing&.running?
+          # Bare re-entry: no new info → just leave the existing spinner alone.
+          # This preserves the long-standing "Agent#run and Agent#think both
+          # call show_progress for fast feedback" idiom.
+          return if message.nil? && metadata.empty?
 
-        stop_progress_thread
+          attempt = metadata[:attempt]
+          total   = metadata[:total]
+          suffix  = (attempt && total) ? " (#{attempt}/#{total})" : ""
+          existing.update(message: "#{message || existing.message}#{suffix}", metadata: metadata)
+          return
+        end
 
-        # "thinking" updates session bar; "retrying"/"idle_compress" are background — leave it alone
-        update_sessionbar(status: 'working') if progress_type.to_s == "thinking"
-
-        # Build display message; "retrying" appends attempt/total from metadata
         attempt = metadata[:attempt]
         total   = metadata[:total]
-        attempt_suffix = attempt && total ? " (#{attempt}/#{total})" : ""
+        suffix  = (attempt && total) ? " (#{attempt}/#{total})" : ""
+        display = ((message && !message.to_s.strip.empty?) ? message.to_s : Clacky::THINKING_VERBS.sample) + suffix
 
-        @progress_message    = (message || Clacky::THINKING_VERBS.sample) + attempt_suffix
-        @progress_start_time = Time.now
-        @progress_thread_stop = false
-
-        # Choose render style: yellow for thinking, gray for retrying/idle
-        quiet_type = %w[retrying idle_compress].include?(progress_type.to_s)
-        render_active = ->(msg) {
-          quiet_type ? @renderer.render_progress(msg) : @renderer.render_working(msg)
-        }
-
-        initial_content = render_active.call("#{@progress_message}… (Ctrl+C to interrupt)")
-
-        # If a progress slot is already live (e.g. transitioning from
-        # "retrying" back to "thinking", or any caller-supplied message
-        # change), reuse its position by replacing in place. Otherwise
-        # append a fresh entry. Either way @progress_id ends up pointing
-        # at the current slot.
-        if @progress_id && @layout.live_entry?(@progress_id)
-          @layout.replace_entry(@progress_id, initial_content)
-        else
-          append_output("") if prefix_newline
-          # Capture the id so the background thread can update exactly
-          # this entry (no "last line" assumption — new output can appear
-          # after it and we'll still hit the right line).
-          @progress_id = append_output(initial_content)
-        end
-
-        # Background thread: update elapsed time every 0.5s
-        @progress_thread = Thread.new do
-          until @progress_thread_stop
-            sleep 0.5
-            next if @progress_thread_stop
-
-            start = @progress_start_time
-            next unless start
-
-            elapsed = (Time.now - start).to_i
-            has_output = @stdout_lines && !@stdout_lines.empty?
-            hint = has_output ?
-              "(Ctrl+C to interrupt · Ctrl+O to view output · #{elapsed}s)" :
-              "(Ctrl+C to interrupt · #{elapsed}s)"
-            update_progress_line(render_active.call("#{@progress_message}… #{hint}"))
-          end
-        rescue StandardError
-          # Silently handle thread errors
-        end
+        @legacy_progress_handles[type] = start_progress(message: display, style: style)
       end
 
-      # Returns true if a progress indicator is currently active.
-      def progress_active?
-        @progress_start_time != nil
-      end
+      # ---------------------------------------------------------------------
+      # (Legacy dead-code removed: the old imperative show_progress body
+      # used to live here and is now superseded by the shim + owner
+      # protocol above. Keeping this note so a future grep for
+      # "@progress_id" / "@progress_thread" finds the migration explanation.)
+      # ---------------------------------------------------------------------
 
       # Stop the fullscreen refresh thread gracefully via flag + join.
       def stop_fullscreen_refresh_thread
@@ -633,22 +724,6 @@ module Clacky
         end
         @fullscreen_refresh_thread = nil
         @fullscreen_refresh_stop = false
-      end
-
-      # Stop the progress update thread gracefully.
-      # We signal the thread via a stop flag and then join it, avoiding Thread#kill
-      # which can interrupt a thread mid-critical-section (e.g. while holding
-      # @render_mutex) and leave the mutex permanently locked.
-      def stop_progress_thread
-        @progress_start_time = nil
-        @progress_thread_stop = true
-        if @progress_thread&.alive?
-          # Join with a short timeout; fall back to kill only as a last resort
-          joined = @progress_thread.join(1.0)
-          @progress_thread.kill unless joined
-        end
-        @progress_thread = nil
-        @progress_thread_stop = false
       end
 
       # Show info message
@@ -1044,8 +1119,11 @@ module Clacky
           stop
           exit(0)
         when :interrupt
-          # Stop progress indicator
-          stop_progress_thread
+          # Stop all active progress indicators (ticker threads + entries).
+          # An interrupt may happen at any point in a nested flow (e.g.
+          # idle compression during a task); finish the whole stack from
+          # top to bottom so nothing is left running.
+          interrupt_all_progress
 
           # Check if input area has content
           input_was_empty = @input_area.empty?

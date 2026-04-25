@@ -22,7 +22,9 @@ module Clacky
           "abs-claude-opus-4-6",
           "abs-claude-sonnet-4-6",
           "abs-claude-sonnet-4-5",
-          "abs-claude-haiku-4-5"
+          "abs-claude-haiku-4-5",
+          "dsk-deepseek-v4-pro",
+          "dsk-deepseek-v4-flash"
         ],
         # Fallback chain: if a model is unavailable, try the next one in order.
         # Keys are primary model names; values are the fallback model to use instead.
@@ -101,7 +103,9 @@ module Clacky
           "abs-claude-opus-4-6",
           "abs-claude-sonnet-4-6",
           "abs-claude-sonnet-4-5",
-          "abs-claude-haiku-4-5"
+          "abs-claude-haiku-4-5",
+          "dsk-deepseek-v4-pro",
+          "dsk-deepseek-v4-flash"
         ],
         # Fallback chain: if a model is unavailable, try the next one in order.
         # Keys are primary model names; values are the fallback model to use instead.
