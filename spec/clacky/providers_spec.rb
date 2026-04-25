@@ -78,6 +78,24 @@ RSpec.describe Clacky::Providers do
       end
     end
 
+    context "for providers with mixed model capabilities" do
+      it "returns false for mimo (default text-only), true for mimo-v2-omni" do
+        expect(described_class.supports?("mimo", :vision)).to be false
+        expect(described_class.supports?("mimo", :vision,
+                                         model_name: "mimo-v2-pro")).to be false
+        expect(described_class.supports?("mimo", :vision,
+                                         model_name: "mimo-v2-omni")).to be true
+      end
+
+      it "returns false for glm (default text-only), true for glm-5v-turbo" do
+        expect(described_class.supports?("glm", :vision)).to be false
+        expect(described_class.supports?("glm", :vision,
+                                         model_name: "glm-5.1")).to be false
+        expect(described_class.supports?("glm", :vision,
+                                         model_name: "glm-5v-turbo")).to be true
+      end
+    end
+
     context "conservative default (unknown or undeclared)" do
       it "returns true for an unknown provider_id" do
         # Custom base_urls map to nil provider_id; assume capability supported

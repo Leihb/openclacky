@@ -733,15 +733,23 @@ module Clacky
           # which writes only product_name + package_name — without this poll
           # the user would never see the brand's logo/theme until activation.
           # Completely asynchronous: we do NOT wait for the network round-trip.
+          #
+          # `distribution_refresh_pending` lets the Web UI know a refresh is
+          # in flight, so it can re-poll /api/brand shortly and apply the
+          # logo/theme without requiring the user to activate or refresh the
+          # page first.
+          refresh_pending = false
           if brand.distribution_refresh_due?
             trigger_async_distribution_refresh!
+            refresh_pending = true
           end
 
           json_response(res, 200, {
-            branded:          true,
-            needs_activation: true,
-            product_name:     brand.product_name,
-            test_mode:        @brand_test
+            branded:                       true,
+            needs_activation:              true,
+            product_name:                  brand.product_name,
+            test_mode:                     @brand_test,
+            distribution_refresh_pending:  refresh_pending
           })
           return
         end

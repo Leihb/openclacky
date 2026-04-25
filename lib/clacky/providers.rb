@@ -167,6 +167,11 @@ module Clacky
         "api" => "openai-completions",
         "default_model" => "mimo-v2-pro",
         "models" => ["mimo-v2-pro", "mimo-v2-omni"],
+        # MiMo-V2-Pro is text-only; MiMo-V2-Omni supports vision (omni = multimodal).
+        "capabilities" => { "vision" => false }.freeze,
+        "model_capabilities" => {
+          "mimo-v2-omni" => { "vision" => true }.freeze
+        }.freeze,
         "website_url" => "https://platform.xiaomimimo.com/"
       }.freeze,
 
@@ -176,6 +181,11 @@ module Clacky
         "api" => "openai-completions",
         "default_model" => "glm-5.1",
         "models" => ["glm-5.1", "glm-5", "glm-5-turbo", "glm-5v-turbo", "glm-4.7"],
+        # GLM models are text-only except glm-5v-turbo which is vision-capable ("v" = visual).
+        "capabilities" => { "vision" => false }.freeze,
+        "model_capabilities" => {
+          "glm-5v-turbo" => { "vision" => true }.freeze
+        }.freeze,
         "website_url" => "https://open.bigmodel.cn/usercenter/apikeys"
       }.freeze
 
