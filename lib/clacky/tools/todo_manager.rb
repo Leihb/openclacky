@@ -112,6 +112,13 @@ module Clacky
         return { error: "At least one task description is required" } if tasks_to_add.empty?
 
         existing_todos = load_todos
+
+        # Auto-clear old completed todos from previous task cycles before adding new ones
+        completed_before = existing_todos.count { |t| t[:status] == "completed" }
+        if completed_before > 0
+          existing_todos.reject! { |t| t[:status] == "completed" }
+        end
+
         next_id = existing_todos.empty? ? 1 : existing_todos.map { |t| t[:id] }.max + 1
 
         added_todos = []
@@ -188,10 +195,12 @@ module Clacky
 
         if next_pending
           result[:next_task] = next_pending
-          result[:next_task_info] = "✅ Progress: #{completed_count}/#{total_count}. Next task: ##{next_pending[:id]} - #{next_pending[:task]}"
+          result[:next_task_info] = "Progress: #{completed_count}/#{total_count}. Next task: ##{next_pending[:id]} - #{next_pending[:task]}"
         else
+          # All tasks completed — auto-clear so the agent doesn't need to call clear manually
+          save_todos([])
           result[:all_completed] = true
-          result[:completion_message] = "🎉 All tasks completed! (#{completed_count}/#{total_count})"
+          result[:completion_message] = "All tasks completed and cleared! (#{completed_count}/#{total_count})"
         end
 
         result

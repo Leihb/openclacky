@@ -139,6 +139,7 @@ RSpec.describe Clacky::Tools::TodoManager do
       it "returns message if already completed" do
         storage = []
         tool.execute(action: "add", task: "Task", todos_storage: storage)
+        tool.execute(action: "add", task: "Task 2", todos_storage: storage)
         tool.execute(action: "complete", id: 1, todos_storage: storage)
         result = tool.execute(action: "complete", id: 1, todos_storage: storage)
 
@@ -157,6 +158,30 @@ RSpec.describe Clacky::Tools::TodoManager do
         result = tool.execute(action: "complete", todos_storage: storage)
 
         expect(result[:error]).to eq("Task ID is required")
+      end
+
+      it "auto-clears all todos when last pending task is completed" do
+        storage = []
+        tool.execute(action: "add", tasks: ["Task 1", "Task 2"], todos_storage: storage)
+        tool.execute(action: "complete", id: 1, todos_storage: storage)
+        result = tool.execute(action: "complete", id: 2, todos_storage: storage)
+
+        expect(result[:all_completed]).to be true
+        expect(result[:completion_message]).to eq("All tasks completed and cleared! (2/2)")
+        expect(storage).to be_empty
+      end
+
+      it "auto-clears old completed todos when adding new ones" do
+        storage = []
+        tool.execute(action: "add", tasks: ["Old Task 1", "Old Task 2"], todos_storage: storage)
+        tool.execute(action: "complete", id: 1, todos_storage: storage)
+        # Task 2 still pending, Task 1 completed. Add new task cycle.
+        result = tool.execute(action: "add", task: "New Task", todos_storage: storage)
+
+        # Old completed (#1) should be gone, only pending (#2) and new (#3) remain
+        expect(storage.size).to eq(2)
+        expect(storage.map { |t| t[:id] }).to eq([2, 3])
+        expect(storage.all? { |t| t[:status] == "pending" }).to be true
       end
     end
 

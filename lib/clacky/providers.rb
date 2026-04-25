@@ -50,6 +50,7 @@ module Clacky
         "base_url" => "https://api.deepseek.com",
         "api" => "openai-completions",
         "default_model" => "deepseek-v4-pro",
+        "lite_model" => "deepseek-v4-flash",
         # Note: deepseek-chat and deepseek-reasoner are legacy aliases being
         # deprecated on 2026-07-24; they map to deepseek-v4-flash's non-thinking
         # and thinking modes respectively. Prefer deepseek-v4-flash / deepseek-v4-pro.
