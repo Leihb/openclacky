@@ -247,12 +247,16 @@ module Clacky
         end
       end
 
-      # Auto-inject lite model from provider preset when:
-      # 1. A default model exists
-      # 2. No lite model is configured yet (neither in file nor env)
-      # 3. The default model's provider has a known lite_model
-      # The injected lite model is runtime-only (not persisted to config.yml)
-      inject_provider_lite_model(models)
+      # Auto-inject lite model from provider preset is **no longer materialized
+      # into @models**. Lite is now a virtual, on-demand view derived from the
+      # currently-selected primary model — see `#lite_model_config_for_current`.
+      # This keeps @models a clean "list of user-facing models" and lets the
+      # lite companion track the current model at runtime, rather than being
+      # frozen at load time to whichever model happened to be the default.
+      #
+      # Legacy note: prior versions injected an entry here with
+      # `auto_injected: true`. That flag is still honored in to_yaml for
+      # safety (never persisted), but new injections never happen.
 
       # Ensure every model has a stable runtime id — covers env-injected
       # models (CLACKY_XXX, CLAUDE_XXX) that don't go through parse_models.
@@ -267,34 +271,14 @@ module Clacky
       new(models: models, current_model_index: default_index, current_model_id: default_id)
     end
 
-    # Auto-inject a lite model entry if the default model's provider supports one
-    # and no lite model is already present. The injected entry reuses the same
-    # api_key and base_url as the default model — only the model name differs.
-    # @param models [Array<Hash>] mutable models array (modified in-place)
-    private_class_method def self.inject_provider_lite_model(models)
-      return if models.any? { |m| m["type"] == "lite" }
-
-      default_model = models.find { |m| m["type"] == "default" } || models.first
-      return unless default_model
-
-      provider_id = Clacky::Providers.find_by_base_url(default_model["base_url"])
-      return unless provider_id
-
-      lite_model_name = Clacky::Providers.lite_model(provider_id)
-      return unless lite_model_name
-
-      # Don't inject if the default model IS the lite model
-      return if default_model["model"] == lite_model_name
-
-      models << {
-        "api_key"          => default_model["api_key"],
-        "base_url"         => default_model["base_url"],
-        "model"            => lite_model_name,
-        "anthropic_format" => default_model["anthropic_format"] || false,
-        "type"             => "lite",
-        "auto_injected"    => true,  # Mark as auto-injected (not saved to file)
-        "id"               => SecureRandom.uuid  # Runtime id for stable session references
-      }
+    # Auto-injection of provider-preset lite models into @models has been
+    # removed. Lite is now a virtual, on-demand role derived per-call from
+    # the currently-active primary model — see the instance method
+    # `#lite_model_config_for_current`. This class-level helper is kept as
+    # a no-op stub purely so older call sites (if any remain) don't blow up;
+    # it will be dropped in a future release.
+    private_class_method def self.inject_provider_lite_model(_models)
+      # no-op: lite is now a virtual view, not a materialized @models entry
     end
 
     # Create a per-session copy of this config.
@@ -498,10 +482,71 @@ module Clacky
       find_model_by_type("default") || current_model
     end
 
-    # Get the lite model (type: lite)
-    # Returns nil if no lite model configured
+    # Explicit lite model entry (type: "lite") — only present when the user
+    # configured `CLACKY_LITE_*` environment variables. Returns nil otherwise.
+    #
+    # This is the "user override" path. The preferred way for subagents to
+    # obtain a lite model is `#lite_model_config_for_current`, which falls
+    # back to this method when an explicit lite exists.
     def lite_model
       find_model_by_type("lite")
+    end
+
+    # Return a *complete* lite model config hash for the currently-active
+    # primary model, or nil if none is available.
+    #
+    # Resolution order:
+    #   1. Explicit user-configured lite (type: "lite", from CLACKY_LITE_*
+    #      env vars). Wins over provider presets so power users retain full
+    #      control.
+    #   2. Provider preset: look up the current model's provider, consult its
+    #      per-family `lite_models` table (e.g. openclacky: Claude → Haiku,
+    #      DeepSeek V4-pro → DeepSeek V4-flash). If matched, return a virtual
+    #      hash that reuses the current model's api_key / base_url — only
+    #      the model name (and anthropic_format, if provider-specific) differ.
+    #   3. nil — either the provider has no lite mapping for this primary
+    #      (e.g. the current model is already lite-class like Haiku), or the
+    #      provider is unknown. Callers should treat this as "no lite
+    #      available; use the primary as-is".
+    #
+    # The returned hash is **not** added to @models. It's consumed directly
+    # by `Agent#fork_subagent(model: "lite")`, which applies the fields to
+    # the forked config. This means:
+    #   - Switching the primary model automatically changes which lite is
+    #     used, with zero additional bookkeeping.
+    #   - @models stays a clean list of user-facing models (no phantom
+    #     auto-injected entries cluttering the model picker in the UI).
+    #
+    # @return [Hash, nil] a hash with keys api_key, base_url, model,
+    #   anthropic_format, plus an "id" of the form "lite:<primary_id>" for
+    #   logging/debugging; nil if no lite is resolvable.
+    def lite_model_config_for_current
+      # 1) Explicit user-configured lite wins
+      explicit = find_model_by_type("lite")
+      return explicit if explicit
+
+      # 2) Provider preset derivation
+      primary = current_model
+      return nil unless primary && primary["base_url"] && primary["model"]
+
+      provider_id = Clacky::Providers.find_by_base_url(primary["base_url"])
+      return nil unless provider_id
+
+      lite_name = Clacky::Providers.lite_model(provider_id, primary["model"])
+      return nil unless lite_name
+
+      # If the current primary IS already a lite-class model, skip.
+      return nil if lite_name == primary["model"]
+
+      {
+        "id"               => "lite:#{primary["id"]}",
+        "type"             => "lite",
+        "api_key"          => primary["api_key"],
+        "base_url"         => primary["base_url"],
+        "model"            => lite_name,
+        "anthropic_format" => primary["anthropic_format"] || false,
+        "virtual"          => true  # marker: not a real @models entry
+      }
     end
 
     # How long to stay on the fallback model before probing the primary again.

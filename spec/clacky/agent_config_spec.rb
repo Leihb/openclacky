@@ -764,11 +764,11 @@ RSpec.describe Clacky::AgentConfig do
   end
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Auto-injection of lite model from provider preset
+  # Lite model resolution (virtual, on-demand; no longer materialized into @models)
   # ─────────────────────────────────────────────────────────────────────────
-  describe "auto-inject lite model from provider preset" do
-    context "when clackyai is the configured provider (base_url matches)" do
-      it "automatically injects a lite model at load time" do
+  describe "#lite_model_config_for_current (virtual lite derivation)" do
+    context "when clackyai-sea is the configured provider (base_url matches)" do
+      it "does NOT materialize lite into @models at load time" do
         with_temp_config([
           {
             "model"            => "abs-claude-sonnet-4-6",
@@ -780,18 +780,54 @@ RSpec.describe Clacky::AgentConfig do
         ]) do |config_file|
           config = described_class.load(config_file)
 
-          expect(config.models.length).to eq(2)
-          lite = config.lite_model
+          # Under the new architecture @models stays a clean list of
+          # user-facing models. Lite is derived virtually.
+          expect(config.models.length).to eq(1)
+          expect(config.lite_model).to be_nil   # no explicit env lite
+        end
+      end
+
+      it "derives a virtual lite config that pairs the Claude family with Haiku" do
+        with_temp_config([
+          {
+            "model"            => "abs-claude-sonnet-4-6",
+            "api_key"          => "absk-test-key",
+            "base_url"         => "https://api.clacky.ai",
+            "anthropic_format" => false,
+            "type"             => "default"
+          }
+        ]) do |config_file|
+          config = described_class.load(config_file)
+          lite = config.lite_model_config_for_current
+
           expect(lite).not_to be_nil
           expect(lite["model"]).to eq("abs-claude-haiku-4-5")
           expect(lite["api_key"]).to eq("absk-test-key")
           expect(lite["base_url"]).to eq("https://api.clacky.ai")
           expect(lite["type"]).to eq("lite")
-          expect(lite["auto_injected"]).to be true
+          expect(lite["virtual"]).to be true
         end
       end
 
-      it "does not inject a lite model when one is already explicitly configured" do
+      it "returns nil when the current model IS already a lite-class model (Haiku)" do
+        with_temp_config([
+          {
+            "model"            => "abs-claude-haiku-4-5",
+            "api_key"          => "absk-test-key",
+            "base_url"         => "https://api.clacky.ai",
+            "anthropic_format" => false,
+            "type"             => "default"
+          }
+        ]) do |config_file|
+          config = described_class.load(config_file)
+          expect(config.lite_model_config_for_current).to be_nil
+        end
+      end
+
+      it "pairs the DeepSeek family with V4-flash (runtime follows current model)" do
+        # Two user-facing models in config — one Claude, one DeepSeek — with
+        # Claude as the default. Switching primary to DeepSeek should flip
+        # the derived lite from Haiku to DSK-v4-flash automatically.
         with_temp_config([
           {
             "model"            => "abs-claude-sonnet-4-6",
@@ -801,7 +837,37 @@ RSpec.describe Clacky::AgentConfig do
             "type"             => "default"
           },
           {
-            "model"            => "abs-claude-haiku-4-5",
+            "model"            => "dsk-deepseek-v4-pro",
+            "api_key"          => "absk-test-key",
+            "base_url"         => "https://api.clacky.ai",
+            "anthropic_format" => false
+          }
+        ]) do |config_file|
+          config = described_class.load(config_file)
+
+          # Start on Claude → lite = Haiku
+          lite1 = config.lite_model_config_for_current
+          expect(lite1["model"]).to eq("abs-claude-haiku-4-5")
+
+          # Switch to DSK-pro → lite follows, now V4-flash
+          dsk = config.models.find { |m| m["model"] == "dsk-deepseek-v4-pro" }
+          expect(config.switch_model_by_id(dsk["id"])).to be true
+          lite2 = config.lite_model_config_for_current
+          expect(lite2["model"]).to eq("dsk-deepseek-v4-flash")
+        end
+      end
+
+      it "prefers an explicit user-configured lite (type: lite) over provider derivation" do
+        with_temp_config([
+          {
+            "model"            => "abs-claude-sonnet-4-6",
+            "api_key"          => "absk-test-key",
+            "base_url"         => "https://api.clacky.ai",
+            "anthropic_format" => false,
+            "type"             => "default"
+          },
+          {
+            "model"            => "my-custom-lite",
             "api_key"          => "absk-test-key",
             "base_url"         => "https://api.clacky.ai",
             "anthropic_format" => false,
@@ -809,36 +875,16 @@ RSpec.describe Clacky::AgentConfig do
           }
         ]) do |config_file|
           config = described_class.load(config_file)
-
-          # Should still be exactly 2 models — no duplicate injection
-          expect(config.models.length).to eq(2)
-          lite_models = config.models.select { |m| m["type"] == "lite" }
-          expect(lite_models.length).to eq(1)
-          expect(lite_models.first["auto_injected"]).to be_nil
-        end
-      end
-
-      it "does not inject when the default model is already the lite model" do
-        with_temp_config([
-          {
-            "model"            => "abs-claude-haiku-4-5",
-            "api_key"          => "absk-test-key",
-            "base_url"         => "https://api.clacky.ai",
-            "anthropic_format" => false,
-            "type"             => "default"
-          }
-        ]) do |config_file|
-          config = described_class.load(config_file)
-
-          # haiku IS the lite model — no injection needed
-          expect(config.models.length).to eq(1)
-          expect(config.lite_model).to be_nil
+          lite = config.lite_model_config_for_current
+          expect(lite["model"]).to eq("my-custom-lite")
+          # explicit entry is NOT a virtual hash — it's a real @models row
+          expect(lite["virtual"]).to be_nil
         end
       end
     end
 
-    context "when provider is not clackyai (no known lite model)" do
-      it "does not inject a lite model for an unknown provider" do
+    context "when provider is unknown" do
+      it "returns nil (no derivation possible)" do
         with_temp_config([
           {
             "model"            => "some-model",
@@ -849,15 +895,14 @@ RSpec.describe Clacky::AgentConfig do
           }
         ]) do |config_file|
           config = described_class.load(config_file)
-
           expect(config.models.length).to eq(1)
-          expect(config.lite_model).to be_nil
+          expect(config.lite_model_config_for_current).to be_nil
         end
       end
     end
 
     describe "#to_yaml / #save persistence" do
-      it "does NOT persist auto-injected lite model to config file" do
+      it "does not leak any lite entry to disk when lite is purely virtual" do
         with_temp_config([
           {
             "model"            => "abs-claude-sonnet-4-6",
@@ -869,22 +914,15 @@ RSpec.describe Clacky::AgentConfig do
         ]) do |config_file|
           config = described_class.load(config_file)
 
-          # In memory: 2 models (default + auto-injected lite)
-          expect(config.models.length).to eq(2)
+          # Virtual lite is available...
+          expect(config.lite_model_config_for_current).not_to be_nil
 
-          # Save and reload
+          # ...but @models and disk only hold the explicit default
+          expect(config.models.length).to eq(1)
           config.save(config_file)
-          saved_data = YAML.load_file(config_file)
-
-          # On disk: only 1 model (auto-injected lite is excluded)
-          expect(saved_data.length).to eq(1)
-          expect(saved_data.none? { |m| m["type"] == "lite" }).to be true
-          expect(saved_data.none? { |m| m["auto_injected"] }).to be true
-
-          # After reload: auto-injection happens again
-          reloaded = described_class.load(config_file)
-          expect(reloaded.models.length).to eq(2)
-          expect(reloaded.lite_model["auto_injected"]).to be true
+          saved = YAML.load_file(config_file)
+          expect(saved.length).to eq(1)
+          expect(saved.none? { |m| m["type"] == "lite" }).to be true
         end
       end
     end
@@ -920,19 +958,41 @@ RSpec.describe Clacky::AgentConfig do
   end
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Providers.lite_model
+  # Providers.lite_model (per-family lookup)
   # ─────────────────────────────────────────────────────────────────────────
   describe "Clacky::Providers.lite_model" do
-    it "returns abs-claude-haiku-4-5 for clackyai-sea" do
-      expect(Clacky::Providers.lite_model("clackyai-sea")).to eq("abs-claude-haiku-4-5")
+    context "clackyai-sea (per-family lite_models table)" do
+      it "returns Haiku for Claude-family primaries" do
+        expect(Clacky::Providers.lite_model("clackyai-sea", "abs-claude-sonnet-4-6"))
+          .to eq("abs-claude-haiku-4-5")
+        expect(Clacky::Providers.lite_model("clackyai-sea", "abs-claude-opus-4-7"))
+          .to eq("abs-claude-haiku-4-5")
+      end
+
+      it "returns V4-flash for DeepSeek-family primary" do
+        expect(Clacky::Providers.lite_model("clackyai-sea", "dsk-deepseek-v4-pro"))
+          .to eq("dsk-deepseek-v4-flash")
+      end
+
+      it "returns nil for lite-class primaries (Haiku / V4-flash)" do
+        expect(Clacky::Providers.lite_model("clackyai-sea", "abs-claude-haiku-4-5")).to be_nil
+        expect(Clacky::Providers.lite_model("clackyai-sea", "dsk-deepseek-v4-flash")).to be_nil
+      end
+
+      it "returns nil when called without a primary on a per-family provider" do
+        # Per-family providers require context — no sensible global default.
+        expect(Clacky::Providers.lite_model("clackyai-sea")).to be_nil
+      end
     end
 
-    it "returns nil for providers without a lite model (e.g. minimax)" do
+    it "returns nil for providers without any lite mapping (e.g. minimax)" do
       expect(Clacky::Providers.lite_model("minimax")).to be_nil
+      expect(Clacky::Providers.lite_model("minimax", "MiniMax-M2")).to be_nil
     end
 
     it "returns nil for unknown provider IDs" do
       expect(Clacky::Providers.lite_model("nonexistent")).to be_nil
+      expect(Clacky::Providers.lite_model("nonexistent", "anything")).to be_nil
     end
   end
 

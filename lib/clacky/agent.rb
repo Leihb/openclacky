@@ -771,10 +771,24 @@ module Clacky
           # always knows the agent is working. Using +with_progress+ wraps
           # the execution in an +ensure+ block so the spinner/ticker is
           # released even if the tool raises or the user interrupts.
+          #
+          # +quiet_on_fast_finish: true+ means "if the tool completes in
+          # under FAST_FINISH_THRESHOLD_SECONDS, remove the progress line
+          # instead of leaving a permanent 'Executing edit… (0s)' log
+          # entry". The preceding `[=>] Edit(...)` tool-call line and the
+          # following `[<=] Modified 1 occurrence` result line already
+          # tell the full story — the middle progress frame is noise for
+          # instant tools like edit/write/read/glob/grep. Truly slow
+          # tools (terminal running a build, web_fetch) exceed the
+          # threshold and their final frame is preserved as usual.
           result = nil
           if @ui
             progress_message = build_tool_progress_message(call[:name], args)
-            @ui.with_progress(message: progress_message, style: :quiet) do
+            @ui.with_progress(
+              message: progress_message,
+              style: :quiet,
+              quiet_on_fast_finish: true
+            ) do
               result = tool.execute(**args)
             end
           else
@@ -1010,12 +1024,33 @@ module Clacky
       # Switch to specified model if provided
       if model
         if model == "lite"
-          # Special keyword: use lite model if available, otherwise fall back to default
-          lite_model = subagent_config.lite_model
-          if lite_model && lite_model["id"]
-            subagent_config.switch_model_by_id(lite_model["id"])
+          # Special keyword: use lite model if available, otherwise fall back to default.
+          #
+          # Lite is now a *virtual* role — we don't require it to exist as a
+          # concrete entry in @models. Instead we derive it from whatever
+          # model the user is currently on (current_model), so switching
+          # primary models automatically re-pairs with the right lite
+          # companion (Claude → Haiku, DeepSeek V4-pro → V4-flash, ...).
+          lite_cfg = subagent_config.lite_model_config_for_current
+          if lite_cfg
+            if lite_cfg["virtual"]
+              # Provider-preset derived: apply the lite fields in-place to
+              # this subagent's current_model slot. No @models mutation —
+              # the subagent simply runs with overridden credentials.
+              cur = subagent_config.current_model
+              if cur
+                cur["api_key"]          = lite_cfg["api_key"]
+                cur["base_url"]         = lite_cfg["base_url"]
+                cur["model"]            = lite_cfg["model"]
+                cur["anthropic_format"] = lite_cfg["anthropic_format"]
+              end
+            elsif lite_cfg["id"]
+              # Explicit user-configured lite (from CLACKY_LITE_* env): a
+              # real @models entry with a stable id. Switch to it normally.
+              subagent_config.switch_model_by_id(lite_cfg["id"])
+            end
           end
-          # If no lite model, just use current (default) model
+          # If no lite is resolvable, just use current (primary) model.
         else
           # Regular model name lookup — find the first model with a matching
           # name and switch by its stable id.

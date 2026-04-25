@@ -45,11 +45,18 @@ module Clacky
     # @param message [String, nil] Initial progress message (nil picks a random thinking verb).
     # @param style [Symbol] :primary (foreground, yellow, bumps sessionbar)
     #   or :quiet (background, gray, no sessionbar change).
+    # @param quiet_on_fast_finish [Boolean] When true, a finish under
+    #   FAST_FINISH_THRESHOLD_SECONDS removes the progress line entirely
+    #   (preferred for per-tool wrappers so fast tools don't leave a
+    #   permanent "Executing foo… (0s)" log line). The default
+    #   implementation ignores this flag — it only affects the native
+    #   UI2::UIController + ProgressHandle path.
     # @return [#update, #finish, #cancel] a ProgressHandle-like object.
     #
     # Default implementation degrades gracefully to the old show_progress API
     # so UI implementations that haven't migrated still behave correctly.
-    def start_progress(message: nil, style: :primary)
+    def start_progress(message: nil, style: :primary, quiet_on_fast_finish: false)
+      _ = quiet_on_fast_finish # default impl doesn't honor fast-collapse
       progress_type = style == :primary ? "thinking" : "idle_compress"
       show_progress(message, progress_type: progress_type, phase: "active")
       LegacyProgressHandleAdapter.new(self, progress_type: progress_type)
@@ -60,8 +67,12 @@ module Clacky
     # AgentInterrupted) cannot leave the ticker or entry orphaned.
     #
     # @yieldparam handle the progress handle
-    def with_progress(message: nil, style: :primary)
-      handle = start_progress(message: message, style: style)
+    def with_progress(message: nil, style: :primary, quiet_on_fast_finish: false)
+      handle = start_progress(
+        message: message,
+        style: style,
+        quiet_on_fast_finish: quiet_on_fast_finish
+      )
       begin
         yield handle
       ensure

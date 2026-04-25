@@ -522,10 +522,19 @@ module Clacky
       # @param message [String] Initial progress message.
       # @param style [Symbol] :primary (foreground, yellow, bumps sessionbar)
       #   or :quiet (background, gray, no sessionbar change).
+      # @param quiet_on_fast_finish [Boolean] See ProgressHandle — when true,
+      #   a finish that elapses under FAST_FINISH_THRESHOLD_SECONDS removes
+      #   the entry instead of leaving a permanent final frame. Preferred
+      #   for tool-execution wrappers.
       # @return [Clacky::UI2::ProgressHandle]
-      def start_progress(message: nil, style: :primary)
+      def start_progress(message: nil, style: :primary, quiet_on_fast_finish: false)
         display = (message.nil? || message.to_s.strip.empty?) ? Clacky::THINKING_VERBS.sample : message.to_s
-        ProgressHandle.new(owner: self, message: display, style: style).start
+        ProgressHandle.new(
+          owner: self,
+          message: display,
+          style: style,
+          quiet_on_fast_finish: quiet_on_fast_finish
+        ).start
       end
 
       # Run the given block with a progress indicator active. The handle is
@@ -533,8 +542,12 @@ module Clacky
       # Thread#raise) cannot leave the ticker or entry orphaned.
       #
       # @yieldparam handle [Clacky::UI2::ProgressHandle]
-      def with_progress(message: nil, style: :primary)
-        handle = start_progress(message: message, style: style)
+      def with_progress(message: nil, style: :primary, quiet_on_fast_finish: false)
+        handle = start_progress(
+          message: message,
+          style: style,
+          quiet_on_fast_finish: quiet_on_fast_finish
+        )
         begin
           yield handle
         ensure
@@ -1210,25 +1223,16 @@ module Clacky
 
       # Handle submit action
       private def handle_submit(data)
-        # If progress is currently active, stop it before appending the user message.
-        # We do this non-blocking (signal thread to stop without joining) so the user
-        # message appears on screen immediately with no perceptible delay.
-        if progress_active?
-          elapsed_time  = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
-          saved_message = @progress_message
-          @progress_start_time  = nil
-          @stdout_lines         = nil
-          @progress_thread_stop = true
-          @progress_thread      = nil  # detach; thread exits on its next tick
-          if saved_message && elapsed_time > 0
-            update_progress_line(@renderer.render_progress("#{saved_message}… (#{elapsed_time}s)"))
-            # Release the id so subsequent output doesn't touch this final
-            # summary line.
-            @progress_id = nil
-          else
-            clear_progress_line
-          end
-        end
+        # If any progress indicator is currently active (e.g. an idle-compression
+        # :quiet handle running in the background), finish them all top-to-bottom
+        # so no ticker thread is left writing into the buffer while we render
+        # the new user message. Each handle's finish() renders its own final
+        # frame with elapsed time, so the user still sees a summary.
+        interrupt_all_progress if progress_active?
+
+        # Also clear stdout buffer used by Ctrl+O (unrelated to progress, but
+        # we don't want stale command output carried across user turns).
+        @stdout_lines = nil
 
         # Render user message immediately before running agent
         unless data[:text].empty? && data[:files].empty?

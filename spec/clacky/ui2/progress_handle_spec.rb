@@ -227,4 +227,70 @@ RSpec.describe Clacky::UI2::ProgressHandle do
       expect(owner.events).to be_empty
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # quiet_on_fast_finish: fast-finishing wrappers (tool execution) collapse
+  # their progress line to `nil` so no permanent "Executing edit… (0s)" log
+  # is left on screen. Slow finishers still get a real final frame.
+  # ---------------------------------------------------------------------------
+  describe "#finish with quiet_on_fast_finish: true" do
+    # Controllable clock so we can simulate elapsed time deterministically.
+    # Each call to the lambda returns the next timestamp.
+    let(:now) { Time.at(1_700_000_000) }
+
+    it "passes final_frame: nil when elapsed is under the threshold" do
+      times = [now, now + 0.5] # start → finish: 0.5s elapsed → fast
+      clock = -> { times.shift || now + 0.5 }
+      h = described_class.new(
+        owner: owner,
+        message: "Executing edit",
+        style: :quiet,
+        quiet_on_fast_finish: true,
+        clock: clock
+      )
+      h.start
+      h.finish
+
+      unreg = owner.events.find { |e| e.first == :unregister }
+      expect(unreg).not_to be_nil
+      expect(unreg[2]).to be_nil # owner interprets nil as remove_entry
+    end
+
+    it "still passes a final frame when elapsed exceeds the threshold" do
+      # 3s elapsed — over FAST_FINISH_THRESHOLD_SECONDS (2s).
+      times = [now, now + 3]
+      clock = -> { times.shift || now + 3 }
+      h = described_class.new(
+        owner: owner,
+        message: "Running command",
+        style: :quiet,
+        quiet_on_fast_finish: true,
+        clock: clock
+      )
+      h.start
+      h.finish
+
+      unreg = owner.events.find { |e| e.first == :unregister }
+      expect(unreg[2]).to be_a(String)
+      expect(unreg[2]).to include("Running command")
+      expect(unreg[2]).to include("3s")
+    end
+
+    it "default (quiet_on_fast_finish: false) always preserves the final frame even on instant finish" do
+      times = [now, now + 0.1] # instant
+      clock = -> { times.shift || now + 0.1 }
+      h = described_class.new(
+        owner: owner,
+        message: "Compressing",
+        style: :quiet,
+        clock: clock
+      )
+      h.start
+      h.finish
+
+      unreg = owner.events.find { |e| e.first == :unregister }
+      expect(unreg[2]).to be_a(String)
+      expect(unreg[2]).to include("Compressing")
+    end
+  end
 end

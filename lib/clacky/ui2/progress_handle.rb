@@ -85,21 +85,37 @@ module Clacky
 
       attr_reader :entry_id, :message, :style, :start_time
 
+      # Threshold (seconds) below which a +quiet_on_fast_finish+ handle
+      # collapses its final frame — i.e. the progress line is REMOVED
+      # from the output buffer instead of being kept as a permanent
+      # "Executing foo… (0s)" log line. Operations that finish this fast
+      # didn't need a spinner in the first place; keeping the final
+      # frame would be visual noise.
+      FAST_FINISH_THRESHOLD_SECONDS = 2
+
       # @param owner [#register_progress, #unregister_progress, #render_frame]
       # @param message [String] Initial progress message.
       # @param style [Symbol] :primary or :quiet (see VALID_STYLES).
       # @param tick_interval [Float] Seconds between auto-renders.
+      # @param quiet_on_fast_finish [Boolean] When true and the elapsed
+      #   time on +finish+ is under FAST_FINISH_THRESHOLD_SECONDS, the
+      #   owner is told to remove the progress entry (+final_frame: nil+)
+      #   instead of committing a permanent final frame. This is the
+      #   preferred mode for tool execution wrappers, where fast tools
+      #   (edit, write, read) don't need a lingering "Executing edit…
+      #   (0s)" line after completion.
       # @param clock [#call] Test hook: returns current Time (default Time.now).
-      def initialize(owner:, message:, style: :primary, tick_interval: DEFAULT_TICK_INTERVAL, clock: -> { Time.now })
+      def initialize(owner:, message:, style: :primary, tick_interval: DEFAULT_TICK_INTERVAL, quiet_on_fast_finish: false, clock: -> { Time.now })
         unless VALID_STYLES.include?(style)
           raise ArgumentError, "unknown progress style: #{style.inspect} (valid: #{VALID_STYLES.inspect})"
         end
 
-        @owner         = owner
-        @message       = message.to_s
-        @style         = style
-        @tick_interval = tick_interval
-        @clock         = clock
+        @owner                = owner
+        @message              = message.to_s
+        @style                = style
+        @tick_interval        = tick_interval
+        @quiet_on_fast_finish = quiet_on_fast_finish
+        @clock                = clock
 
         @entry_id      = nil
         @start_time    = nil
@@ -158,7 +174,16 @@ module Clacky
         end
 
         stop_ticker
-        final_frame = compose_final_frame(snapshot[:message], snapshot[:elapsed])
+        # Collapse fast-finishers to a removed entry so tools that complete
+        # in under FAST_FINISH_THRESHOLD_SECONDS don't leave a permanent
+        # "Executing foo… (0s)" line. The owner interprets final_frame: nil
+        # as "remove the entry entirely".
+        final_frame =
+          if @quiet_on_fast_finish && snapshot[:elapsed] < FAST_FINISH_THRESHOLD_SECONDS
+            nil
+          else
+            compose_final_frame(snapshot[:message], snapshot[:elapsed])
+          end
         @owner.unregister_progress(self, final_frame: final_frame)
       end
       alias_method :cancel, :finish

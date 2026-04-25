@@ -10,13 +10,19 @@ module Clacky
     # - base_url: Default API endpoint
     # - api: API type (anthropic-messages, openai-responses, openai-completions)
     # - default_model: Recommended default model
+    # - capabilities (optional): provider-level capability hash (e.g.
+    #   { "vision" => false }). Applies to all models under this provider
+    #   unless overridden by model_capabilities below.
+    # - model_capabilities (optional): per-model capability override map,
+    #   { "<model_name>" => { "<cap>" => bool, ... } }. Use this when a
+    #   single provider hosts models with different capabilities (e.g.
+    #   openclacky hosts both vision-capable Claude and text-only DeepSeek).
     PRESETS = {
       "openclacky" => {
         "name" => "OpenClacky",
         "base_url" => "https://api.openclacky.com",
         "api" => "bedrock",
         "default_model" => "abs-claude-sonnet-4-5",
-        "lite_model" => "abs-claude-haiku-4-5",
         "models" => [
           "abs-claude-opus-4-7",
           "abs-claude-opus-4-6",
@@ -26,6 +32,27 @@ module Clacky
           "dsk-deepseek-v4-pro",
           "dsk-deepseek-v4-flash"
         ],
+        # Provider-level default: the Claude family served here is vision-capable.
+        "capabilities" => { "vision" => true }.freeze,
+        # Model-level overrides: DeepSeek models routed through this provider
+        # are text-only; images uploaded for them must be downgraded to disk refs.
+        "model_capabilities" => {
+          "dsk-deepseek-v4-pro"   => { "vision" => false }.freeze,
+          "dsk-deepseek-v4-flash" => { "vision" => false }.freeze
+        }.freeze,
+        # Per-primary lite pairing: keys are "strong" primary models, values
+        # are the lite sidekick to auto-inject when that primary is the
+        # default. Lite is consumed by some subagents for cheap/fast work;
+        # weak models (haiku / v4-flash) ARE the lite tier themselves, so
+        # they're intentionally not listed here — no injection happens when
+        # the default model is already lite-class.
+        "lite_models" => {
+          "abs-claude-opus-4-7"   => "abs-claude-haiku-4-5",
+          "abs-claude-opus-4-6"   => "abs-claude-haiku-4-5",
+          "abs-claude-sonnet-4-6" => "abs-claude-haiku-4-5",
+          "abs-claude-sonnet-4-5" => "abs-claude-haiku-4-5",
+          "dsk-deepseek-v4-pro"   => "dsk-deepseek-v4-flash"
+        },
         # Fallback chain: if a model is unavailable, try the next one in order.
         # Keys are primary model names; values are the fallback model to use instead.
         "fallback_models" => {
@@ -62,6 +89,8 @@ module Clacky
           "deepseek-chat",
           "deepseek-reasoner"
         ],
+        # DeepSeek V4 API does not accept image inputs — text-only across all models.
+        "capabilities" => { "vision" => false }.freeze,
         "website_url" => "https://platform.deepseek.com/api_keys"
       }.freeze,
 
@@ -71,6 +100,8 @@ module Clacky
         "api" => "openai-completions",
         "default_model" => "MiniMax-M2.7",
         "models" => ["MiniMax-M2.5", "MiniMax-M2.7"],
+        # MiniMax M2.x does not support multimodal/vision input on this endpoint.
+        "capabilities" => { "vision" => false }.freeze,
         "website_url" => "https://www.minimaxi.com/user-center/basic-information/interface-key"
       }.freeze,
 
@@ -80,6 +111,8 @@ module Clacky
         "api" => "openai-completions",
         "default_model" => "kimi-k2.5",
         "models" => ["kimi-k2.5"],
+        # Kimi k2.5 (text family) does not accept image inputs.
+        "capabilities" => { "vision" => false }.freeze,
         "website_url" => "https://platform.moonshot.cn/console/api-keys"
       }.freeze,
 
@@ -97,7 +130,6 @@ module Clacky
         "base_url" => "https://api.clacky.ai",
         "api" => "bedrock",
         "default_model" => "abs-claude-sonnet-4-5",
-        "lite_model" => "abs-claude-haiku-4-5",
         "models" => [
           "abs-claude-opus-4-7",
           "abs-claude-opus-4-6",
@@ -107,6 +139,20 @@ module Clacky
           "dsk-deepseek-v4-pro",
           "dsk-deepseek-v4-flash"
         ],
+        # Same lineup as openclacky — Claude is vision, DeepSeek is text-only.
+        "capabilities" => { "vision" => true }.freeze,
+        "model_capabilities" => {
+          "dsk-deepseek-v4-pro"   => { "vision" => false }.freeze,
+          "dsk-deepseek-v4-flash" => { "vision" => false }.freeze
+        }.freeze,
+        # Per-primary lite pairing — see openclacky preset for rationale.
+        "lite_models" => {
+          "abs-claude-opus-4-7"   => "abs-claude-haiku-4-5",
+          "abs-claude-opus-4-6"   => "abs-claude-haiku-4-5",
+          "abs-claude-sonnet-4-6" => "abs-claude-haiku-4-5",
+          "abs-claude-sonnet-4-5" => "abs-claude-haiku-4-5",
+          "dsk-deepseek-v4-pro"   => "dsk-deepseek-v4-flash"
+        },
         # Fallback chain: if a model is unavailable, try the next one in order.
         # Keys are primary model names; values are the fallback model to use instead.
         "fallback_models" => {
@@ -194,12 +240,32 @@ module Clacky
         preset&.dig("models") || []
       end
 
-      # Get the lite model for a provider (if any)
+      # Get the lite model for a provider.
       # @param provider_id [String] The provider identifier
-      # @return [String, nil] The lite model name or nil if provider has no lite model
-      def lite_model(provider_id)
+      # @param primary_model [String, nil] The currently-selected primary model name.
+      #   When given, look it up in the provider's `lite_models` table first
+      #   (so one provider can host multiple model families, each with its own
+      #   lite sidekick — e.g. Claude Opus/Sonnet → Haiku, DeepSeek Pro → Flash).
+      #   Falls back to the global `lite_model` field for old-style presets
+      #   (e.g. deepseekv4) that declare a single provider-wide lite.
+      # @return [String, nil] The lite model name, or nil when the primary is
+      #   already lite-class (no entry) and no global `lite_model` is defined.
+      def lite_model(provider_id, primary_model = nil)
         preset = PRESETS[provider_id]
-        preset&.dig("lite_model")
+        return nil unless preset
+
+        if primary_model && preset["lite_models"].is_a?(Hash)
+          mapped = preset["lite_models"][primary_model]
+          return mapped if mapped
+          # When a `lite_models` table is defined but the current primary
+          # isn't listed, it means the primary is already a lite-class model
+          # (e.g. haiku / v4-flash) — do NOT fall back to the legacy single
+          # field, because that would incorrectly inject a lite for a model
+          # that doesn't need one.
+          return nil if preset["lite_models"].any?
+        end
+
+        preset["lite_model"]
       end
 
       # Get the fallback model for a given model within a provider.
