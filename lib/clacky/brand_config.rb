@@ -8,6 +8,7 @@ require "securerandom"
 require "json"
 require "time"
 require "socket"
+require "uri"
 
 module Clacky
   # BrandConfig manages white-label branding for the OpenClacky gem.
@@ -42,7 +43,8 @@ module Clacky
     attr_reader :product_name, :package_name, :license_key, :license_activated_at,
                 :license_expires_at, :license_last_heartbeat, :device_id,
                 :logo_url, :support_contact, :license_user_id,
-                :support_qr_url, :theme_color, :homepage_url
+                :support_qr_url, :theme_color, :homepage_url,
+                :distribution_last_refreshed_at
 
     def initialize(attrs = {})
       @product_name            = attrs["product_name"]
@@ -59,6 +61,11 @@ module Clacky
       @device_id               = attrs["device_id"]
       # user_id returned by the license server when the license is bound to a specific user
       @license_user_id         = attrs["license_user_id"]
+      # Tracks the last successful public distribution refresh (for installs that
+      # have a package_name configured but are not yet activated — see
+      # #refresh_distribution!). Persisted to brand.yml so 24h throttling
+      # survives restarts.
+      @distribution_last_refreshed_at = parse_time(attrs["distribution_last_refreshed_at"])
 
       # In-memory decryption key cache: "skill_id:skill_version_id" => { key:, expires_at: }
       # Never persisted to disk. Survives across multiple skill invocations within one session.
@@ -155,6 +162,7 @@ module Clacky
       @license_last_heartbeat = nil
       @license_user_id        = nil
       @device_id              = nil
+      @distribution_last_refreshed_at = nil
       { success: true }
     end
 
@@ -291,6 +299,71 @@ module Clacky
       else
         Clacky::Logger.warn("[Brand] heartbeat! failed — #{response[:error]}")
         { success: false, message: response[:error] || "Heartbeat failed" }
+      end
+    end
+
+    # Returns true when a public distribution refresh is due.
+    #
+    # Refresh is needed only when the install has a package_name configured
+    # but is not yet activated — activated licenses already get fresh
+    # distribution data via #heartbeat! (once per 24h).
+    #
+    # Rate limit: once every HEARTBEAT_INTERVAL (24h), measured from the last
+    # SUCCESSFUL refresh. A failed refresh does not advance the clock so we'll
+    # keep trying on subsequent startups / status polls.
+    def distribution_refresh_due?
+      return false unless branded?
+      return false if activated?
+      return true  if @distribution_last_refreshed_at.nil?
+
+      elapsed = Time.now.utc - @distribution_last_refreshed_at
+      elapsed >= HEARTBEAT_INTERVAL
+    end
+
+    # Refresh public brand assets (logo, theme, homepage_url, support_*) for
+    # installs that have `package_name` configured but no activated license yet.
+    #
+    # Motivation: `install.sh --brand-name=X --command=X` only writes
+    # product_name + package_name to brand.yml. The rest of the distribution
+    # is only delivered via the license activation / heartbeat flow, which
+    # requires a license key. This method closes that gap by calling the
+    # anonymous public lookup endpoint.
+    #
+    # Behaviour:
+    #   * No-op (returns { success: false, message: "..." }) when not branded,
+    #     already activated, or package_name is blank.
+    #   * On success: apply_distribution + save + stamp
+    #     @distribution_last_refreshed_at.
+    #   * On failure: log and return without touching the timestamp (so we
+    #     retry on next trigger).
+    #
+    # Returns { success: Boolean, message: String }.
+    def refresh_distribution!
+      unless branded?
+        return { success: false, message: "Not branded" }
+      end
+      if activated?
+        return { success: false, message: "License activated — use heartbeat! instead" }
+      end
+      if @package_name.nil? || @package_name.strip.empty?
+        return { success: false, message: "package_name not configured" }
+      end
+
+      encoded_pkg = URI.encode_www_form_component(@package_name.strip)
+      path        = "/api/v1/distributions/lookup?package_name=#{encoded_pkg}"
+
+      Clacky::Logger.info("[Brand] refresh_distribution! fetching — package_name=#{@package_name}")
+      response = platform_client.get(path)
+
+      if response[:success] && response[:data].is_a?(Hash) && response[:data]["distribution"].is_a?(Hash)
+        apply_distribution(response[:data]["distribution"])
+        @distribution_last_refreshed_at = Time.now.utc
+        save
+        Clacky::Logger.info("[Brand] refresh_distribution! success — product_name=#{@product_name}")
+        { success: true, message: "Distribution refreshed" }
+      else
+        Clacky::Logger.warn("[Brand] refresh_distribution! failed — #{response[:error]}")
+        { success: false, message: response[:error] || "Refresh failed" }
       end
     end
 
@@ -1037,6 +1110,7 @@ module Clacky
       data["device_id"]              = @device_id              if @device_id
       # Persist user_id so user-licensed features remain available across restarts
       data["license_user_id"]        = @license_user_id        if @license_user_id && !@license_user_id.strip.empty?
+      data["distribution_last_refreshed_at"] = @distribution_last_refreshed_at.iso8601 if @distribution_last_refreshed_at
       YAML.dump(data)
     end
 

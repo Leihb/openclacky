@@ -623,6 +623,13 @@ module Clacky
       # Tracks whether a heartbeat Thread is currently running.
       @@brand_heartbeat_inflight = false
 
+      # Mutex + inflight flag for async distribution refresh. Mirrors the
+      # heartbeat pattern above so the same guarantees hold: at most one
+      # refresh thread per process regardless of how many concurrent
+      # /api/brand/status polls arrive from the Web UI.
+      BRAND_DIST_REFRESH_MUTEX   = Mutex.new
+      @@brand_dist_refresh_inflight = false
+
       # Fire a heartbeat in a background Thread without blocking the caller.
       #
       # Contract:
@@ -661,6 +668,47 @@ module Clacky
         end
       end
 
+      # Fire a public-distribution refresh in a background Thread.
+      #
+      # Used for installs that have a package_name configured via install.sh
+      # but haven't activated a license yet — they would otherwise never see
+      # the brand logo / theme / homepage_url until activation. See
+      # BrandConfig#refresh_distribution! for the end-to-end flow.
+      #
+      # Contract mirrors #trigger_async_heartbeat!:
+      #   * At most one refresh Thread in flight process-wide.
+      #   * Caller never waits — Web UI first paint is not blocked on network.
+      #   * All exceptions are swallowed; a refresh failure must not crash the
+      #     server or leak through the web stack.
+      def trigger_async_distribution_refresh!
+        BRAND_DIST_REFRESH_MUTEX.synchronize do
+          if @@brand_dist_refresh_inflight
+            Clacky::Logger.debug("[Brand] distribution refresh already in flight, skipping")
+            return
+          end
+          @@brand_dist_refresh_inflight = true
+        end
+
+        Thread.new do
+          Clacky::Logger.info("[Brand] async distribution refresh starting...")
+          begin
+            brand  = Clacky::BrandConfig.load
+            result = brand.refresh_distribution!
+            if result[:success]
+              Clacky::Logger.info("[Brand] async distribution refresh OK")
+            else
+              Clacky::Logger.debug("[Brand] async distribution refresh skipped/failed — #{result[:message]}")
+            end
+          rescue StandardError => e
+            Clacky::Logger.warn("[Brand] async distribution refresh raised: #{e.class}: #{e.message}")
+          ensure
+            BRAND_DIST_REFRESH_MUTEX.synchronize do
+              @@brand_dist_refresh_inflight = false
+            end
+          end
+        end
+      end
+
       # GET /api/brand/status
       # Returns whether brand activation is needed.
       # Mirrors the onboard/status pattern so the frontend can gate on it.
@@ -680,6 +728,15 @@ module Clacky
         end
 
         unless brand.activated?
+          # Refresh public brand assets (logo, theme, homepage_url, support_*)
+          # if due. This catches the common case of `install.sh --brand-name=X`
+          # which writes only product_name + package_name — without this poll
+          # the user would never see the brand's logo/theme until activation.
+          # Completely asynchronous: we do NOT wait for the network round-trip.
+          if brand.distribution_refresh_due?
+            trigger_async_distribution_refresh!
+          end
+
           json_response(res, 200, {
             branded:          true,
             needs_activation: true,
