@@ -501,15 +501,25 @@ module Clacky
         raw_dir = body["working_dir"].to_s.strip
         working_dir = raw_dir.empty? ? default_working_dir : File.expand_path(raw_dir)
 
-        # Optional model override
-        model_override = body["model"].to_s.strip
-        model_override = nil if model_override.empty?
+        # Optional model override — passed as a stable model id (matches the
+        # id returned by GET /api/config). Name-based override was removed:
+        # a bare model name can't disambiguate between entries from different
+        # providers (e.g. "deepseek-v4-pro" on DeepSeek direct vs its dsk-*
+        # alias on OpenClacky/Bedrock), and mutating current_model["model"]
+        # kept the wrong api_key / base_url / api format, producing
+        # "unknown model" errors at the provider.
+        model_id_override = body["model_id"].to_s.strip
+        model_id_override = nil if model_id_override.empty?
+
+        if model_id_override && !@agent_config.models.any? { |m| m["id"] == model_id_override }
+          return json_response(res, 400, { error: "Model not found in configuration" })
+        end
 
         # Create working directory if it doesn't exist
         # Allow multiple sessions in the same directory
         FileUtils.mkdir_p(working_dir)
 
-        session_id = build_session(name: name, working_dir: working_dir, profile: profile, source: source, model_override: model_override)
+        session_id = build_session(name: name, working_dir: working_dir, profile: profile, source: source, model_id: model_id_override)
         broadcast_session_update(session_id)
         json_response(res, 201, { session: @registry.session_summary(session_id) })
       end
@@ -2662,19 +2672,38 @@ module Clacky
       # @param working_dir [String] working directory for the agent
       # @param permission_mode [Symbol] :confirm_all (default, human present) or
       #   :auto_approve (unattended — suppresses request_user_feedback waits)
-      def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general", source: :manual, model_override: nil)
+      def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general", source: :manual, model_id: nil)
         session_id = Clacky::SessionManager.generate_id
         @registry.create(session_id: session_id)
 
-        client = @client_factory.call
         config = @agent_config.deep_copy
         config.permission_mode = permission_mode
-        
-        # Apply model override if provided
-        if model_override && config.current_model
-          config.current_model["model"] = model_override
-        end
-        
+
+        # Apply model override BEFORE creating the client — otherwise the
+        # client is built from the default model entry and may route through
+        # the wrong provider (e.g. sending a deepseek-v4-pro request to the
+        # Bedrock-format OpenClacky endpoint, which replies "unknown model").
+        #
+        # We use switch_model_by_id (not a name-based rewrite of
+        # current_model["model"]) because:
+        #   1. Ids uniquely identify an entry across providers; names can
+        #      collide between entries (deepseek vs dsk-deepseek aliases).
+        #   2. switch_model_by_id only flips per-session @current_model_id
+        #      in the dup'd config — it never mutates the shared @models
+        #      array (see AgentConfig#deep_copy's shared-ref contract).
+        #      A name rewrite would have leaked into every live session
+        #      AND corrupted the on-disk config at next save.
+        config.switch_model_by_id(model_id) if model_id
+
+        # Build client from the (possibly overridden) config so api format
+        # detection (Bedrock vs OpenAI vs Anthropic) uses the correct model.
+        client = Clacky::Client.new(
+          config.api_key,
+          base_url: config.base_url,
+          model: config.model_name,
+          anthropic_format: config.anthropic_format?
+        )
+
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)
         agent = Clacky::Agent.new(client, config, working_dir: working_dir, ui: ui, profile: profile,

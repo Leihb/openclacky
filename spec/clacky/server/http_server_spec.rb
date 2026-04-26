@@ -422,6 +422,91 @@ RSpec.describe Clacky::Server::HttpServer do
         expect(body["error"]).to match(/name is required/i)
       end
     end
+
+    # ── model_id override ──────────────────────────────────────────────────
+    # Regression: webui "More Options" used to pass a bare model name and the
+    # server rewrote current_model["model"] in place, keeping the old
+    # api_key / base_url / anthropic_format. Picking a non-default model
+    # therefore produced "unknown model <name>" from the original provider.
+    # Fix: pass the stable model_id and call switch_model_by_id so the full
+    # model entry (credentials + endpoint + format) is activated for the
+    # new session only.
+    context "with model_id override" do
+      let(:multi_model_config) do
+        cfg = Clacky::AgentConfig.new(models: [
+          {
+            "model"            => "abs-claude-sonnet-4-5",
+            "api_key"          => "clacky-aaaaaaaaaaaa1111",
+            "base_url"         => "https://api.openclacky.com",
+            "anthropic_format" => true,
+            "type"             => "default"
+          },
+          {
+            "model"            => "deepseek-v4-pro",
+            "api_key"          => "sk-deepseekkey1234567890",
+            "base_url"         => "https://api.deepseek.com",
+            "anthropic_format" => false
+          }
+        ])
+        stub_const("Clacky::AgentConfig::CONFIG_FILE", config_file)
+        cfg
+      end
+
+      it "creates a session on the overridden model (by id) without touching the default entry" do
+        with_server(agent_config: multi_model_config) do |server|
+          target = multi_model_config.models.find { |m| m["model"] == "deepseek-v4-pro" }
+          original_default_name = multi_model_config.models.first["model"]
+
+          req = fake_req(method: "POST", path: "/api/sessions",
+                         body: { name: "ds-s", model_id: target["id"] })
+          res = fake_res
+          dispatch(server, req, res)
+
+          expect(res.status).to eq(201)
+          session_id = parsed_body(res)["session"]["id"]
+
+          # The created session should resolve to the deepseek entry.
+          registry = server.instance_variable_get(:@registry)
+          agent = nil
+          registry.with_session(session_id) { |s| agent = s[:agent] }
+          expect(agent.current_model_info[:model]).to eq("deepseek-v4-pro")
+          expect(agent.current_model_info[:base_url]).to eq("https://api.deepseek.com")
+
+          # The shared @models array MUST NOT be mutated — the default entry's
+          # model name stays put, so other sessions (and config.yml on save)
+          # are unaffected by this per-session override.
+          expect(multi_model_config.models.first["model"]).to eq(original_default_name)
+        end
+      end
+
+      it "returns 400 when model_id does not match any configured model" do
+        with_server(agent_config: multi_model_config) do |server|
+          req = fake_req(method: "POST", path: "/api/sessions",
+                         body: { name: "bad-s", model_id: "nonexistent-uuid" })
+          res = fake_res
+          dispatch(server, req, res)
+
+          expect(res.status).to eq(400)
+          expect(parsed_body(res)["error"]).to match(/Model not found/i)
+        end
+      end
+
+      it "falls back to the default model when model_id is omitted" do
+        with_server(agent_config: multi_model_config) do |server|
+          req = fake_req(method: "POST", path: "/api/sessions", body: { name: "def-s" })
+          res = fake_res
+          dispatch(server, req, res)
+
+          expect(res.status).to eq(201)
+          session_id = parsed_body(res)["session"]["id"]
+
+          registry = server.instance_variable_get(:@registry)
+          agent = nil
+          registry.with_session(session_id) { |s| agent = s[:agent] }
+          expect(agent.current_model_info[:model]).to eq("abs-claude-sonnet-4-5")
+        end
+      end
+    end
   end
 
   # ── DELETE /api/sessions/:id ──────────────────────────────────────────────
