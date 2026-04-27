@@ -30,12 +30,15 @@ module Clacky
           "abs-claude-sonnet-4-5",
           "abs-claude-haiku-4-5",
           "dsk-deepseek-v4-pro",
-          "dsk-deepseek-v4-flash"
+          "dsk-deepseek-v4-flash",
+          "or-gemini-3-1-pro"
         ],
         # Provider-level default: the Claude family served here is vision-capable.
         "capabilities" => { "vision" => true }.freeze,
         # Model-level overrides: DeepSeek models routed through this provider
         # are text-only; images uploaded for them must be downgraded to disk refs.
+        # Gemini 3.1 Pro keeps the provider-default vision=true (it accepts
+        # image/audio/video input natively via OpenRouter).
         "model_capabilities" => {
           "dsk-deepseek-v4-pro"   => { "vision" => false }.freeze,
           "dsk-deepseek-v4-flash" => { "vision" => false }.freeze
@@ -46,6 +49,10 @@ module Clacky
         # weak models (haiku / v4-flash) ARE the lite tier themselves, so
         # they're intentionally not listed here — no injection happens when
         # the default model is already lite-class.
+        #
+        # or-gemini-3-1-pro is intentionally absent: Gemini has no lite
+        # sibling wired up (yet) on this provider; subagents using the
+        # Gemini default will just reuse it for lite work until we add one.
         "lite_models" => {
           "abs-claude-opus-4-7"   => "abs-claude-haiku-4-5",
           "abs-claude-opus-4-6"   => "abs-claude-haiku-4-5",
@@ -86,8 +93,6 @@ module Clacky
         "models" => [
           "deepseek-v4-flash",
           "deepseek-v4-pro",
-          "deepseek-chat",
-          "deepseek-reasoner"
         ],
         # DeepSeek V4 API does not accept image inputs — text-only across all models.
         "capabilities" => { "vision" => false }.freeze,
@@ -137,9 +142,11 @@ module Clacky
           "abs-claude-sonnet-4-5",
           "abs-claude-haiku-4-5",
           "dsk-deepseek-v4-pro",
-          "dsk-deepseek-v4-flash"
+          "dsk-deepseek-v4-flash",
+          "or-gemini-3-1-pro"
         ],
-        # Same lineup as openclacky — Claude is vision, DeepSeek is text-only.
+        # Same lineup as openclacky — Claude is vision, DeepSeek is text-only,
+        # Gemini inherits the provider-default vision=true.
         "capabilities" => { "vision" => true }.freeze,
         "model_capabilities" => {
           "dsk-deepseek-v4-pro"   => { "vision" => false }.freeze,

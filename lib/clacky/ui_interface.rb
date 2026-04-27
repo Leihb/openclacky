@@ -19,7 +19,7 @@ module Clacky
     def show_shell_preview(command); end
     def show_diff(old_content, new_content, max_lines: 50); end
     def show_token_usage(token_data); end
-    def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false); end
+    def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false, cost_source: nil); end
     def append_output(content); end
 
     # === Status messages ===

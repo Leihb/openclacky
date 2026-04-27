@@ -166,8 +166,10 @@ module Clacky
             model_info = s[:agent]&.current_model_info
             live_name  = s[:agent]&.name
             live_name  = nil if live_name&.empty?
+            live_cost_source = s[:agent]&.cost_source
             { status: s[:status], error: s[:error], model: model_info&.dig(:model), name: live_name,
-              total_tasks: s[:agent]&.total_tasks, total_cost: s[:agent]&.total_cost }
+              total_tasks: s[:agent]&.total_tasks, total_cost: s[:agent]&.total_cost,
+              cost_source: live_cost_source }
           end
         end
 
@@ -231,6 +233,7 @@ module Clacky
             updated_at:    s[:updated_at],
             total_tasks:   ls&.dig(:total_tasks) || s.dig(:stats, :total_tasks) || 0,
             total_cost:    ls&.dig(:total_cost)  || s.dig(:stats, :total_cost_usd) || 0.0,
+            cost_source:   (ls&.dig(:cost_source) || s.dig(:stats, :cost_source) || "estimated").to_s,
             pinned:        s[:pinned] || false,
           }
         end
@@ -301,6 +304,7 @@ module Clacky
           updated_at:      session[:updated_at].iso8601,
           total_tasks:     agent.total_tasks || 0,
           total_cost:      agent.total_cost  || 0.0,
+          cost_source:     agent.cost_source.to_s,
           error:           session[:error],
           model:           model_info&.dig(:model),
           permission_mode: agent.permission_mode,

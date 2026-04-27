@@ -216,19 +216,15 @@ RSpec.describe Clacky::ModelPricing do
     end
     
     context "with unknown model" do
-      it "uses default fallback pricing" do
+      it "returns nil cost (no default fallback)" do
         usage = {
           prompt_tokens: 100_000,
           completion_tokens: 50_000
         }
         
-        # Default pricing: input=$0.50, output=$1.50
-        # Input: (100,000 / 1,000,000) * $0.50 = $0.05
-        # Output: (50,000 / 1,000,000) * $1.50 = $0.075
-        # Total: $0.125
         result = described_class.calculate_cost(model: "unknown-model", usage: usage)
-        expect(result[:cost]).to be_within(0.001).of(0.125)
-        expect(result[:source]).to eq(:default)
+        expect(result[:cost]).to be_nil
+        expect(result[:source]).to be_nil
       end
     end
     
@@ -308,16 +304,14 @@ RSpec.describe Clacky::ModelPricing do
       expect(pricing[:output][:default]).to eq(25.00)
     end
     
-    it "returns default pricing for unknown models" do
+    it "returns nil for unknown models" do
       pricing = described_class.get_pricing("gpt-4")
-      expect(pricing[:input][:default]).to eq(0.50)
-      expect(pricing[:output][:default]).to eq(1.50)
+      expect(pricing).to be_nil
     end
     
-    it "returns default pricing for nil model" do
+    it "returns nil for nil model" do
       pricing = described_class.get_pricing(nil)
-      expect(pricing[:input][:default]).to eq(0.50)
-      expect(pricing[:output][:default]).to eq(1.50)
+      expect(pricing).to be_nil
     end
   end
 end

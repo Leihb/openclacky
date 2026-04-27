@@ -477,6 +477,7 @@ module Clacky
           @ui&.show_complete(
             iterations: result[:iterations],
             cost: result[:total_cost_usd],
+            cost_source: result[:cost_source],
             duration: result[:duration_seconds],
             cache_stats: result[:cache_stats],
             awaiting_user_feedback: awaiting_user_feedback

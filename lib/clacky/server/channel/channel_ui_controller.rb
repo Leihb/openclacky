@@ -104,10 +104,14 @@ module Clacky
         # Suppress
       end
 
-      def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false)
+      def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false, cost_source: nil)
         flush_buffer
         parts = ["Done", "#{iterations} step#{"s" if iterations != 1}"]
-        parts << "$#{cost.round(4)}" if cost && cost > 0
+        # Only show cost when pricing source is known (model matched pricing table).
+        # Unknown models return nil — skip to avoid misleading numbers.
+        if cost && cost > 0 && cost_source
+          parts << "$#{cost.round(4)}"
+        end
         parts << "#{duration.round(1)}s" if duration
         send_text(parts.join(" · "))
       end

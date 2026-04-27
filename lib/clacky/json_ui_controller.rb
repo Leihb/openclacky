@@ -78,7 +78,7 @@ module Clacky
       emit("token_usage", **token_data)
     end
 
-    def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false)
+    def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false, cost_source: nil)
       data = { iterations: iterations, cost: cost }
       data[:duration] = duration if duration
       data[:cache_stats] = cache_stats if cache_stats

@@ -19,14 +19,26 @@ module Clacky
       # Detect if the request should use the Bedrock Converse API.
       # Matches any of:
       #   - API key with "ABSK" prefix (native AWS Bedrock)
-      #   - API key with "clacky-" prefix (Clacky workspace key, proxied via Bedrock Converse)
       #   - Model ID with "abs-" prefix (Clacky AI proxy that speaks Bedrock Converse)
+      #
+      # A bare "clacky-" key is NOT enough: that same workspace key is also
+      # used for dsk-*, or-*, and other OpenAI-compatible aliases served by
+      # the same Clacky proxy on a different endpoint. The *model prefix* is
+      # the source of truth for which upstream format the proxy expects:
+      #
+      #   abs-*  → Bedrock Converse  (POST /model/{id}/converse)
+      #   dsk-*  → OpenAI-compatible (POST /chat/completions)
+      #   or-*   → OpenAI-compatible (POST /chat/completions)
+      #   other  → depends on base_url + explicit anthropic_format flag
+      #
+      # Historically this method also returned true for any "clacky-" key,
+      # which forced non-abs aliases into the Bedrock endpoint and produced
+      # `unknown model "..."` errors. Keep the explicit-prefix rule: if you
+      # add a new OpenAI-compatible alias family on the Clacky proxy, it
+      # will route correctly without touching this file.
       def self.bedrock_api_key?(api_key, model)
-        # dsk- prefixed models use the OpenAI-compatible /chat/completions endpoint
-        # on the same Clacky proxy, not the Bedrock Converse /model/{model}/converse path.
-        return false if model.to_s.start_with?("dsk-")
-
-        api_key.to_s.start_with?("ABSK", "clacky-") || model.to_s.start_with?("abs-")
+        return true if api_key.to_s.start_with?("ABSK")
+        model.to_s.start_with?("abs-")
       end
 
       module_function

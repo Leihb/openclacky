@@ -24,15 +24,22 @@ module Clacky
           cost = result[:cost]
           pricing_source = result[:source]
 
-          @total_cost += cost
-          iteration_cost = cost
-          # Map pricing source to cost source: :price or :default
-          @cost_source = pricing_source
-          @task_cost_source = pricing_source
+          # Only accumulate cost when the model has known pricing.
+          # Unknown models return nil — display N/A, don't add to total.
+          if cost
+            @total_cost += cost
+            iteration_cost = cost
+            @cost_source = pricing_source
+            @task_cost_source = pricing_source
+          end
 
           if @config.verbose
-            source_label = pricing_source == :price ? "model pricing" : "default pricing"
-            @ui&.log("Calculated cost for #{@config.model_name} using #{source_label}: $#{cost.round(6)}", level: :debug)
+            if cost
+              source_label = pricing_source == :price ? "model pricing" : "default pricing"
+              @ui&.log("Calculated cost for #{@config.model_name} using #{source_label}: $#{cost.round(6)}", level: :debug)
+            else
+              @ui&.log("No pricing data available for #{@config.model_name} — cost is unknown", level: :debug)
+            end
             @ui&.log("Usage breakdown: prompt=#{usage[:prompt_tokens]}, completion=#{usage[:completion_tokens]}, cache_write=#{usage[:cache_creation_input_tokens] || 0}, cache_read=#{usage[:cache_read_input_tokens] || 0}", level: :debug)
           end
         end

@@ -141,21 +141,6 @@ module Clacky
         }
       },
 
-      # Default fallback pricing (conservative estimates)
-      "default" => {
-        input: {
-          default: 0.50,
-          over_200k: 0.50
-        },
-        output: {
-          default: 1.50,
-          over_200k: 1.50
-        },
-        cache: {
-          write: 0.625,
-          read: 0.05
-        }
-      }
     }.freeze
 
     # Threshold for tiered pricing (200K tokens)
@@ -171,13 +156,17 @@ module Clacky
       #   - cache_creation_input_tokens: tokens written to cache (optional)
       #   - cache_read_input_tokens: tokens read from cache (optional)
       # @return [Hash] Hash containing:
-      #   - cost: Cost in USD (Float)
-      #   - source: Cost source (:price or :default) (Symbol)
+      #   - cost: Cost in USD (Float) or nil if model pricing is unknown
+      #   - source: Cost source (:price) or nil if unknown (Symbol or nil)
       def calculate_cost(model:, usage:)
         pricing_result = get_pricing_with_source(model)
         pricing = pricing_result[:pricing]
         source = pricing_result[:source]
-        
+
+        # If no pricing table matches this model, return nil cost.
+        # Unknown models should display as N/A, never fall back to guesses.
+        return { cost: nil, source: nil } unless pricing
+
         prompt_tokens = usage[:prompt_tokens] || 0
         completion_tokens = usage[:completion_tokens] || 0
         cache_write_tokens = usage[:cache_creation_input_tokens] || 0
@@ -227,31 +216,29 @@ module Clacky
       # 
       # @param model [String] Model identifier
       # @return [Hash] Hash containing:
-      #   - pricing: Pricing structure for the model
-      #   - source: :price (matched model) or :default (fallback)
+      #   - pricing: Pricing structure or nil if model is unknown
+      #   - source: :price (matched) or nil (unknown)
       def get_pricing_with_source(model)
         # Normalize model name (remove version suffixes, handle variations)
         normalized_model = normalize_model_name(model)
-        
-        if normalized_model == "default"
-          # Using default fallback pricing
-          {
-            pricing: PRICING_TABLE["default"],
-            source: :default
-          }
-        else
+
+        if normalized_model
           # Found specific pricing for this model
           {
             pricing: PRICING_TABLE[normalized_model],
             source: :price
           }
+        else
+          # No matching pricing table entry — cost is unknown
+          { pricing: nil, source: nil }
         end
       end
       
       
-      # Normalize model name to match pricing table keys
+      # Normalize model name to match pricing table keys.
+      # Returns the canonical key on match, or nil when no pricing is available.
       def normalize_model_name(model)
-        return "default" if model.nil? || model.empty?
+        return nil if model.nil? || model.empty?
         
         model = model.downcase.strip
         
@@ -284,7 +271,7 @@ module Clacky
         when /^deepseek-chat$/i, /^deepseek-reasoner$/i
           "deepseek-v4-flash"
         else
-          "default"
+          nil  # No pricing available for this model — cost will show as N/A
         end
       end
       

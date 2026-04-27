@@ -18,6 +18,10 @@ module Clacky
         @working_dir = session_data[:working_dir]
         @created_at = session_data[:created_at]
         @total_tasks = session_data.dig(:stats, :total_tasks) || 0
+        # Restore cost_source so frontend knows if cost is reliable
+        cost_src = session_data.dig(:stats, :cost_source)
+        @cost_source = (cost_src && cost_src.to_sym) || :estimated
+        @task_cost_source = :estimated
         # Restore source; fall back to :manual for sessions saved before this field existed
         @source = (session_data[:source] || "manual").to_sym
 
@@ -65,6 +69,7 @@ module Clacky
           total_tasks: @total_tasks,
           total_iterations: @iterations,
           total_cost_usd: @total_cost.round(4),
+          cost_source: @cost_source.to_s,
           duration_seconds: @start_time ? (Time.now - @start_time).round(2) : 0,
           last_status: status.to_s,
           cache_stats: @cache_stats,

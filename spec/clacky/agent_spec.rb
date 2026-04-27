@@ -8,10 +8,13 @@ RSpec.describe Clacky::Agent do
     end
   end
   let(:config) do
-    Clacky::AgentConfig.new(
-      model: "gpt-3.5-turbo",
-      permission_mode: :auto_approve
+    c = Clacky::AgentConfig.new(permission_mode: :auto_approve)
+    c.add_model(
+      model: "claude-sonnet-4.5",
+      api_key: "test-api-key",
+      base_url: "https://api.anthropic.com"
     )
+    c
   end
   let(:agent) { described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id, source: :manual) }
 
