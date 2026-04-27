@@ -218,8 +218,11 @@ module Clacky
       ext  = File.extname(path).downcase
       size = File.size(path)
       raise ArgumentError, "File too large: #{path}" if size > MAX_FILE_BYTES
-      mime = MIME_TYPES[ext] || "application/octet-stream"
-      data = Base64.strict_encode64(File.binread(path))
+      ext_mime = MIME_TYPES[ext] || "application/octet-stream"
+      raw_data = File.binread(path)
+      # Detect actual image format from magic bytes (ignore misleading extensions)
+      mime = ext_mime.start_with?("image/") ? detect_image_mime_type(raw_data, ext_mime) : ext_mime
+      data = Base64.strict_encode64(raw_data)
       # Downscale images before sending to LLM to reduce token cost
       data = downscale_image_base64(data, mime) if mime.start_with?("image/")
       { format: ext[1..], mime_type: mime, size_bytes: size, base64_data: data }
@@ -232,15 +235,19 @@ module Clacky
         raise ArgumentError, "Image too large (#{size / 1024}KB > #{MAX_IMAGE_BYTES / 1024}KB): #{path}"
       end
       require "base64"
+      # Extension-based guess as fallback only
       ext  = File.extname(path).downcase.delete(".")
-      mime = case ext
-             when "jpg", "jpeg" then "image/jpeg"
-             when "png"         then "image/png"
-             when "gif"         then "image/gif"
-             when "webp"        then "image/webp"
-             else "image/#{ext}"
-             end
-      b64 = Base64.strict_encode64(File.binread(path))
+      ext_mime = case ext
+                 when "jpg", "jpeg" then "image/jpeg"
+                 when "png"         then "image/png"
+                 when "gif"         then "image/gif"
+                 when "webp"        then "image/webp"
+                 else "image/#{ext}"
+                 end
+      raw_data = File.binread(path)
+      # Detect actual image format from magic bytes (ignore misleading extensions)
+      mime = detect_image_mime_type(raw_data, ext_mime)
+      b64 = Base64.strict_encode64(raw_data)
       # Downscale images before sending to LLM to reduce token cost
       b64 = downscale_image_base64(b64, mime)
       "data:#{mime};base64,#{b64}"
@@ -298,6 +305,46 @@ module Clacky
 
       # Last resort: binary read with replacement characters
       raw.encode("UTF-8", "binary", invalid: :replace, undef: :replace, replace: "?")
+    end
+
+    # Detect the actual image MIME type from raw binary data by inspecting
+    # magic bytes, ignoring the file extension. Falls back to extension-based
+    # detection when magic bytes don't match any known format.
+    #
+    # Handles: PNG, JPEG, GIF, WEBP, BMP, TIFF
+    #
+    # @param data [String] raw binary data (first 12 bytes is sufficient)
+    # @param fallback_mime [String] MIME type from extension, used as fallback
+    # @return [String] detected MIME type (e.g. "image/png", "image/jpeg")
+    def self.detect_image_mime_type(data, fallback_mime = "image/png")
+      return fallback_mime if data.nil? || data.bytesize < 4
+
+      bytes = data.bytes
+
+      case
+      # PNG: \x89 P N G \r \n \x1a \n
+      when bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47
+        "image/png"
+      # JPEG: \xFF \xD8 \xFF
+      when bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+        "image/jpeg"
+      # GIF: GIF87a or GIF89a
+      when bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38
+        "image/gif"
+      # WEBP: RIFF .... WEBP
+      when bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46 &&
+           data.bytesize >= 12 && data[8, 4] == "WEBP"
+        "image/webp"
+      # BMP: BM
+      when bytes[0] == 0x42 && bytes[1] == 0x4D
+        "image/bmp"
+      # TIFF: II*\x00 (little-endian) or MM\x00* (big-endian)
+      when (bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00) ||
+           (bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A)
+        "image/tiff"
+      else
+        fallback_mime
+      end
     end
 
     # ---------------------------------------------------------------------------
