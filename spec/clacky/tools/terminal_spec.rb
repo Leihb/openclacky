@@ -543,6 +543,38 @@ RSpec.describe Clacky::Tools::Terminal do
       formatted = tool.format_result(exit_code: 0, bytes_read: 0, output: "")
       expect(formatted).to eq("✓ exit=0")
     end
+
+    # Regression: when `output` is a String whose encoding is UTF-8 but
+    # contains an invalid byte sequence (e.g. produced by byteslice cutting
+    # through the middle of a multi-byte char), format_result used to raise
+    #   ArgumentError: invalid byte sequence in UTF-8
+    # from `text.split(/\r?\n/)` / `text.strip` in #display_tail. We want a
+    # graceful render.
+    it "does not raise when output contains invalid UTF-8 bytes" do
+      # Lone continuation bytes — not a valid UTF-8 sequence.
+      broken = "hello\n\x80\xFF\x9C world".b.force_encoding("UTF-8")
+      expect(broken.valid_encoding?).to eq(false)
+
+      expect {
+        tool.format_result(exit_code: 0, bytes_read: broken.bytesize, output: broken)
+      }.not_to raise_error
+    end
+
+    it "does not raise when output is chopped mid-multibyte (real byteslice scenario)" do
+      # Simulate the exact wait_and_package truncation path: build a string
+      # whose byte-N boundary falls INSIDE a 3-byte CJK character, then
+      # byteslice to N. This is what MAX_LLM_OUTPUT_CHARS truncation does
+      # when the cut happens mid-char.
+      raw = ("a" * 7999) + "中家".dup
+      raw.force_encoding("UTF-8")
+      sliced = raw.byteslice(0, 8000)
+      sliced.force_encoding("UTF-8")
+      expect(sliced.valid_encoding?).to eq(false)
+
+      expect {
+        tool.format_result(exit_code: 0, bytes_read: 8000, output: sliced)
+      }.not_to raise_error
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -696,6 +728,17 @@ RSpec.describe Clacky::Tools::Terminal do
 
       it "is idempotent on already-clean text" do
         expect(described_class.clean("hello world\n")).to eq("hello world\n")
+      end
+
+      it "scrubs invalid UTF-8 byte sequences into a valid UTF-8 string" do
+        # ASCII-8BIT bytes that are NOT valid UTF-8 (lone continuation bytes).
+        raw = "before \x80\xFF\x9C after".b
+        cleaned = described_class.clean(raw)
+
+        expect(cleaned.encoding).to eq(Encoding::UTF_8)
+        expect(cleaned.valid_encoding?).to eq(true)
+        expect(cleaned).to include("before")
+        expect(cleaned).to include("after")
       end
     end
   end

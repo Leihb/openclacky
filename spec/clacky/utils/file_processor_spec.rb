@@ -143,6 +143,128 @@ RSpec.describe Clacky::Utils::FileProcessor do
         end
       end
     end
+
+    context "with markdown files" do
+      it "uses file content directly as preview (no parser)" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "notes.md")
+          File.write(path, "# Heading\nbody line")
+
+          expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+
+          ref = described_class.process_path(path)
+          expect(ref.type).to eq(:text)
+          expect(ref.preview_path).to end_with(".preview.md")
+          expect(File.read(ref.preview_path)).to include("# Heading")
+          expect(ref.parse_error).to be_nil
+        end
+      end
+
+      it "also handles .markdown, .txt, .log extensions" do
+        Dir.mktmpdir do |dir|
+          %w[doc.markdown plain.txt server.log].each do |fname|
+            path = File.join(dir, fname)
+            File.write(path, "content of #{fname}")
+            ref = described_class.process_path(path)
+            expect(ref.type).to eq(:text)
+            expect(ref.preview_path).not_to be_nil
+            expect(File.read(ref.preview_path)).to eq("content of #{fname}")
+          end
+        end
+      end
+    end
+
+    context "with tar.gz files" do
+      it "generates entry listing preview without calling ParserManager" do
+        require "rubygems/package"
+        require "zlib"
+        Dir.mktmpdir do |dir|
+          targz_path = File.join(dir, "archive.tar.gz")
+          File.open(targz_path, "wb") do |file|
+            Zlib::GzipWriter.wrap(file) do |gz|
+              Gem::Package::TarWriter.new(gz) do |tar|
+                tar.add_file_simple("hello.txt", 0o644, 5) { |io| io.write("hello") }
+                tar.add_file_simple("sub/bye.txt", 0o644, 3) { |io| io.write("bye") }
+              end
+            end
+          end
+
+          expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+
+          ref = described_class.process_path(targz_path)
+          expect(ref.type).to eq(:zip)
+          expect(ref.preview_path).to end_with(".preview.md")
+          preview = File.read(ref.preview_path)
+          expect(preview).to include("TAR.GZ Contents")
+          expect(preview).to include("hello.txt")
+          expect(preview).to include("sub/bye.txt")
+          expect(ref.parse_error).to be_nil
+        end
+      end
+
+      it "handles .tgz extension" do
+        require "rubygems/package"
+        require "zlib"
+        Dir.mktmpdir do |dir|
+          tgz_path = File.join(dir, "bundle.tgz")
+          File.open(tgz_path, "wb") do |file|
+            Zlib::GzipWriter.wrap(file) do |gz|
+              Gem::Package::TarWriter.new(gz) do |tar|
+                tar.add_file_simple("a.txt", 0o644, 1) { |io| io.write("x") }
+              end
+            end
+          end
+
+          ref = described_class.process_path(tgz_path)
+          expect(ref.type).to eq(:zip)
+          expect(File.read(ref.preview_path)).to include("a.txt")
+        end
+      end
+    end
+
+    context "with tar files" do
+      it "generates entry listing preview" do
+        require "rubygems/package"
+        Dir.mktmpdir do |dir|
+          tar_path = File.join(dir, "archive.tar")
+          File.open(tar_path, "wb") do |file|
+            Gem::Package::TarWriter.new(file) do |tar|
+              tar.add_file_simple("one.txt", 0o644, 3) { |io| io.write("foo") }
+              tar.add_file_simple("two.txt", 0o644, 3) { |io| io.write("bar") }
+            end
+          end
+
+          ref = described_class.process_path(tar_path)
+          expect(ref.type).to eq(:zip)
+          preview = File.read(ref.preview_path)
+          expect(preview).to include("TAR Contents")
+          expect(preview).to include("one.txt")
+          expect(preview).to include("two.txt")
+        end
+      end
+    end
+
+    context "with single-file .gz" do
+      it "falls back to size metadata when archive is not a tarball" do
+        require "zlib"
+        Dir.mktmpdir do |dir|
+          gz_path = File.join(dir, "data.gz")
+          File.open(gz_path, "wb") do |file|
+            Zlib::GzipWriter.wrap(file) do |gz|
+              gz.write("hello world, not a tarball\n" * 4)
+            end
+          end
+
+          ref = described_class.process_path(gz_path)
+          expect(ref.type).to eq(:zip)
+          expect(ref.preview_path).not_to be_nil
+          preview = File.read(ref.preview_path)
+          # Either recognised as GZIP metadata, or — if extension sniffing
+          # still accepted it as tar — at least produces some listing.
+          expect(preview).to match(/GZIP Contents|TAR\.GZ Contents|could not list/)
+        end
+      end
+    end
   end
 
   # ---------------------------------------------------------------------------

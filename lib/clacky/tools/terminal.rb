@@ -342,7 +342,14 @@ module Clacky
         cleaned = strip_command_echo(cleaned, marker_token: session.marker_token)
         truncated = false
         if cleaned.bytesize > MAX_LLM_OUTPUT_CHARS
-          cleaned = cleaned.byteslice(0, MAX_LLM_OUTPUT_CHARS) + "\n...[output truncated]"
+          # byteslice may cut through the middle of a multi-byte char, which
+          # leaves the result as invalid UTF-8. Re-scrub after truncation so
+          # everything downstream (JSON.generate, format_result, UI) gets a
+          # guaranteed-valid UTF-8 string.
+          cleaned = cleaned.byteslice(0, MAX_LLM_OUTPUT_CHARS)
+          cleaned.force_encoding(Encoding::UTF_8)
+          cleaned = cleaned.scrub("?") unless cleaned.valid_encoding?
+          cleaned += "\n...[output truncated]"
           truncated = true
         end
         SessionManager.advance_offset(session.id, new_offset)
@@ -969,11 +976,20 @@ module Clacky
 
       # Extract the last DISPLAY_TAIL_LINES non-empty lines of output so the
       # user can see what actually happened in this poll, not just a "128B"
-      # byte-count. Output is already cleaned by OutputCleaner, so we only
-      # need to trim and pick the tail.
+      # byte-count. Output is USUALLY already cleaned by OutputCleaner, but
+      # if a caller hands us raw bytes (or a byteslice chopped a multi-byte
+      # character in half), `split`/`strip` would raise
+      #   Encoding::CompatibilityError: invalid byte sequence in UTF-8
+      # and the whole tool call would error. Guard with scrub.
       private def display_tail(output)
         return "" if output.nil?
         text = output.to_s
+        # Defensive: make sure we have a valid UTF-8 string. No-op on the
+        # happy path (already UTF-8, valid); only rebuilds when broken.
+        unless text.encoding == Encoding::UTF_8 && text.valid_encoding?
+          text = text.dup.force_encoding(Encoding::UTF_8)
+          text = text.scrub("?") unless text.valid_encoding?
+        end
         return "" if text.strip.empty?
         lines = text.split(/\r?\n/).reject { |l| l.strip.empty? }
         return "" if lines.empty?

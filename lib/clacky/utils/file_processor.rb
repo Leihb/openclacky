@@ -38,7 +38,7 @@ module Clacky
     BINARY_EXTENSIONS = %w[
       .png .jpg .jpeg .gif .webp .bmp .tiff .ico .svg
       .pdf
-      .zip .gz .tar .rar .7z
+      .zip .gz .tgz .tar .rar .7z
       .exe .dll .so .dylib
       .mp3 .mp4 .avi .mov .mkv .wav .flac
       .ttf .otf .woff .woff2
@@ -65,11 +65,17 @@ module Clacky
       ".xlsx" => :spreadsheet, ".xls" => :spreadsheet,
       ".pptx" => :presentation, ".ppt" => :presentation,
       ".pdf"  => :pdf,
-      ".zip"  => :zip, ".gz" => :zip, ".tar" => :zip, ".rar" => :zip, ".7z" => :zip,
+      ".zip"  => :zip, ".gz" => :zip, ".tgz" => :zip, ".tar" => :zip, ".rar" => :zip, ".7z" => :zip,
       ".png"  => :image, ".jpg" => :image, ".jpeg" => :image,
       ".gif"  => :image, ".webp" => :image,
-      ".csv"  => :csv
+      ".csv"  => :csv,
+      ".md"   => :text, ".markdown" => :text, ".txt" => :text, ".log" => :text
     }.freeze
+
+    # Plain-text extensions whose raw content can be embedded directly as the
+    # preview (no external parser needed). Kept conservative to avoid pulling
+    # in huge source files by mistake.
+    TEXT_PREVIEW_EXTENSIONS = %w[.md .markdown .txt .log].freeze
 
     # FileRef: result of process / process_path.
     FileRef = Struct.new(:name, :type, :original_path, :preview_path, :parse_error, :parser_path, keyword_init: true) do
@@ -102,7 +108,14 @@ module Clacky
     # @return [FileRef]
     def self.process_path(path, name: nil)
       name ||= File.basename(path.to_s)
-      ext   = File.extname(path.to_s).downcase
+      # Use compound extension for .tar.gz so it's treated as a tarball, not gzip.
+      basename_lower = name.to_s.downcase
+      ext =
+        if basename_lower.end_with?(".tar.gz")
+          ".tar.gz"
+        else
+          File.extname(path.to_s).downcase
+        end
       type  = FILE_TYPES[ext] || :file
 
       case ext
@@ -111,6 +124,18 @@ module Clacky
         preview_content = parse_zip_listing(body)
         preview_path    = save_preview(preview_content, path)
         FileRef.new(name: name, type: :zip, original_path: path, preview_path: preview_path)
+
+      when ".tar", ".tar.gz", ".tgz", ".gz"
+        # Archive listing for tarballs and gzip'd files. Provides the LLM a
+        # file-tree preview so it can decide whether to ask the user to
+        # extract them (via the shell tool).
+        begin
+          preview_content = parse_tar_listing(path, ext)
+          preview_path    = save_preview(preview_content, path)
+          FileRef.new(name: name, type: :zip, original_path: path, preview_path: preview_path)
+        rescue => e
+          FileRef.new(name: name, type: :zip, original_path: path, parse_error: e.message)
+        end
 
       when ".png", ".jpg", ".jpeg", ".gif", ".webp"
         FileRef.new(name: name, type: :image, original_path: path)
@@ -124,6 +149,17 @@ module Clacky
           FileRef.new(name: name, type: :csv, original_path: path, preview_path: preview_path)
         rescue => e
           FileRef.new(name: name, type: :csv, original_path: path, parse_error: e.message)
+        end
+
+      when *TEXT_PREVIEW_EXTENSIONS
+        # Markdown / plain text: the file itself IS the preview.
+        # No parser needed — just copy through (with encoding normalisation).
+        begin
+          text         = read_text_with_encoding_fallback(path)
+          preview_path = save_preview(text, path)
+          FileRef.new(name: name, type: :text, original_path: path, preview_path: preview_path)
+        rescue => e
+          FileRef.new(name: name, type: :text, original_path: path, parse_error: e.message)
         end
 
       else
@@ -268,6 +304,96 @@ module Clacky
       lines.join("\n")
     rescue => e
       "# ZIP Contents\n(could not list entries: #{e.message})"
+    end
+
+    # List entries in a tarball or gzip file.
+    #
+    # Handles:
+    #   .tar        → raw tar reader
+    #   .tar.gz/.tgz → gunzip stream + tar reader
+    #   .gz         → single gzipped file → show original filename + uncompressed size
+    def self.parse_tar_listing(path, ext)
+      require "rubygems/package"
+      require "zlib"
+
+      case ext
+      when ".tar"
+        lines = ["# TAR Contents\n"]
+        File.open(path, "rb") do |file|
+          Gem::Package::TarReader.new(file) do |tar|
+            tar.each do |entry|
+              kind = entry.directory? ? "[dir] " : ""
+              size = entry.header.size ? " (#{entry.header.size} bytes)" : ""
+              lines << "- #{kind}#{entry.full_name}#{size}"
+            end
+          end
+        end
+        lines.join("\n")
+
+      when ".tar.gz", ".tgz"
+        lines = ["# TAR.GZ Contents\n"]
+        File.open(path, "rb") do |file|
+          Zlib::GzipReader.wrap(file) do |gz|
+            Gem::Package::TarReader.new(gz) do |tar|
+              tar.each do |entry|
+                kind = entry.directory? ? "[dir] " : ""
+                size = entry.header.size ? " (#{entry.header.size} bytes)" : ""
+                lines << "- #{kind}#{entry.full_name}#{size}"
+              end
+            end
+          end
+        end
+        lines.join("\n")
+
+      when ".gz"
+        # Could be gzipped-tar with a misleading extension, or a single-file gzip.
+        # Try tar first; on failure, fall back to single-file metadata.
+        begin
+          lines = ["# TAR.GZ Contents\n"]
+          found_tar = false
+          File.open(path, "rb") do |file|
+            Zlib::GzipReader.wrap(file) do |gz|
+              Gem::Package::TarReader.new(gz) do |tar|
+                tar.each do |entry|
+                  found_tar = true
+                  kind = entry.directory? ? "[dir] " : ""
+                  size = entry.header.size ? " (#{entry.header.size} bytes)" : ""
+                  lines << "- #{kind}#{entry.full_name}#{size}"
+                end
+              end
+            end
+          end
+          return lines.join("\n") if found_tar
+        rescue StandardError
+          # fall through to single-file gzip handling
+        end
+
+        # Single-file gzip: report the original filename (if recorded) and compressed/uncompressed sizes.
+        original_name = nil
+        uncompressed  = nil
+        File.open(path, "rb") do |file|
+          Zlib::GzipReader.wrap(file) do |gz|
+            original_name = gz.orig_name
+            # Read fully to get the uncompressed size. Guarded: stop after 64MB
+            # to avoid blowing memory on pathological inputs — the preview only
+            # needs a size estimate, not the content.
+            limit   = 64 * 1024 * 1024
+            total   = 0
+            while (chunk = gz.read(1024 * 1024))
+              total += chunk.bytesize
+              break if total > limit
+            end
+            uncompressed = total
+          end
+        end
+        lines = ["# GZIP Contents\n"]
+        lines << "- Original filename: #{original_name || "(not recorded)"}"
+        lines << "- Compressed size:   #{File.size(path)} bytes"
+        lines << "- Uncompressed size: #{uncompressed} bytes#{uncompressed && uncompressed > 64 * 1024 * 1024 ? " (truncated)" : ""}"
+        lines.join("\n")
+      end
+    rescue => e
+      "# Archive Contents\n(could not list entries: #{e.message})"
     end
 
     def self.save_preview(content, original_path)
@@ -422,7 +548,7 @@ module Clacky
       nil
     end
 
-    private_class_method :parse_zip_listing, :save_preview, :sanitize_filename,
+    private_class_method :parse_zip_listing, :parse_tar_listing, :save_preview, :sanitize_filename,
                          :read_text_with_encoding_fallback,
                          :downscale_png_chunky, :downscale_via_cli
   end
