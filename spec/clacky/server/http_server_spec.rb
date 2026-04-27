@@ -579,301 +579,217 @@ RSpec.describe Clacky::Server::HttpServer do
     end
   end
 
-  # ── POST /api/config ──────────────────────────────────────────────────────
+  # ── Single-item model CRUD APIs ───────────────────────────────────────────
+  # These replace the old bulk POST /api/config. Each endpoint touches
+  # exactly ONE model, so a bug in one save path cannot corrupt other rows.
 
-  describe "POST /api/config" do
-    it "saves updated model configuration" do
+  describe "POST /api/config/models" do
+    it "creates a new model and returns its id" do
       with_server(agent_config: agent_config) do |server|
         payload = {
-          models: [{
-            index:            0,
-            model:            "claude-opus-4",
-            base_url:         "https://api.anthropic.com",
-            api_key:          "sk-newkey0000111122223333",
-            anthropic_format: true,
-            type:             "default"
-          }]
+          model:            "claude-opus-4",
+          base_url:         "https://api.anthropic.com",
+          api_key:          "sk-newkey0000111122223333",
+          anthropic_format: true
         }
-        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        req = fake_req(method: "POST", path: "/api/config/models", body: payload)
         res = fake_res
         dispatch(server, req, res)
 
         expect(res.status).to eq(200)
-        expect(parsed_body(res)["ok"]).to be true
+        body = parsed_body(res)
+        expect(body["ok"]).to be true
+        expect(body["id"]).to be_a(String)
 
-        # Verify the in-memory config was updated
-        expect(agent_config.model_name).to eq("claude-opus-4")
-        expect(agent_config.base_url).to eq("https://api.anthropic.com")
+        created = agent_config.models.find { |m| m["id"] == body["id"] }
+        expect(created["model"]).to eq("claude-opus-4")
+        expect(created["api_key"]).to eq("sk-newkey0000111122223333")
       end
     end
 
-    it "preserves existing API key when masked placeholder is sent" do
+    it "rejects creation without a real api_key" do
       with_server(agent_config: agent_config) do |server|
-        original_key = agent_config.api_key
-        # Real flow: frontend first GETs /api/config to obtain the model id,
-        # then POSTs it back along with any edits. Here we simulate that by
-        # reading the id directly from the in-memory config.
-        existing_id = agent_config.models[0]["id"]
+        payload = { model: "x", base_url: "https://x", api_key: "" }
+        req = fake_req(method: "POST", path: "/api/config/models", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+        expect(res.status).to eq(422)
+      end
+    end
 
-        payload = {
-          models: [{
-            id:               existing_id,
-            model:            "test-model",
-            base_url:         "https://api.example.com",
-            api_key:          "sk-test****abcd",  # masked
-            anthropic_format: true,
-            type:             "default"
-          }]
-        }
-        req = fake_req(method: "POST", path: "/api/config", body: payload)
+    it "rejects creation with a masked placeholder api_key" do
+      with_server(agent_config: agent_config) do |server|
+        payload = { model: "x", base_url: "https://x", api_key: "sk-ab****wxyz" }
+        req = fake_req(method: "POST", path: "/api/config/models", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+        expect(res.status).to eq(422)
+      end
+    end
+  end
+
+  describe "PATCH /api/config/models/:id" do
+    it "updates only the specified fields" do
+      with_server(agent_config: agent_config) do |server|
+        id = agent_config.models[0]["id"]
+        original_key = agent_config.models[0]["api_key"]
+
+        payload = { model: "renamed-model" }
+        req = fake_req(method: "PATCH", path: "/api/config/models/#{id}", body: payload)
         res = fake_res
         dispatch(server, req, res)
 
         expect(res.status).to eq(200)
-        # Original key must be preserved
-        expect(agent_config.api_key).to eq(original_key)
+        expect(agent_config.models[0]["model"]).to eq("renamed-model")
+        # api_key untouched (not in payload)
+        expect(agent_config.models[0]["api_key"]).to eq(original_key)
       end
     end
 
-    # Regression: 0.9.37 fix for silent api_key wipe.
-    #
-    # Repro of the user-reported bug: when the Web UI saves ANY model, the
-    # frontend POSTs the full _models array. /api/config only ever returns
-    # api_key_masked (never api_key), so every non-edited row is sent back
-    # with no api_key field at all — only the row being saved carries a key.
-    # Before the fix, the backend's `"api_key" => api_key.to_s` path would
-    # silently rewrite every non-edited row's api_key to "" because
-    # `nil.to_s` doesn't include "****".
-    it "preserves existing api_key for rows whose api_key field is omitted" do
-      # Two models: default + a second one. We save only the default; the
-      # second row arrives with no api_key field (exactly what the browser
-      # sends for non-edited cards).
+    it "ignores api_key when value is masked (****)" do
+      with_server(agent_config: agent_config) do |server|
+        id = agent_config.models[0]["id"]
+        original_key = agent_config.models[0]["api_key"]
+
+        payload = { api_key: "sk-test****abcd" }
+        req = fake_req(method: "PATCH", path: "/api/config/models/#{id}", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        expect(agent_config.models[0]["api_key"]).to eq(original_key)
+      end
+    end
+
+    it "ignores api_key when value is empty string" do
+      with_server(agent_config: agent_config) do |server|
+        id = agent_config.models[0]["id"]
+        original_key = agent_config.models[0]["api_key"]
+
+        payload = { api_key: "" }
+        req = fake_req(method: "PATCH", path: "/api/config/models/#{id}", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        expect(agent_config.models[0]["api_key"]).to eq(original_key)
+      end
+    end
+
+    it "updates api_key when a real non-masked value is provided" do
+      with_server(agent_config: agent_config) do |server|
+        id = agent_config.models[0]["id"]
+
+        payload = { api_key: "sk-brand-new-key-here" }
+        req = fake_req(method: "PATCH", path: "/api/config/models/#{id}", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        expect(agent_config.models[0]["api_key"]).to eq("sk-brand-new-key-here")
+      end
+    end
+
+    it "returns 404 for unknown id" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "PATCH", path: "/api/config/models/nope", body: { model: "x" })
+        res = fake_res
+        dispatch(server, req, res)
+        expect(res.status).to eq(404)
+      end
+    end
+
+    # Regression for the "saving one model wiped other api_keys" bug:
+    # PATCHing model A must never touch model B's api_key, by design.
+    it "does not touch other models' api_keys" do
       agent_config.models << {
         "id"       => "model-2-id",
         "model"    => "second-model",
-        "api_key"  => "sk-second-key-must-survive",
+        "api_key"  => "sk-second-must-survive",
         "base_url" => "https://api2.example.com"
       }
 
       with_server(agent_config: agent_config) do |server|
-        default_id = agent_config.models[0]["id"]
-        second_id  = "model-2-id"
-
-        payload = {
-          models: [
-            {
-              id:               default_id,
-              model:            "test-model",
-              base_url:         "https://api.example.com",
-              api_key:          "sk-test****abcd",  # masked — user didn't retype
-              anthropic_format: true,
-              type:             "default"
-            },
-            {
-              # Second row — exactly what the browser sends for a card the
-              # user didn't touch: NO api_key field at all.
-              id:               second_id,
-              model:            "second-model",
-              base_url:         "https://api2.example.com",
-              anthropic_format: false
-            }
-          ]
-        }
-        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        id = agent_config.models[0]["id"]
+        payload = { model: "renamed", api_key: "sk-brand-new-one" }
+        req = fake_req(method: "PATCH", path: "/api/config/models/#{id}", body: payload)
         res = fake_res
         dispatch(server, req, res)
 
         expect(res.status).to eq(200)
-        # CRITICAL: the un-edited row's api_key MUST NOT be wiped
-        second = agent_config.models.find { |m| m["id"] == second_id }
-        expect(second).not_to be_nil
-        expect(second["api_key"]).to eq("sk-second-key-must-survive")
-
-        # And the default row's key is also intact (masked placeholder path)
-        default = agent_config.models.find { |m| m["id"] == default_id }
-        expect(default["api_key"]).to eq("sk-testkey1234567890abcd")
+        second = agent_config.models.find { |m| m["id"] == "model-2-id" }
+        expect(second["api_key"]).to eq("sk-second-must-survive")
       end
     end
+  end
 
-    # Regression: same root cause, different shape. An explicit empty string
-    # (e.g. the browser sends api_key: "" because of a stale DOM read) must
-    # also NOT wipe the stored key for an existing model.
-    it "preserves existing api_key when incoming api_key is blank for an existing row" do
-      with_server(agent_config: agent_config) do |server|
-        existing_id  = agent_config.models[0]["id"]
-        original_key = agent_config.api_key
-
-        payload = {
-          models: [{
-            id:               existing_id,
-            model:            "test-model",
-            base_url:         "https://api.example.com",
-            api_key:          "",  # explicit blank — must be treated as "omitted"
-            anthropic_format: true,
-            type:             "default"
-          }]
-        }
-        req = fake_req(method: "POST", path: "/api/config", body: payload)
-        res = fake_res
-        dispatch(server, req, res)
-
-        expect(res.status).to eq(200)
-        expect(agent_config.api_key).to eq(original_key)
-      end
-    end
-
-    # Happy path counterpart: a BRAND-NEW model (no id) with no api_key is
-    # legitimately created with an empty key (user will fill it in later).
-    # This guards against over-correcting the fix above.
-    it "still allows brand-new models to be created with an empty api_key" do
-      with_server(agent_config: agent_config) do |server|
-        existing_id = agent_config.models[0]["id"]
-
-        payload = {
-          models: [
-            {
-              id:               existing_id,
-              model:            "test-model",
-              base_url:         "https://api.example.com",
-              api_key:          "sk-test****abcd",
-              anthropic_format: true,
-              type:             "default"
-            },
-            {
-              # No id → brand-new model; no api_key → user hasn't filled it
-              model:            "new-model",
-              base_url:         "https://api.new.com",
-              anthropic_format: false
-            }
-          ]
-        }
-        req = fake_req(method: "POST", path: "/api/config", body: payload)
-        res = fake_res
-        dispatch(server, req, res)
-
-        expect(res.status).to eq(200)
-        expect(agent_config.models.length).to eq(2)
-        new_model = agent_config.models.find { |m| m["model"] == "new-model" }
-        expect(new_model).not_to be_nil
-        expect(new_model["api_key"]).to eq("")  # correctly blank for new model
-        expect(new_model["id"]).to be_a(String) # a fresh uuid was minted
-      end
-    end
-
-    it "returns 400 when body is missing models array" do
-      with_server(agent_config: agent_config) do |server|
-        req = fake_req(method: "POST", path: "/api/config", body: { foo: "bar" })
-        res = fake_res
-        dispatch(server, req, res)
-
-        expect(res.status).to eq(400)
-        expect(parsed_body(res)["error"]).to match(/models array required/)
-      end
-    end
-
-    # Regression: switching the default model in the Web UI used to only
-    # take effect after a server restart.
-    #
-    # Root cause: api_save_config re-anchored @current_model_index to the
-    # new type:"default" entry but left @current_model_id pointing at the
-    # previous default. Since AgentConfig#current_model resolves by id FIRST
-    # (indexes are volatile), every new session built via build_session →
-    # deep_copy inherited the stale id and kept serving the pre-edit model.
-    # A server restart masked the bug because initialize re-seeds
-    # @current_model_id from the current type:"default" entry.
-    #
-    # This test pins the fix: after saving a new default, the server-side
-    # agent_config's #current_model (the template cloned into every new
-    # session) must resolve to the NEW default.
-    it "re-anchors @current_model_id to the new default so new sessions pick it up without a restart" do
-      # Seed a second model and mark the ORIGINAL one as default (baseline).
+  describe "DELETE /api/config/models/:id" do
+    it "removes the specified model" do
       agent_config.models << {
-        "id"       => "model-opus-id",
-        "model"    => "opus-model",
-        "api_key"  => "sk-opus-key",
-        "base_url" => "https://api.opus.example.com"
+        "id" => "model-2-id", "model" => "m2",
+        "api_key" => "k2", "base_url" => "https://x"
       }
-      original_default_id = agent_config.models[0]["id"]
-      # Force the lazy @current_model_id to bind to the original default —
-      # this mirrors what happens on the live server after the first request
-      # touches #current_model.
-      expect(agent_config.current_model["id"]).to eq(original_default_id)
 
       with_server(agent_config: agent_config) do |server|
-        # User edits Settings: flip the default from the original model to
-        # opus-model. Frontend sends the full array with type:"default"
-        # moved, api_key masked for the non-edited rows.
-        payload = {
-          models: [
-            {
-              id:               original_default_id,
-              model:            "test-model",
-              base_url:         "https://api.example.com",
-              api_key:          "sk-test****abcd",
-              anthropic_format: true
-              # type omitted → no longer default
-            },
-            {
-              id:               "model-opus-id",
-              model:            "opus-model",
-              base_url:         "https://api.opus.example.com",
-              api_key:          "sk-opus****-key",
-              anthropic_format: true,
-              type:             "default"
-            }
-          ]
-        }
-        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        req = fake_req(method: "DELETE", path: "/api/config/models/model-2-id")
         res = fake_res
         dispatch(server, req, res)
 
         expect(res.status).to eq(200)
-
-        # The main assertion: a freshly-derived session config (build_session
-        # calls deep_copy) must now resolve to opus-model.
-        fresh_session_config = agent_config.deep_copy
-        expect(fresh_session_config.current_model["id"]).to eq("model-opus-id")
-        expect(fresh_session_config.model_name).to eq("opus-model")
-        expect(fresh_session_config.base_url).to eq("https://api.opus.example.com")
-
-        # And the server-side template itself should be re-anchored.
-        expect(agent_config.current_model_id).to eq("model-opus-id")
-        expect(agent_config.current_model_index).to eq(1)
+        expect(agent_config.models.none? { |m| m["id"] == "model-2-id" }).to be true
       end
     end
 
-    it "clears @current_model_id if the previously-current model was deleted" do
-      # Start with two models; bind current to the second.
+    it "returns 422 when trying to delete the last model" do
+      with_server(agent_config: agent_config) do |server|
+        id = agent_config.models[0]["id"]
+        req = fake_req(method: "DELETE", path: "/api/config/models/#{id}")
+        res = fake_res
+        dispatch(server, req, res)
+        expect(res.status).to eq(422)
+      end
+    end
+
+    it "returns 404 for unknown id" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "DELETE", path: "/api/config/models/nope")
+        res = fake_res
+        dispatch(server, req, res)
+        expect(res.status).to eq(404)
+      end
+    end
+  end
+
+  describe "POST /api/config/models/:id/default" do
+    it "promotes the target model to default and re-anchors current_*" do
       agent_config.models << {
-        "id"       => "model-2-id",
-        "model"    => "second-model",
-        "api_key"  => "sk-second",
-        "base_url" => "https://api2.example.com"
+        "id" => "model-2-id", "model" => "opus",
+        "api_key" => "k2", "base_url" => "https://opus"
       }
-      agent_config.current_model_id = "model-2-id"
 
       with_server(agent_config: agent_config) do |server|
-        # User deletes model-2 via Settings save (sends only the remaining one,
-        # still as default).
-        remaining_id = agent_config.models[0]["id"]
-        payload = {
-          models: [{
-            id:               remaining_id,
-            model:            "test-model",
-            base_url:         "https://api.example.com",
-            api_key:          "sk-test****abcd",
-            anthropic_format: true,
-            type:             "default"
-          }]
-        }
-        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        req = fake_req(method: "POST", path: "/api/config/models/model-2-id/default")
         res = fake_res
         dispatch(server, req, res)
 
         expect(res.status).to eq(200)
-        # Must fall back to the new default; the stale id is gone.
-        expect(agent_config.current_model_id).to eq(remaining_id)
-        expect(agent_config.current_model["model"]).to eq("test-model")
+        new_default = agent_config.models.find { |m| m["type"] == "default" }
+        expect(new_default["id"]).to eq("model-2-id")
+        expect(agent_config.current_model_id).to eq("model-2-id")
+
+        # A freshly-derived session config must see the new default — this
+        # is the regression guard for the old "requires restart" bug.
+        fresh = agent_config.deep_copy
+        expect(fresh.current_model["id"]).to eq("model-2-id")
+      end
+    end
+
+    it "returns 404 for unknown id" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "POST", path: "/api/config/models/nope/default")
+        res = fake_res
+        dispatch(server, req, res)
+        expect(res.status).to eq(404)
       end
     end
   end
@@ -1055,8 +971,13 @@ RSpec.describe Clacky::Server::HttpServer do
       expect(server.send(:mask_api_key, "")).to eq("")
     end
 
-    it "returns the key unchanged when shorter than 12 chars" do
-      expect(server.send(:mask_api_key, "short")).to eq("short")
+    it "masks short keys (≤12 chars) so plaintext never leaks" do
+      # Regression: old implementation returned short keys verbatim, which
+      # leaked them in GET /api/config and bypassed the frontend's
+      # "contains ****" detection for masked values.
+      result = server.send(:mask_api_key, "short")
+      expect(result).to include("****")
+      expect(result).not_to eq("short")
     end
   end
 end

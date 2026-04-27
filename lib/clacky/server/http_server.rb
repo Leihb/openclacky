@@ -375,7 +375,7 @@ module Clacky
         when ["POST",   "/api/cron-tasks"]    then api_create_cron_task(req, res)
         when ["GET",    "/api/skills"]         then api_list_skills(res)
         when ["GET",    "/api/config"]        then api_get_config(res)
-        when ["POST",   "/api/config"]        then api_save_config(req, res)
+        when ["POST",   "/api/config/models"] then api_add_model(req, res)
         when ["POST",   "/api/config/test"]   then api_test_config(req, res)
         when ["GET",    "/api/providers"]     then api_list_providers(res)
         when ["GET",    "/api/onboard/status"]    then api_onboard_status(res)
@@ -432,6 +432,15 @@ module Clacky
           elsif method == "DELETE" && path.start_with?("/api/sessions/")
             session_id = path.sub("/api/sessions/", "")
             api_delete_session(session_id, res)
+          elsif method == "POST" && path.match?(%r{^/api/config/models/[^/]+/default$})
+            id = path.sub("/api/config/models/", "").sub("/default", "")
+            api_set_default_model(id, res)
+          elsif method == "PATCH" && path.match?(%r{^/api/config/models/[^/]+$})
+            id = path.sub("/api/config/models/", "")
+            api_update_model(id, req, res)
+          elsif method == "DELETE" && path.match?(%r{^/api/config/models/[^/]+$})
+            id = path.sub("/api/config/models/", "")
+            api_delete_model(id, res)
           elsif method == "POST" && path.match?(%r{^/api/cron-tasks/[^/]+/run$})
             name = URI.decode_www_form_component(path.sub("/api/cron-tasks/", "").sub("/run", ""))
             api_run_cron_task(name, res)
@@ -1999,92 +2008,173 @@ module Clacky
       end
 
       # POST /api/config — save updated model list
-      # Body: { models: [ { id?, index, model, base_url, api_key, anthropic_format, type } ] }
-      # - id may be present for existing models (preserved) or absent for newly added
-      #   models (a new id is generated). Ids are runtime-only and stripped before
-      #   writing to config.yml (see AgentConfig#to_yaml).
-      # - api_key may be masked ("sk-ab12****...5678") — keep existing key in that case
-      def api_save_config(req, res)
+      # DEPRECATED: this endpoint previously accepted the entire models array
+      # and replaced @models in place. That design was fragile — any missing
+      # or stale field on ANY row could wipe other rows' api_keys. It has
+      # been removed in favour of single-item RESTful endpoints below:
+      #   POST   /api/config/models              — add one model
+      #   PATCH  /api/config/models/:id          — update one model
+      #   DELETE /api/config/models/:id          — remove one model
+      #   POST   /api/config/models/:id/default  — set one model as default
+      #
+      # Each handler only touches the single targeted entry, so a bug in any
+      # one call can never corrupt unrelated models. Front-end code must
+      # never send "the whole list" anymore.
+
+      # POST /api/config/models
+      # Body: { model, base_url, api_key, anthropic_format, type? }
+      # Creates a new model entry, returns { ok:true, id, index } so the
+      # frontend can record the new id without reloading the whole list.
+      def api_add_model(req, res)
         body = parse_json_body(req)
         return json_response(res, 400, { error: "Invalid JSON" }) unless body
 
-        incoming = body["models"]
-        return json_response(res, 400, { error: "models array required" }) unless incoming.is_a?(Array)
-
-        # Build a quick id→existing-model lookup. Ids are the single source
-        # of identity for models across save/reload cycles — no index-based
-        # fallback (ids are stable; indexes are not). Live sessions' stored
-        # @current_model_id stays valid as long as the id is still present
-        # in the list after save.
-        existing_by_id = {}
-        @agent_config.models.each { |m| existing_by_id[m["id"]] = m if m["id"] }
-
-        new_models = incoming.map do |m|
-          # Lookup by id only. No id means a brand-new model — we mint one.
-          existing = m["id"] && existing_by_id[m["id"]]
-
-          # Resolve api_key with THREE cases (ordered, fail-safe):
-          #   1. Incoming key is the masked placeholder ("sk-ab12****...5678")
-          #      → user didn't retype; keep the stored key.
-          #   2. Incoming key is missing/blank AND we have an existing model
-          #      → the browser omitted api_key for non-edited rows; keep the
-          #        stored key. This is the critical 0.9.37 fix — without it,
-          #        saving one model silently wiped api_keys of all others,
-          #        because the frontend only ever hydrates api_key for the
-          #        row currently being edited (/api/config returns only
-          #        api_key_masked, never api_key).
-          #   3. Otherwise: user typed a new key (or this is a brand-new
-          #      model); use the incoming value.
-          incoming_key = m["api_key"].to_s
-          api_key = if incoming_key.include?("****")
-                      existing&.dig("api_key").to_s
-                    elsif incoming_key.empty? && existing
-                      existing["api_key"].to_s
-                    else
-                      incoming_key
-                    end
-
-          {
-            "id"               => (existing && existing["id"]) || SecureRandom.uuid,
-            "model"            => m["model"].to_s,
-            "base_url"         => m["base_url"].to_s,
-            "api_key"          => api_key,
-            "anthropic_format" => m["anthropic_format"] || false,
-            "type"             => m["type"]
-          }.tap { |h| h.delete("type") if h["type"].nil? || h["type"].to_s.empty? }
+        model    = body["model"].to_s.strip
+        base_url = body["base_url"].to_s.strip
+        api_key  = body["api_key"].to_s
+        # Masked placeholders are never a valid api_key on creation —
+        # a brand-new model MUST come with a real key.
+        if api_key.empty? || api_key.include?("****")
+          return json_response(res, 422, { error: "api_key is required" })
         end
 
-        # Replace @models in place — do NOT reassign the array, because every
-        # live session holds a reference to the same array (Plan B shared
-        # models). `replace` mutates in place so all sessions see the new list.
-        @agent_config.models.replace(new_models)
-
-        # Re-anchor current_model_index AND current_model_id to the model
-        # still holding type: default.
-        #
-        # @current_model_id is the *primary* truth for AgentConfig#current_model
-        # (see resolve_current_model_entry). If we leave the old id in place,
-        # then every new session built via build_session → deep_copy inherits
-        # the stale id and #current_model resolves to the pre-edit model —
-        # even though we already moved the type:"default" marker. That's why,
-        # before this fix, changing the default in the web UI only "took"
-        # after a server restart (which re-runs initialize and re-seeds
-        # @current_model_id from the type:"default" entry).
-        if (new_default = new_models.find { |m| m["type"] == "default" })
-          @agent_config.current_model_index = new_models.find_index { |m| m.equal?(new_default) }
-          @agent_config.current_model_id    = new_default["id"]
-        else
-          # No default marker → keep behaviour but also clear the id so that
-          # resolve_current_model_entry falls back to index-based lookup
-          # instead of sticking to a possibly-deleted id.
-          if @agent_config.current_model_index >= new_models.length
-            @agent_config.current_model_index = [new_models.length - 1, 0].max
+        entry = {
+          "id"               => SecureRandom.uuid,
+          "model"            => model,
+          "base_url"         => base_url,
+          "api_key"          => api_key,
+          "anthropic_format" => body["anthropic_format"] || false
+        }
+        type = body["type"].to_s
+        unless type.empty?
+          # Preserve the single-slot "default" invariant.
+          if type == "default"
+            @agent_config.models.each { |m| m.delete("type") if m["type"] == "default" }
           end
-          # Only clear the id if it no longer exists in the new list.
-          still_exists = new_models.any? { |m| m["id"] == @agent_config.current_model_id }
-          @agent_config.current_model_id = nil unless still_exists
+          entry["type"] = type
         end
 
+        @agent_config.models << entry
+        # If this is the only model and no default marker exists yet,
+        # adopt it as the default so downstream lookups resolve cleanly.
+        if @agent_config.models.none? { |m| m["type"] == "default" }
+          entry["type"] = "default"
+          @agent_config.current_model_id    = entry["id"]
+          @agent_config.current_model_index = @agent_config.models.length - 1
+        elsif type == "default"
+          # Re-anchor current_* to the newly-defaulted entry.
+          @agent_config.current_model_id    = entry["id"]
+          @agent_config.current_model_index = @agent_config.models.length - 1
+        end
+
+        @agent_config.save
+        json_response(res, 200, {
+          ok:    true,
+          id:    entry["id"],
+          index: @agent_config.models.length - 1
+        })
+      rescue => e
+        json_response(res, 422, { error: e.message })
+      end
+
+      # PATCH /api/config/models/:id
+      # Body: any subset of { model, base_url, api_key, anthropic_format, type }
+      # Rules (the whole reason we moved off bulk save):
+      #   - Missing key  → field untouched
+      #   - api_key with "****" (masked display value) → IGNORED (never overwrites)
+      #   - api_key empty string → IGNORED (defensive; treat as "not changed")
+      #   - api_key real non-masked value → stored
+      #   - type="default" transparently clears the marker on other models
+      #   - Unknown id → 404
+      def api_update_model(id, req, res)
+        body = parse_json_body(req)
+        return json_response(res, 400, { error: "Invalid JSON" }) unless body
+
+        target = @agent_config.models.find { |m| m["id"] == id }
+        return json_response(res, 404, { error: "model not found" }) unless target
+
+        if body.key?("model")
+          v = body["model"].to_s.strip
+          target["model"] = v unless v.empty?
+        end
+        if body.key?("base_url")
+          v = body["base_url"].to_s.strip
+          target["base_url"] = v unless v.empty?
+        end
+        if body.key?("anthropic_format")
+          target["anthropic_format"] = !!body["anthropic_format"]
+        end
+        if body.key?("api_key")
+          new_key = body["api_key"].to_s
+          # Only store a real, unmasked, non-empty value. This is the
+          # single place the "api_key disappeared" bug can no longer
+          # happen — there is no path that writes "" into api_key.
+          if !new_key.empty? && !new_key.include?("****")
+            target["api_key"] = new_key
+          end
+        end
+        if body.key?("type")
+          new_type = body["type"]
+          new_type = nil if new_type.is_a?(String) && new_type.strip.empty?
+          if new_type == "default"
+            @agent_config.models.each do |m|
+              next if m["id"] == id
+              m.delete("type") if m["type"] == "default"
+            end
+            target["type"] = "default"
+            @agent_config.current_model_id    = target["id"]
+            @agent_config.current_model_index = @agent_config.models.find_index { |m| m["id"] == id } || 0
+          elsif new_type.nil?
+            target.delete("type")
+          else
+            target["type"] = new_type
+          end
+        end
+
+        @agent_config.save
+        json_response(res, 200, { ok: true })
+      rescue => e
+        json_response(res, 422, { error: e.message })
+      end
+
+      # DELETE /api/config/models/:id
+      def api_delete_model(id, res)
+        models = @agent_config.models
+        return json_response(res, 404, { error: "model not found" }) unless models.any? { |m| m["id"] == id }
+        return json_response(res, 422, { error: "cannot delete the last model" }) if models.length <= 1
+
+        index = models.find_index { |m| m["id"] == id }
+        removed = models.delete_at(index)
+
+        # Re-anchor current_* if we just deleted the active model.
+        if @agent_config.current_model_id == removed["id"]
+          new_default = models.find { |m| m["type"] == "default" } || models.first
+          # If the removed model was the default, promote the new current
+          # model so the config always has exactly one default entry.
+          if removed["type"] == "default" && new_default && new_default["type"] != "default"
+            new_default["type"] = "default"
+          end
+          @agent_config.current_model_id    = new_default["id"]
+          @agent_config.current_model_index = models.find_index { |m| m["id"] == new_default["id"] } || 0
+        elsif @agent_config.current_model_index >= models.length
+          @agent_config.current_model_index = models.length - 1
+        end
+
+        @agent_config.save
+        json_response(res, 200, { ok: true })
+      rescue => e
+        json_response(res, 422, { error: e.message })
+      end
+
+      # POST /api/config/models/:id/default
+      # Makes the identified model the new "default" (global initial model
+      # for new sessions AND current model for this server instance).
+      def api_set_default_model(id, res)
+        ok = @agent_config.set_default_model_by_id(id)
+        return json_response(res, 404, { error: "model not found" }) unless ok
+
+        @agent_config.current_model_id    = id
+        @agent_config.current_model_index = @agent_config.models.find_index { |m| m["id"] == id } || 0
         @agent_config.save
         json_response(res, 200, { ok: true })
       rescue => e
@@ -2767,9 +2857,20 @@ module Clacky
       end
 
       # Mask API key for display: show first 8 + last 4 chars, middle replaced with ****
+      # Mask an api_key for safe display / transport to the browser.
+      #
+      # Contract: the returned string MUST contain "****" so callers (incl.
+      # the frontend) can reliably detect "this is a display placeholder,
+      # not a real key" and refuse to treat it as input. The old behaviour
+      # of returning the raw value for short keys was a correctness bug —
+      # it leaked short keys in plaintext to GET /api/config, and it let
+      # short masked values slip past the frontend's mask-detection.
       def mask_api_key(key)
         return "" if key.nil? || key.empty?
-        return key if key.length <= 12
+        if key.length <= 12
+          # Very short key — show the first char only, redact the rest.
+          return "#{key[0]}****"
+        end
         "#{key[0..7]}****#{key[-4..]}"
       end
 

@@ -22,7 +22,7 @@ module Clacky
         "name" => "OpenClacky",
         "base_url" => "https://api.openclacky.com",
         "api" => "bedrock",
-        "default_model" => "abs-claude-sonnet-4-5",
+        "default_model" => "abs-claude-sonnet-4-6",
         "models" => [
           "abs-claude-opus-4-7",
           "abs-claude-opus-4-6",

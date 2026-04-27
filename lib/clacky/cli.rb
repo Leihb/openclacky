@@ -905,6 +905,14 @@ module Clacky
     option :port, type: :numeric, default: 7070, desc: "Listen port (default: 7070)"
     option :brand_test, type: :boolean, default: false,
            desc: "Enable brand test mode: mock license activation without calling remote API"
+    option :no_compression, type: :boolean, default: false,
+           desc: "Disable message compression (saves tokens but may lose context)"
+    option :no_memory, type: :boolean, default: false,
+           desc: "Disable automatic memory updates"
+    option :no_caching, type: :boolean, default: false,
+           desc: "Disable prompt caching"
+    option :no_skill_evolution, type: :boolean, default: false,
+           desc: "Disable automatic skill evolution"
     def server
       # ── Security gate ──────────────────────────────────────────────────────
       # Binding to 0.0.0.0 exposes the server to the public network.
@@ -948,6 +956,15 @@ module Clacky
         agent_config = Clacky::AgentConfig.load
         agent_config.permission_mode = :confirm_all
 
+        # Apply CLI overrides to agent config (--no-compression etc.)
+        # These override whatever is stored in config.yml.
+        agent_config.enable_compression = false if options[:no_compression]
+        agent_config.memory_update_enabled = false if options[:no_memory]
+        agent_config.enable_prompt_caching = false if options[:no_caching]
+        if options[:no_skill_evolution]
+          agent_config.skill_evolution[:enabled] = false
+        end
+
         client_factory = lambda do
           Clacky::Client.new(
             agent_config.api_key,
@@ -987,6 +1004,10 @@ module Clacky
 
         extra_flags = []
         extra_flags << "--brand-test" if options[:brand_test]
+        extra_flags << "--no-compression" if options[:no_compression]
+        extra_flags << "--no-memory" if options[:no_memory]
+        extra_flags << "--no-caching" if options[:no_caching]
+        extra_flags << "--no-skill-evolution" if options[:no_skill_evolution]
 
         Clacky::Logger.console = true
 

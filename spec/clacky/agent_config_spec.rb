@@ -166,7 +166,7 @@ RSpec.describe Clacky::AgentConfig do
   end
 
   describe "#save" do
-    it "saves configuration as top-level array" do
+    it "saves configuration as hash with settings and models" do
       with_temp_config do |config_file|
         config = described_class.new(
           models: [
@@ -184,10 +184,13 @@ RSpec.describe Clacky::AgentConfig do
         expect(File.exist?(config_file)).to be true
         
         loaded_data = YAML.load_file(config_file)
-        expect(loaded_data).to be_a(Array)
-        expect(loaded_data.length).to eq(1)
-        expect(loaded_data[0]["api_key"]).to eq("sk-test")
-        expect(loaded_data[0]["model"]).to eq("test-model")
+        expect(loaded_data).to be_a(Hash)
+        expect(loaded_data).to have_key("settings")
+        expect(loaded_data).to have_key("models")
+        expect(loaded_data["models"]).to be_a(Array)
+        expect(loaded_data["models"].length).to eq(1)
+        expect(loaded_data["models"][0]["api_key"]).to eq("sk-test")
+        expect(loaded_data["models"][0]["model"]).to eq("test-model")
       end
     end
 
@@ -996,8 +999,8 @@ RSpec.describe Clacky::AgentConfig do
           expect(config.models.length).to eq(1)
           config.save(config_file)
           saved = YAML.load_file(config_file)
-          expect(saved.length).to eq(1)
-          expect(saved.none? { |m| m["type"] == "lite" }).to be true
+          expect(saved["models"].length).to eq(1)
+          expect(saved["models"].none? { |m| m["type"] == "lite" }).to be true
         end
       end
     end

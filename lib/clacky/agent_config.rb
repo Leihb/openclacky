@@ -190,6 +190,10 @@ module Clacky
         auto_create_threshold: 12,
         reflection_mode: "llm_analysis"
       }
+      # Deep-symbolize keys — YAML-loaded hashes come with string keys,
+      # but the rest of the codebase accesses with symbols.
+      @skill_evolution = @skill_evolution.transform_keys(&:to_sym)
+      @skill_evolution.transform_values! { |v| v.is_a?(Hash) ? v.transform_keys(&:to_sym) : v }
 
       # Per-session virtual model overlay.
       # When set, #current_model returns a *merged* hash (the resolved @models
@@ -209,6 +213,13 @@ module Clacky
         data = YAML.load_file(config_file)
       else
         data = nil
+      end
+
+      # Extract settings from hash-format config (new format).
+      # Old flat-array configs have no settings section — all defaults.
+      loaded_settings = {}
+      if data.is_a?(Hash) && data["settings"].is_a?(Hash)
+        loaded_settings = data["settings"]
       end
 
       # Parse models from config
@@ -278,7 +289,21 @@ module Clacky
       default_index = models.find_index { |m| m["type"] == "default" } || 0
       default_id = models[default_index] && models[default_index]["id"]
 
-      new(models: models, current_model_index: default_index, current_model_id: default_id)
+      # Build constructor args from loaded settings (new hash-format config)
+      # plus the parsed models. Only pass settings that have explicit values;
+      # omitted keys get their default from AgentConfig#initialize.
+      constructor_args = {
+        models: models,
+        current_model_index: default_index,
+        current_model_id: default_id
+      }
+      CONFIG_SETTINGS_KEYS.each do |key|
+        if loaded_settings.key?(key)
+          constructor_args[key.to_sym] = loaded_settings[key]
+        end
+      end
+
+      new(**constructor_args)
     end
 
     # Auto-injection of provider-preset lite models into @models has been
@@ -339,11 +364,27 @@ module Clacky
     # config.yml remains backward compatible with users on older versions.
     RUNTIME_ONLY_FIELDS = %w[id auto_injected].freeze
 
+    # Settings keys that are persisted to config.yml.
+    # These map directly to AgentConfig accessors.
+    CONFIG_SETTINGS_KEYS = %w[
+      enable_compression enable_prompt_caching memory_update_enabled
+      skill_evolution
+    ].freeze
+
+    # Serialize the current agent configuration to YAML.
+    # Outputs a hash with "settings" and "models" keys (new format).
+    # Backward compatibility: old flat-array format is still readable by .load.
     def to_yaml
-      persistable = @models.reject { |m| m["auto_injected"] }.map do |m|
+      persistable_models = @models.reject { |m| m["auto_injected"] }.map do |m|
         m.reject { |k, _| RUNTIME_ONLY_FIELDS.include?(k) }
       end
-      YAML.dump(persistable)
+      settings = {
+        "enable_compression" => @enable_compression,
+        "enable_prompt_caching" => @enable_prompt_caching,
+        "memory_update_enabled" => @memory_update_enabled,
+        "skill_evolution" => @skill_evolution
+      }
+      YAML.dump("settings" => settings, "models" => persistable_models)
     end
 
     # Check if any model is configured
