@@ -160,19 +160,35 @@ module Clacky
         # chunk files, creating circular chunk references. Counting from history is always accurate.
         existing_chunk_count = original_messages.count { |m| m[:compressed_summary] }
         chunk_index = existing_chunk_count + 1
+
+        # Extract topics from the LLM response to store in both the chunk MD front
+        # matter and the compressed_summary message hash (for future chunk indexing).
+        topics = @message_compressor.parse_topics(compressed_content)
+
         chunk_path = save_compressed_chunk(
           original_messages,
           compression_context[:recent_messages],
           chunk_index: chunk_index,
           compression_level: compression_context[:compression_level],
-          topics: @message_compressor.parse_topics(compressed_content)
+          topics: topics
         )
+
+        # Collect previous chunk references so the new summary carries a complete
+        # index of all older archives. Without this, each new compression would
+        # lose all prior chunk references — leaving only the newest chunk reachable
+        # via replay_history. The AI can still access older chunks via file_reader
+        # using the embedded basenames and topics.
+        previous_chunks = original_messages
+          .select { |m| m[:compressed_summary] && m[:chunk_path] }
+          .map { |m| { basename: File.basename(m[:chunk_path]), path: m[:chunk_path], topics: m[:topics] } }
 
         @history.replace_all(@message_compressor.rebuild_with_compression(
           compressed_content,
           original_messages: original_messages,
           recent_messages: compression_context[:recent_messages],
-          chunk_path: chunk_path
+          chunk_path: chunk_path,
+          topics: topics,
+          previous_chunks: previous_chunks
         ))
 
         # Reset to the estimated size of the rebuilt (small) history.

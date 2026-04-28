@@ -94,12 +94,18 @@ module Clacky
     # @param recent_messages [Array<Hash>] Recent messages to preserve
     # @param chunk_path [String, nil] Path to the archived chunk MD file (if saved)
     # @return [Array<Hash>] Rebuilt message list: system + compressed + recent
-    def rebuild_with_compression(compressed_content, original_messages:, recent_messages:, chunk_path: nil)
+    def rebuild_with_compression(compressed_content, original_messages:, recent_messages:, chunk_path: nil, topics: nil, previous_chunks: [])
       # Find and preserve system message
       system_msg = original_messages.find { |m| m[:role] == "system" }
 
-      # Parse the compressed result
-      parsed_messages = parse_compressed_result(compressed_content, chunk_path: chunk_path)
+      # Parse the compressed result, embedding previous chunk references so the
+      # new summary carries a complete index of all older archives. This avoids
+      # keeping all prior compressed_summary messages in active history while
+      # still giving the AI a path to find old conversations via file_reader.
+      parsed_messages = parse_compressed_result(compressed_content,
+                                                chunk_path: chunk_path,
+                                                topics: topics,
+                                                previous_chunks: previous_chunks)
 
       # If parsing fails or returns empty, raise error
       if parsed_messages.nil? || parsed_messages.empty?
@@ -124,7 +130,7 @@ module Clacky
       m ? m[1].strip : nil
     end
 
-    def parse_compressed_result(result, chunk_path: nil)
+    def parse_compressed_result(result, chunk_path: nil, topics: nil, previous_chunks: [])
       # Return the compressed result as a single user message (role: "user").
       #
       # Why role:"user" instead of "assistant":
@@ -144,6 +150,10 @@ module Clacky
       # The `compressed_summary: true` flag is preserved so that replay_history still
       # routes this message through the chunk-expansion path (which keys off that flag,
       # not the role).
+      #
+      # @param topics [String, nil] Short topic description extracted from <topics> tag
+      # @param previous_chunks [Array<Hash>] Info about older chunk files
+      #   Each hash: { basename:, path:, topics: }
       content = result.to_s.strip
 
       if content.empty?
@@ -152,22 +162,50 @@ module Clacky
         # Strip out the <topics> block — it's metadata for the chunk file, not for AI context
         content_without_topics = content.gsub(/<topics>.*?<\/topics>\n*/m, "").strip
 
-        # Inject chunk anchor so AI knows where to find original conversation
+        # Build previous chunks index section — links to older chunk files so the AI
+        # can find earlier conversations without keeping all prior compressed_summary
+        # messages in the active history. Shows newest chunks first (reverse order),
+        # capped at 10 to keep the message size bounded.
+        previous_chunks_section = ""
+        if previous_chunks.any?
+          max_visible = 10
+          visible = previous_chunks.last(max_visible).reverse
+          older_count = previous_chunks.size - visible.size
+
+          previous_chunks_section = "\n\n---\n📁 **Previous chunks (newest first):**\n"
+          visible.each do |pc|
+            topic_str = pc[:topics] ? " — #{pc[:topics]}" : ""
+            previous_chunks_section += "- `#{pc[:basename]}`#{topic_str}\n"
+          end
+
+          if older_count > 0
+            oldest = previous_chunks.first
+            previous_chunks_section += "- ... and #{older_count} older chunks back to `#{oldest[:basename]}`\n"
+          end
+
+          previous_chunks_section += "_Use `file_reader` to recall details from these chunks._"
+        end
+
+        # Inject chunk anchor so AI knows where to find original conversation for THIS chunk
+        anchor = ""
         if chunk_path
-          anchor = "\n\n---\n📁 **Original conversation archived at:** `#{chunk_path}`\n" \
+          anchor = "\n\n---\n📁 **Current chunk archived at:** `#{chunk_path}`\n" \
                    "_Use `file_reader` tool to recall details from this chunk._"
-          content_without_topics = content_without_topics + anchor
         end
 
         # Prefix lets the model recognise this is injected context, not a user utterance.
+        # Order: summary → previous chunks → current anchor (chronological)
         framed_content = "[Compressed conversation summary — previous turns archived]\n\n" \
-                         "#{content_without_topics}"
+                         "#{content_without_topics}" \
+                         "#{previous_chunks_section}" \
+                         "#{anchor}"
 
         [{
           role: "user",
           content: framed_content,
           compressed_summary: true,
           chunk_path: chunk_path,
+          topics: topics,
           system_injected: true
         }]
       end

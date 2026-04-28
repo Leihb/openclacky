@@ -27,15 +27,27 @@ module Clacky
       # ── Request building ──────────────────────────────────────────────────────
 
       # Build an OpenAI-compatible request body.
-      # Canonical messages are already in OpenAI format — no conversion needed.
+      #
+      # Messages go through the canonical→OpenAI conversion layer
+      # (normalize_messages). For most models this is identity because
+      # the internal canonical format IS OpenAI format. The conversion
+      # handles one edge case: image_url content blocks are stripped
+      # when vision_supported is false (e.g. DeepSeek, Kimi, MiniMax),
+      # replacing them with a text placeholder so the API doesn't reject
+      # the request with "unknown variant 'image_url'".
+      #
       # @param messages [Array<Hash>] canonical messages
       # @param model    [String]
       # @param tools    [Array<Hash>] OpenAI-style tool definitions
       # @param max_tokens [Integer]
       # @param caching_enabled [Boolean] (only effective for Claude via OpenRouter)
+      # @param vision_supported [Boolean] whether the target model accepts
+      #   image_url content blocks (default true, conservative)
       # @return [Hash]
-      def build_request_body(messages, model, tools, max_tokens, caching_enabled)
-        body = { model: model, max_tokens: max_tokens, messages: messages }
+      def build_request_body(messages, model, tools, max_tokens, caching_enabled, vision_supported: true)
+        api_messages = messages.map { |msg| normalize_message_content(msg, vision_supported: vision_supported) }
+
+        body = { model: model, max_tokens: max_tokens, messages: api_messages }
 
         if tools&.any?
           if caching_enabled
@@ -48,6 +60,71 @@ module Clacky
         end
 
         body
+      end
+
+      # ── Canonical → OpenAI conversion ─────────────────────────────────────────
+
+      # Process a single message's content through the canonical→OpenAI
+      # conversion layer. For String content this is a no-op; for Array
+      # content each block goes through normalize_block.
+      #
+      # @param msg [Hash] canonical message
+      # @param vision_supported [Boolean]
+      # @return [Hash] message with content normalised for OpenAI API
+      def normalize_message_content(msg, vision_supported:)
+        content = msg[:content]
+        return msg unless content.is_a?(Array)
+
+        blocks = content_to_blocks(content, vision_supported: vision_supported)
+        # Most APIs reject empty content arrays — use a placeholder text block.
+        blocks = [{ type: "text", text: "..." }] if blocks.empty?
+        msg.merge(content: blocks)
+      end
+
+      # Convert canonical content array to OpenAI-compatible block array.
+      # Each block goes through normalize_block; nil results are compacted.
+      #
+      # @param content [Array<Hash>] canonical content blocks
+      # @param vision_supported [Boolean]
+      # @return [Array<Hash>]
+      def content_to_blocks(content, vision_supported:)
+        content.map { |b| normalize_block(b, vision_supported: vision_supported) }.compact
+      end
+
+      # Normalize a single canonical content block to OpenAI API format.
+      #
+      # Canonical text blocks pass through (with cache_control preserved).
+      # image_url blocks are kept for vision-capable models and replaced
+      # with a text placeholder for non-vision models (DeepSeek, Kimi, etc.).
+      #
+      # @param block [Hash] canonical content block
+      # @param vision_supported [Boolean]
+      # @return [Hash, nil] nil for empty-text blocks (dropped)
+      def normalize_block(block, vision_supported:)
+        return block unless block.is_a?(Hash)
+
+        case block[:type]
+        when "text"
+          # Drop empty text blocks — most APIs (Anthropic, DeepSeek, etc.)
+          # reject { type: "text", text: "" }.
+          text = block[:text]
+          return nil if text.nil? || text.empty?
+
+          result = { type: "text", text: text }
+          result[:cache_control] = block[:cache_control] if block[:cache_control]
+          result
+        when "image_url"
+          if vision_supported
+            block  # Pass through — GPT-4V, Gemini, etc. accept image_url
+          else
+            # Replace with text placeholder so the API doesn't reject the
+            # request. The model will still see the context that an image
+            # was present (from file_prompt / system_injected metadata).
+            { type: "text", text: "[Image content removed — current model does not support vision input]" }
+          end
+        else
+          block  # Pass through unknown block types (tool_use, tool_result, etc.)
+        end
       end
 
       # ── Response parsing ──────────────────────────────────────────────────────

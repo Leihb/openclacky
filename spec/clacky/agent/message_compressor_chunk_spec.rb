@@ -269,6 +269,233 @@ RSpec.describe "Compression chunk MD archiving" do
       end
     end
 
+    describe "#parse_compressed_result" do
+      let(:compressor) { described_class.new(nil) }
+
+      it "stores topics in the returned message hash" do
+        result = compressor.parse_compressed_result(
+          "<topics>Rails setup, database config</topics>\n<summary>Did some work</summary>",
+          chunk_path: "/tmp/chunk-1.md",
+          topics: "Rails setup, database config"
+        )
+
+        msg = result.first
+        expect(msg[:topics]).to eq("Rails setup, database config")
+      end
+
+      it "stores nil topics when not provided" do
+        result = compressor.parse_compressed_result(
+          "<summary>Did some work</summary>",
+          chunk_path: "/tmp/chunk-1.md"
+        )
+
+        msg = result.first
+        expect(msg[:topics]).to be_nil
+      end
+
+      it "embeds previous_chunks references in the content" do
+        previous = [
+          { basename: "2026-03-08-abc12345-chunk-1.md", topics: "Rails setup, database config" },
+          { basename: "2026-03-08-abc12345-chunk-2.md", topics: "Deploy pipeline, bug fixes" }
+        ]
+
+        result = compressor.parse_compressed_result(
+          "<topics>Refactoring</topics>\n<summary>Current work</summary>",
+          chunk_path: "/tmp/chunk-3.md",
+          topics: "Refactoring",
+          previous_chunks: previous
+        )
+
+        msg = result.first
+        content = msg[:content]
+
+        # Should include a "Previous chunks" section (now "newest first")
+        expect(content).to include("Previous chunks (newest first)")
+
+        # Should reference each previous chunk by basename
+        expect(content).to include("chunk-1.md")
+        expect(content).to include("chunk-2.md")
+
+        # Should include topics for each previous chunk
+        expect(content).to include("Rails setup, database config")
+        expect(content).to include("Deploy pipeline, bug fixes")
+
+        # Should include file_reader hint
+        expect(content).to include("file_reader")
+
+        # Newest should appear first (chunk-2 before chunk-1 in string)
+        pos_2 = content.index("chunk-2.md")
+        pos_1 = content.index("chunk-1.md")
+        expect(pos_2).to be < pos_1
+      end
+
+      it "does NOT include previous_chunks section when previous_chunks is empty" do
+        result = compressor.parse_compressed_result(
+          "<summary>Work</summary>",
+          chunk_path: "/tmp/chunk-1.md",
+          previous_chunks: []
+        )
+
+        msg = result.first
+        expect(msg[:content]).not_to include("Previous chunks")
+      end
+
+      it "handles previous_chunks with nil topics gracefully" do
+        previous = [
+          { basename: "chunk-1.md", topics: nil },
+          { basename: "chunk-2.md", topics: "Some work" }
+        ]
+
+        result = compressor.parse_compressed_result(
+          "<summary>Work</summary>",
+          chunk_path: "/tmp/chunk-3.md",
+          previous_chunks: previous
+        )
+
+        content = result.first[:content]
+        # chunk-1.md should appear without " — " suffix
+        expect(content).to include("chunk-1.md")
+        # chunk-2.md should include its topics
+        expect(content).to include("Some work")
+      end
+
+      it "caps at 10 visible chunks and shows newest first (reverse order)" do
+        # Simulate 12 previous chunks
+        previous = (1..12).map do |i|
+          { basename: "chunk-#{i}.md", topics: "Topic #{i}" }
+        end
+
+        result = compressor.parse_compressed_result(
+          "<summary>Work</summary>",
+          chunk_path: "/tmp/chunk-13.md",
+          previous_chunks: previous
+        )
+
+        content = result.first[:content]
+
+        # Should show only the 10 newest: chunk-12 through chunk-3 (reverse order)
+        expect(content).to include("chunk-12.md")
+        expect(content).to include("chunk-3.md")
+
+        # Should NOT show the 2 oldest in the numbered list
+        # (they appear only in the "older chunks back to" summary line)
+        # chunk-12 through chunk-3 = 10 visible entries
+        (3..12).each do |i|
+          expect(content).to include("chunk-#{i}.md")
+        end
+
+        # Should mention older chunks count and reference the oldest
+        expect(content).to include("and 2 older chunks back to")
+        expect(content).to include("`chunk-1.md`")
+
+        # chunk-2.md should NOT appear at all (not in visible list, not in older note)
+        expect(content).not_to include("chunk-2.md")
+
+        # Should mention older chunks count
+        expect(content).to include("and 2 older chunks back to")
+
+        # Newest should appear first (chunk-12 before chunk-11 in string)
+        pos_12 = content.index("chunk-12.md")
+        pos_11 = content.index("chunk-11.md")
+        expect(pos_12).to be < pos_11
+      end
+
+      it "shows all chunks without cap note when total <= 10" do
+        previous = (1..5).map do |i|
+          { basename: "chunk-#{i}.md", topics: "Topic #{i}" }
+        end
+
+        result = compressor.parse_compressed_result(
+          "<summary>Work</summary>",
+          chunk_path: "/tmp/chunk-6.md",
+          previous_chunks: previous
+        )
+
+        content = result.first[:content]
+
+        # All 5 should be visible
+        expect(content).to include("chunk-1.md")
+        expect(content).to include("chunk-5.md")
+
+        # No "older chunks" note
+        expect(content).not_to include("older chunks back to")
+      end
+
+      it "previous_chunks section appears between summary and current chunk anchor" do
+        previous = [{ basename: "chunk-1.md", topics: "Setup" }]
+
+        result = compressor.parse_compressed_result(
+          "<summary>Work done</summary>",
+          chunk_path: "/tmp/chunk-2.md",
+          previous_chunks: previous
+        )
+
+        content = result.first[:content]
+
+        # The previous chunks section should come after the summary text
+        # and before the current chunk anchor
+        summary_pos = content.index("Work done")
+        prev_chunks_pos = content.index("Previous chunks")
+        current_anchor_pos = content.index("Current chunk archived at")
+
+        expect(summary_pos).to be < prev_chunks_pos
+        expect(prev_chunks_pos).to be < current_anchor_pos
+      end
+    end
+
+    describe "#rebuild_with_compression with topics and previous_chunks" do
+      let(:compressor) { described_class.new(nil) }
+      let(:system_msg) { { role: "system", content: "System prompt" } }
+      let(:recent_msg) { { role: "user", content: "Recent" } }
+
+      it "passes topics through to the compressed summary message" do
+        result = compressor.rebuild_with_compression(
+          "<topics>Rails, DB</topics>\n<summary>Work</summary>",
+          original_messages: [system_msg],
+          recent_messages: [recent_msg],
+          chunk_path: "/tmp/chunk-1.md",
+          topics: "Rails, DB"
+        )
+
+        summary = result.find { |m| m[:compressed_summary] }
+        expect(summary[:topics]).to eq("Rails, DB")
+      end
+
+      it "embeds previous_chunks in the rebuilt summary content" do
+        previous = [{ basename: "chunk-1.md", topics: "Initial setup" }]
+
+        result = compressor.rebuild_with_compression(
+          "<summary>Second batch of work</summary>",
+          original_messages: [system_msg],
+          recent_messages: [recent_msg],
+          chunk_path: "/tmp/chunk-2.md",
+          previous_chunks: previous
+        )
+
+        summary = result.find { |m| m[:compressed_summary] }
+        expect(summary[:content]).to include("Previous chunks")
+        expect(summary[:content]).to include("chunk-1.md")
+        expect(summary[:content]).to include("Initial setup")
+      end
+
+      it "history role sequence still valid with previous_chunks (summary as user anchor)" do
+        previous = [{ basename: "chunk-1.md", topics: "Setup" }]
+
+        result = compressor.rebuild_with_compression(
+          "<summary>Recent work</summary>",
+          original_messages: [system_msg],
+          recent_messages: [recent_msg],
+          chunk_path: "/tmp/chunk-2.md",
+          previous_chunks: previous
+        )
+
+        roles = result.map { |m| m[:role].to_s }
+        expect(roles[0]).to eq("system")
+        expect(roles[1]).to eq("user")  # summary still acts as user anchor
+        expect(roles[1..]).not_to include("system")  # system only at position 0
+      end
+    end
+
     # Regression: a previous implementation placed the compressed summary as
     # `role: "assistant"` right after the `system` message. If the very next
     # kept message was also an assistant (e.g. because the last user turn had

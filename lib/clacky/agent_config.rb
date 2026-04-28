@@ -549,6 +549,21 @@ module Clacky
       @models.find { |m| m["type"] == type }
     end
 
+    # Find model by composite key (model name + base_url).
+    # Used when restoring a session to match its original model without relying
+    # on the runtime-only id (which changes on every process restart).
+    # base_url is optional for backward compatibility with sessions saved
+    # before base_url was persisted.
+    # @param model_name [String] the model's "model" field (e.g. "dsk-deepseek-v4-pro")
+    # @param base_url [String, nil] the model's "base_url" field
+    # @return [Hash, nil] the matching model entry or nil
+    def find_model_by_name_and_url(model_name, base_url = nil)
+      @models.find do |m|
+        m["model"] == model_name &&
+          (base_url.nil? || m["base_url"] == base_url)
+      end
+    end
+
     # Get the default model (type: default)
     # Falls back to current_model for backward compatibility
     def default_model

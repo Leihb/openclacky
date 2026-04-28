@@ -54,6 +54,20 @@ module Clacky
           @pending_error_rollback = true
         end
 
+        # Restore the session's original model if it still exists in the current
+        # config. This prevents all sessions from silently switching to the new
+        # default model when the user changes it and restarts. Falls back to the
+        # current default if the model was deleted/renamed since the session was
+        # last saved.
+        saved_model_name = session_data.dig(:config, :model_name)
+        if saved_model_name
+          saved_base_url = session_data.dig(:config, :model_base_url)
+          model_entry = @config.find_model_by_name_and_url(saved_model_name, saved_base_url)
+          if model_entry && model_entry["id"]
+            switch_model_by_id(model_entry["id"])
+          end
+        end
+
         # Rebuild and refresh the system prompt so any newly installed skills
         # (or other configuration changes since the session was saved) are
         # reflected immediately — without requiring the user to create a new session.
@@ -98,11 +112,19 @@ module Clacky
           config: {
             # NOTE: api_key and other sensitive credentials are intentionally excluded
             # to prevent leaking secrets into session files on disk.
+            # model_name is saved so the session can restore its original model on restart
+            # (falling back to the current default if the model no longer exists).
             permission_mode: @config.permission_mode.to_s,
             enable_compression: @config.enable_compression,
             enable_prompt_caching: @config.enable_prompt_caching,
             max_tokens: @config.max_tokens,
-            verbose: @config.verbose
+            verbose: @config.verbose,
+            # Persist the current model identity so the session can restore its
+            # original model on restart. model_name + model_base_url form a
+            # composite key to avoid matching a different provider's model of
+            # the same name. Falls back to default if the model no longer exists.
+            model_name: @config.current_model&.dig("model"),
+            model_base_url: @config.current_model&.dig("base_url")
           },
           stats: stats_data,
           messages: @history.to_a

@@ -15,6 +15,12 @@ module Clacky
       @use_anthropic_format = anthropic_format
       # Detect Bedrock: ABSK key prefix (native AWS) or abs- model prefix (Clacky AI proxy)
       @use_bedrock = MessageFormat::Bedrock.bedrock_api_key?(api_key, model)
+
+      # Determine vision support once at construction time.
+      # Non-vision models (DeepSeek, Kimi, MiniMax, etc.) reject image_url
+      # content blocks; the conversion layer strips them when this is false.
+      provider_id = Providers.resolve_provider(base_url: @base_url, api_key: @api_key)
+      @vision_supported = Providers.supports?(provider_id, :vision, model_name: @model)
     end
 
     # Returns true when the client is using the AWS Bedrock Converse API.
@@ -185,7 +191,10 @@ module Clacky
       # OpenRouter proxies Claude with the same cache_control field convention as Anthropic direct.
       messages = apply_message_caching(messages) if caching_enabled
 
-      body     = MessageFormat::OpenAI.build_request_body(messages, model, tools, max_tokens, caching_enabled)
+      body     = MessageFormat::OpenAI.build_request_body(
+        messages, model, tools, max_tokens, caching_enabled,
+        vision_supported: @vision_supported
+      )
       response = openai_connection.post("chat/completions") { |r| r.body = body.to_json }
 
       raise_error(response) unless response.status == 200
