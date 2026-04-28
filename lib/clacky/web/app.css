@@ -1744,6 +1744,14 @@ body {
   opacity: 0.5;
   pointer-events: none;
 }
+/* Strip the bubble shell (background/border) from .msg-assistant inside the
+   feedback card so only the markdown typography rules apply. */
+.feedback-card .msg-assistant {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+}
 
 .history-start-marker {
   display: flex;
