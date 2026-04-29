@@ -10,6 +10,12 @@ module Clacky
   module Tools
     # Pre-execution safety layer for shell-style commands.
     #
+    # Design principle: protect against the handful of commands that are
+    # irreversibly destructive or can compromise the host. Everything else
+    # is the user's (or agent's) business. Over-protection burns tool-call
+    # rounds and forces awkward work-arounds (e.g. the infamous "cp ~/.clacky
+    # /xxx ./ ... Blocked: outside project directory" dance).
+    #
     # Responsibilities (applied to the `command` string BEFORE it is handed
     # to a shell / PTY for execution):
     #
@@ -19,13 +25,18 @@ module Clacky
     #   2. Rewrite `rm` → `mv <file> <trash>`   so the file is recoverable.
     #   3. Rewrite `curl ... | bash` → save     script to a file for manual
     #                                           review instead of exec.
-    #   4. Protect important files:             Gemfile, Gemfile.lock, .env,
-    #                                           package.json, yarn.lock,
-    #                                           .ssh/, .aws/, .gitignore,
-    #                                           README.md, LICENSE.
-    #   5. Confine writes to project_root.      `mv`, `cp`, `mkdir` targets
-    #                                           outside the project tree are
-    #                                           blocked.
+    #   4. Protect credential/secret files:     .env, .ssh/, .aws/ — block
+    #                                           writes to these only. Other
+    #                                           "project" files (Gemfile,
+    #                                           README.md, package.json, …)
+    #                                           are NOT protected — editing
+    #                                           them is a normal dev task.
+    #
+    # Notes:
+    #   - `cp`, `mv`, `mkdir`, `touch`, `echo` are allowed to touch ANY path
+    #     (including outside the project root). The source of a `cp` is
+    #     read-only to the FS, and writing to arbitrary dirs is a legitimate
+    #     need (copying from ~/.clacky/skills/..., writing to /tmp, etc.).
     #
     # Raises SecurityError on block. Returns a (possibly rewritten) command
     # string on success.
@@ -183,6 +194,13 @@ module Clacky
           command
         end
 
+        # Relaxed validator for mv / cp / mkdir / touch / echo.
+        #
+        # Historical behavior was to forbid any path outside @project_root,
+        # which broke legitimate workflows like copying skill templates from
+        # ~/.clacky/skills/... into the project. We now only block writes to
+        # true credential directories (.ssh, .aws) and .env files. Everything
+        # else is allowed.
         def validate_and_allow(command)
           begin
             parts = Shellwords.split(command)
@@ -195,9 +213,21 @@ module Clacky
 
           case cmd
           when 'mv', 'cp'
-            args.each { |path| validate_file_path(path) unless path.start_with?('-') }
-          when 'mkdir'
-            args.each { |path| validate_directory_creation(path) unless path.start_with?('-') }
+            # For mv/cp only the DESTINATION (last non-flag arg) is a write
+            # target; earlier args are sources and are read-only to the FS.
+            write_targets = args.reject { |a| a.start_with?('-') }
+            dest = write_targets.last
+            validate_secret_write(dest) if dest
+          when 'mkdir', 'touch'
+            args.each { |path| validate_secret_write(path) unless path.start_with?('-') }
+          when 'echo'
+            # `echo foo > path` — best-effort: block only if redirecting to a
+            # secret path. The redirect target will also be caught by
+            # validate_general_command for /etc /usr /bin; here we add .env,
+            # .ssh/, .aws/.
+            if command =~ />\s*([^\s|&;]+)/
+              validate_secret_write(Regexp.last_match(1))
+            end
           end
 
           command
@@ -238,41 +268,40 @@ module Clacky
           parts.drop(1).reject { |part| part.start_with?('-') }
         end
 
-        def validate_file_path(path)
-          return if path.start_with?('-')
+        # Block writes that would clobber credentials / secrets.
+        # These are the only paths truly dangerous to write to by accident:
+        #   - ~/.ssh/*          (SSH private keys)
+        #   - ~/.aws/*          (AWS credentials)
+        #   - any *.env file    (API keys, DB URLs, etc.)
+        #
+        # Paths in / outside the project root, Gemfile, README, package.json,
+        # etc. are all allowed — the agent is expected to edit them normally.
+        SECRET_WRITE_PATTERNS = [
+          %r{(?:\A|/)\.ssh/},
+          %r{(?:\A|/)\.aws/},
+          /(?:\A|\/)\.env(?:\.|\z)/,
+          /\.env\z/
+        ].freeze
+
+        def validate_secret_write(path)
+          return if path.nil? || path.empty? || path.start_with?('-')
 
           expanded_path = File.expand_path(path)
 
-          unless expanded_path.start_with?(@project_root)
-            raise SecurityError, "File access outside project directory blocked: #{path}"
-          end
-
-          protected_patterns = [
-            /Gemfile$/,
-            /Gemfile\.lock$/,
-            /README\.md$/,
-            /LICENSE/,
-            /\.gitignore$/,
-            /package\.json$/,
-            /yarn\.lock$/,
-            /\.env$/,
-            /\.ssh\//,
-            /\.aws\//
-          ]
-
-          protected_patterns.each do |pattern|
+          SECRET_WRITE_PATTERNS.each do |pattern|
             if expanded_path.match?(pattern)
-              raise SecurityError, "Access to protected file blocked: #{File.basename(path)}"
+              raise SecurityError,
+                    "Write to credential/secret path blocked: #{path} " \
+                    "(matched protected pattern). If intentional, edit the " \
+                    "file manually outside the agent."
             end
           end
         end
 
-        def validate_directory_creation(path)
-          expanded_path = File.expand_path(path)
-
-          unless expanded_path.start_with?(@project_root)
-            raise SecurityError, "Directory creation outside project blocked: #{path}"
-          end
+        # Kept for `rm` handler — which rewrites rm → mv-to-trash. We still
+        # want to prevent accidentally trashing a secret file.
+        def validate_file_path(path)
+          validate_secret_write(path)
         end
 
         def create_delete_metadata(original_path, trash_path)
@@ -317,7 +346,7 @@ module Clacky
                 :replace_curl_pipe_command, :block_sudo_command,
                 :allow_dev_null_redirect, :validate_and_allow,
                 :validate_general_command, :parse_rm_files,
-                :validate_file_path, :validate_directory_creation,
+                :validate_file_path, :validate_secret_write,
                 :create_delete_metadata, :log_replacement,
                 :log_warning, :write_log
       end

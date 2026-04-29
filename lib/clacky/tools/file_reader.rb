@@ -18,8 +18,8 @@ module Clacky
           },
           max_lines: {
             type: "integer",
-            description: "Maximum number of lines to read from start (default: 500)",
-            default: 500
+            description: "Maximum number of lines to read from start (default: 1000)",
+            default: 1000
           },
           start_line: {
             type: "integer",
@@ -39,12 +39,12 @@ module Clacky
       MAX_TEXT_FILE_SIZE = 1 * 1024 * 1024
 
       # Maximum content size to return (~10,000 tokens = ~40,000 characters)
-      MAX_CONTENT_CHARS = 40_000
+      MAX_CONTENT_CHARS = 80_000
 
       # Maximum characters per line (prevent single huge lines from bloating tokens)
       MAX_LINE_CHARS = 1000
 
-      def execute(path:, max_lines: 500, start_line: nil, end_line: nil, working_dir: nil)
+      def execute(path:, max_lines: 1000, start_line: nil, end_line: nil, working_dir: nil)
         # Expand path relative to working_dir when provided
         expanded_path = expand_path(path, working_dir: working_dir)
 

@@ -158,7 +158,7 @@ module Clacky
 
     def initialize(options = {})
       @permission_mode = validate_permission_mode(options[:permission_mode])
-      @max_tokens = options[:max_tokens] || 8192
+      @max_tokens = options[:max_tokens] || 16384
       @verbose = options[:verbose] || false
       @enable_compression = options[:enable_compression].nil? ? true : options[:enable_compression]
       # Enable prompt caching by default for cost savings

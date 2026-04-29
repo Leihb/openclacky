@@ -7,7 +7,14 @@ module Clacky
   module Tools
     class TodoManager < Base
       self.tool_name = "todo_manager"
-      self.tool_description = "Plan and track multi-step tasks."
+      self.tool_description = <<~DESC.strip
+        Plan and track multi-step tasks. Skip for trivial single-step requests.
+
+        `task` and `id` accept a single value OR an array — always batch when you can
+        (e.g. `complete id:[1,2,3]` in one call, not three).
+
+        Only `complete` a todo once it's truly done end-to-end, not per sub-step.
+      DESC
       self.tool_category = "task_management"
       self.tool_parameters = {
         type: "object",
@@ -17,35 +24,49 @@ module Clacky
             enum: ["add", "list", "complete", "remove", "clear"],
             description: "add | list | complete | remove | clear"
           },
-          tasks: {
-            type: "array",
-            items: { type: "string" },
-            description: "add: multiple task descriptions"
+          task: {
+            description: "add: task description(s). Accepts a string OR an array of strings for batch add.",
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ]
           },
-          task: { type: "string",  description: "add: single task description" },
-          id:   { type: "integer", description: "complete/remove: task id" },
-          ids:  { type: "array", items: { type: "integer" }, description: "remove: batch task ids" }
+          id: {
+            description: "complete/remove: task id(s). Accepts an integer OR an array of integers for batch ops.",
+            oneOf: [
+              { type: "integer" },
+              { type: "array", items: { type: "integer" } }
+            ]
+          }
         },
         required: ["action"]
       }
 
-      def execute(action:, task: nil, tasks: nil, id: nil, ids: nil, todos_storage: nil, working_dir: nil)
+      def execute(action:, task: nil, id: nil, todos_storage: nil, working_dir: nil, **_extra)
         # todos_storage is injected by Agent, stores todos in memory
         @todos = todos_storage || []
 
+        # Normalize polymorphic inputs: callers may pass scalar or array for
+        # `task` and `id`. We coerce both into arrays internally.
+        tasks_input = normalize_to_array(task)
+        ids_input   = normalize_to_array(id)
+
         case action
         when "add"
-          add_todos(task: task, tasks: tasks)
+          add_todos(tasks_input)
         when "list"
           list_todos
         when "complete"
-          complete_todo(id)
-        when "remove"
-          # Support both single ID and batch IDs
-          if ids && ids.is_a?(Array)
-            remove_todos(ids)
+          if ids_input.size > 1
+            complete_todos(ids_input)
           else
-            remove_todo(id)
+            complete_todo(ids_input.first)
+          end
+        when "remove"
+          if ids_input.size > 1
+            remove_todos(ids_input)
+          else
+            remove_todo(ids_input.first)
           end
         when "clear"
           clear_todos
@@ -54,22 +75,36 @@ module Clacky
         end
       end
 
+      # Coerce scalar/array/nil into an Array. Filters nil entries.
+      private def normalize_to_array(value)
+        return [] if value.nil?
+        Array(value).reject(&:nil?)
+      end
+
       def format_call(args)
         action = args[:action] || args['action']
         case action
         when 'add'
-          count = (args[:tasks] || args['tasks'])&.size || 1
+          task_arg = args[:task] || args['task']
+          count = task_arg.is_a?(Array) ? task_arg.size : 1
           "TodoManager(add #{count} task#{count > 1 ? 's' : ''})"
         when 'complete'
-          "TodoManager(complete ##{args[:id] || args['id']})"
+          id_arg = args[:id] || args['id']
+          if id_arg.is_a?(Array) && id_arg.size > 1
+            "TodoManager(complete #{id_arg.size} tasks: #{id_arg.join(', ')})"
+          else
+            single = id_arg.is_a?(Array) ? id_arg.first : id_arg
+            "TodoManager(complete ##{single})"
+          end
         when 'list'
           "TodoManager(list)"
         when 'remove'
-          ids = args[:ids] || args['ids']
-          if ids && ids.is_a?(Array) && !ids.empty?
-            "TodoManager(remove #{ids.size} tasks: #{ids.join(', ')})"
+          id_arg = args[:id] || args['id']
+          if id_arg.is_a?(Array) && id_arg.size > 1
+            "TodoManager(remove #{id_arg.size} tasks: #{id_arg.join(', ')})"
           else
-            "TodoManager(remove ##{args[:id] || args['id']})"
+            single = id_arg.is_a?(Array) ? id_arg.first : id_arg
+            "TodoManager(remove ##{single})"
           end
         when 'clear'
           "TodoManager(clear all)"
@@ -99,15 +134,11 @@ module Clacky
         @todos.replace(todos)
       end
 
-      def add_todos(task: nil, tasks: nil)
-        # Determine which tasks to add
-        tasks_to_add = []
-
-        if tasks && tasks.is_a?(Array) && !tasks.empty?
-          tasks_to_add = tasks.map(&:strip).reject(&:empty?)
-        elsif task && !task.strip.empty?
-          tasks_to_add = [task.strip]
-        end
+      def add_todos(tasks_input)
+        # tasks_input is already a normalized array (possibly empty)
+        tasks_to_add = Array(tasks_input)
+                       .map { |t| t.is_a?(String) ? t.strip : t.to_s.strip }
+                       .reject(&:empty?)
 
         return { error: "At least one task description is required" } if tasks_to_add.empty?
 
@@ -265,6 +296,62 @@ module Clacky
 
         # Add warning about not found IDs
         result[:not_found] = not_found_ids unless not_found_ids.empty?
+
+        result
+      end
+
+      # Mark several tasks completed in one call.
+      # Behavior mirrors `complete_todo` but aggregates over `ids`.
+      # Tolerates already-completed and not-found ids (returned in result).
+      def complete_todos(ids)
+        return { error: "Task IDs array is required" } if ids.nil? || ids.empty?
+
+        todos = load_todos
+        now = Time.now.iso8601
+        completed_now = []
+        already_completed = []
+        not_found = []
+
+        ids.each do |id|
+          todo = todos.find { |t| t[:id] == id }
+          if todo.nil?
+            not_found << id
+          elsif todo[:status] == "completed"
+            already_completed << todo
+          else
+            todo[:status] = "completed"
+            todo[:completed_at] = now
+            completed_now << todo
+          end
+        end
+
+        save_todos(todos)
+
+        completed_count = todos.count { |t| t[:status] == "completed" }
+        total_count    = todos.size
+        next_pending   = todos.find { |t| t[:status] == "pending" }
+
+        result = {
+          message: "#{completed_now.size} task(s) marked as completed",
+          completed: completed_now,
+          progress: "#{completed_count}/#{total_count}"
+        }
+
+        result[:already_completed] = already_completed unless already_completed.empty?
+        result[:not_found]         = not_found          unless not_found.empty?
+
+        if next_pending
+          result[:next_task] = next_pending
+          result[:next_task_info] =
+            "Progress: #{completed_count}/#{total_count}. " \
+            "Next task: ##{next_pending[:id]} - #{next_pending[:task]}"
+        else
+          # All tasks completed — auto-clear to match single-complete behavior
+          save_todos([])
+          result[:all_completed] = true
+          result[:completion_message] =
+            "All tasks completed and cleared! (#{completed_count}/#{total_count})"
+        end
 
         result
       end
