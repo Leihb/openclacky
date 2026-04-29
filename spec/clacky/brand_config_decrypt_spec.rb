@@ -561,4 +561,53 @@ RSpec.describe Clacky::BrandConfig, "#decrypt_skill_content (AES-256-GCM)" do
       end
     end
   end
+
+  # ── decrypt_all_scripts with empty .enc file ───────────────────────────────
+
+  describe "#decrypt_all_scripts with empty encrypted file" do
+    it "skips decryption for a 0-byte .enc file and writes an empty output" do
+      Dir.mktmpdir do |tmp|
+        config = activated_config(tmp)
+
+        # Build a skill directory with a supporting script that is 0 bytes
+        skill_dir = File.join(tmp, "corrupted-skill")
+        scripts_dir = File.join(skill_dir, "scripts")
+        FileUtils.mkdir_p(scripts_dir)
+
+        # Write an empty .enc file — simulates a corrupted skill package
+        enc_path = File.join(scripts_dir, "tool.rb.enc")
+        File.binwrite(enc_path, "")
+
+        # Build a manifest that references this file
+        manifest = {
+          "manifest_version" => "1",
+          "algorithm"         => "aes-256-gcm",
+          "skill_id"          => 42,
+          "skill_version_id"  => 7,
+          "files"             => {
+            "scripts/tool.rb" => {
+              "encrypted_path"    => "scripts/tool.rb.enc",
+              "iv"                => Base64.strict_encode64(OpenSSL::Random.random_bytes(12)),
+              "tag"               => Base64.strict_encode64(OpenSSL::Random.random_bytes(16)),
+              "original_checksum" => Digest::SHA256.hexdigest("")
+            }
+          }
+        }
+        File.write(File.join(skill_dir, "MANIFEST.enc.json"), JSON.generate(manifest))
+
+        stub_key_server(config, test_key_hex)
+
+        dest_dir = File.join(tmp, "decrypted")
+        result = config.decrypt_all_scripts(skill_dir, dest_dir)
+
+        # Should succeed without raising
+        expect(result).to eq(["scripts/tool.rb"])
+
+        # The output file should exist and be empty
+        out_path = File.join(dest_dir, "scripts", "tool.rb")
+        expect(File.exist?(out_path)).to be true
+        expect(File.read(out_path)).to eq("")
+      end
+    end
+  end
 end

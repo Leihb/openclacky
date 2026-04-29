@@ -964,16 +964,24 @@ module Clacky
           key = fetch_decryption_key(skill_id: skill_id, skill_version_id: skill_version_id)
 
           ciphertext = File.binread(enc_path)
-          pt         = aes_gcm_decrypt(key, ciphertext, file_meta["iv"], file_meta["tag"])
 
-          # Integrity check
-          actual   = Digest::SHA256.hexdigest(pt)
-          expected = file_meta["original_checksum"]
-          if expected && actual != expected
-            raise "Checksum mismatch for #{rel_plain}: expected #{expected}, got #{actual}"
+          if ciphertext.nil? || ciphertext.empty?
+            # AES-GCM of empty data still produces 16+ bytes (auth tag + IV).
+            # A 0-byte file means the skill package is corrupted; skip
+            # decryption and produce an empty output so the skill can still run.
+            ""
+          else
+            pt = aes_gcm_decrypt(key, ciphertext, file_meta["iv"], file_meta["tag"])
+
+            # Integrity check
+            actual   = Digest::SHA256.hexdigest(pt)
+            expected = file_meta["original_checksum"]
+            if expected && actual != expected
+              raise "Checksum mismatch for #{rel_plain}: expected #{expected}, got #{actual}"
+            end
+
+            pt
           end
-
-          pt
         else
           # Mock/plain skill: raw bytes
           File.binread(enc_path).force_encoding("UTF-8")
