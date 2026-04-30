@@ -89,18 +89,54 @@ module Clacky
     # ── Agent main path ───────────────────────────────────────────────────────
 
     # Send messages with tool-calling support.
-    # Returns canonical response hash: { content:, tool_calls:, finish_reason:, usage: }
+    # Returns canonical response hash: { content:, tool_calls:, finish_reason:, usage:, latency: }
+    #
+    # Latency measurement:
+    #   Because the current HTTP path is *non-streaming* (plain POST, response
+    #   body read in one shot), TTFB (time to response headers) is not exposed
+    #   by Faraday's default adapter without extra plumbing. What we CAN measure
+    #   cheaply — and what users actually feel — is total request duration,
+    #   which for a non-streaming call equals the time from "hit Enter" to
+    #   "first token visible" (since we receive everything at once).
+    #
+    #   So we record `duration_ms` as the authoritative number and alias it to
+    #   `ttft_ms` for downstream consumers (status bar uses ttft_ms as its
+    #   signal metric — see docs). When we migrate to streaming later, this
+    #   same `ttft_ms` field will start carrying the *actual* first-token
+    #   latency without any schema change.
     def send_messages_with_tools(messages, model:, tools:, max_tokens:, enable_caching: false)
       caching_enabled = enable_caching && supports_prompt_caching?(model)
       cloned = deep_clone(messages)
 
-      if bedrock?
-        send_bedrock_request(cloned, model, tools, max_tokens, caching_enabled)
-      elsif anthropic_format?
-        send_anthropic_request(cloned, model, tools, max_tokens, caching_enabled)
-      else
-        send_openai_request(cloned, model, tools, max_tokens, caching_enabled)
-      end
+      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      response =
+        if bedrock?
+          send_bedrock_request(cloned, model, tools, max_tokens, caching_enabled)
+        elsif anthropic_format?
+          send_anthropic_request(cloned, model, tools, max_tokens, caching_enabled)
+        else
+          send_openai_request(cloned, model, tools, max_tokens, caching_enabled)
+        end
+      t1 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+      duration_ms = ((t1 - t0) * 1000).round
+      # Throughput is only meaningful with a reasonable output size; below ~10
+      # tokens the sample is too small to be informative and the result is
+      # wildly high (e.g. 1 token / 50ms → 20 tok/s is meaningless).
+      # Canonical usage hashes from message_format/* all use :completion_tokens.
+      output_tokens = response[:usage]&.dig(:completion_tokens).to_i
+      tps = (output_tokens >= 10 && duration_ms > 0) ? (output_tokens * 1000.0 / duration_ms).round(1) : nil
+
+      response[:latency] = {
+        ttft_ms:     duration_ms,      # non-streaming: TTFT == full duration
+        duration_ms: duration_ms,
+        output_tokens: output_tokens,
+        tps:         tps,
+        model:       model,
+        measured_at: Time.now.to_f,
+        streaming:   false              # future flag — true when we migrate
+      }
+      response
     end
 
     # Format tool results into canonical messages ready to append to @messages.

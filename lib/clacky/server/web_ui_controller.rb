@@ -302,14 +302,15 @@ module Clacky
 
       # === State updates ===
 
-      def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil)
+      def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil)
         data = {}
         data[:tasks]       = tasks       if tasks
         data[:cost]        = cost        if cost
         data[:cost_source] = cost_source if cost_source
         data[:status]      = status      if status
+        data[:latency]     = latency     if latency
         emit("session_update", **data) unless data.empty?
-        forward_to_subscribers { |sub| sub.update_sessionbar(tasks: tasks, cost: cost, cost_source: cost_source, status: status) }
+        forward_to_subscribers { |sub| sub.update_sessionbar(tasks: tasks, cost: cost, cost_source: cost_source, status: status, latency: latency) }
       end
 
       def update_todos(todos)

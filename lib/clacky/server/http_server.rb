@@ -426,6 +426,9 @@ module Clacky
           elsif method == "PATCH" && path.match?(%r{^/api/sessions/[^/]+/model$})
             session_id = path.sub("/api/sessions/", "").sub("/model", "")
             api_switch_session_model(session_id, req, res)
+          elsif method == "POST" && path.match?(%r{^/api/sessions/[^/]+/benchmark$})
+            session_id = path.sub("/api/sessions/", "").sub("/benchmark", "")
+            api_benchmark_session_models(session_id, req, res)
           elsif method == "PATCH" && path.match?(%r{^/api/sessions/[^/]+/working_dir$})
             session_id = path.sub("/api/sessions/", "").sub("/working_dir", "")
             api_change_session_working_dir(session_id, req, res)
@@ -2332,6 +2335,97 @@ module Clacky
       rescue => e
         json_response(res, 500, { error: e.message })
       end
+
+      # POST /api/sessions/:id/benchmark
+      #
+      # Speed-test every configured model in one shot so the user can pick the
+      # fastest available model for this session. We send a minimal one-token
+      # request to each model *in parallel* (one thread per model) and measure
+      # total HTTP duration — for non-streaming calls this equals the user's
+      # perceived time-to-first-token, so the field is named `ttft_ms` for
+      # forward-compatibility with a future streaming implementation.
+      #
+      # Cost note: each request is `max_tokens: 1` + a 2-byte prompt, so the
+      # total cost across a dozen models is well under one cent.
+      #
+      # Response shape:
+      #   {
+      #     ok: true,
+      #     results: [
+      #       { model_id: "...", model: "...", ttft_ms: 812, ok: true },
+      #       { model_id: "...", model: "...", ok: false, error: "timeout" },
+      #       ...
+      #     ]
+      #   }
+      def api_benchmark_session_models(session_id, _req, res)
+        return json_response(res, 404, { error: "Session not found" }) unless @registry.ensure(session_id)
+
+        # Snapshot the models list — @agent_config.models is a shared reference
+        # that the user might mutate from the settings panel during the test;
+        # a shallow dup is enough since we only read string fields below.
+        models = Array(@agent_config.models).dup
+        return json_response(res, 200, { ok: true, results: [] }) if models.empty?
+
+        # Kick off one thread per model. We deliberately cap per-request wall
+        # time inside each thread via a Faraday timeout so a single dead model
+        # can't block the response. The outer join uses a generous ceiling
+        # (timeout + small buffer) as a last-resort safety net.
+        per_model_timeout = 15
+        threads = models.map do |m|
+          Thread.new do
+            Thread.current.report_on_exception = false
+            benchmark_single_model(m, per_model_timeout)
+          end
+        end
+
+        results = threads.map do |t|
+          t.join(per_model_timeout + 3)
+          t.value rescue { ok: false, error: "thread failed" }
+        end
+
+        json_response(res, 200, { ok: true, results: results })
+      rescue => e
+        Clacky::Logger.error("[benchmark] #{e.class}: #{e.message}", error: e)
+        json_response(res, 500, { error: e.message })
+      end
+
+      # Runs one speed-test request against a single model config hash and
+      # returns a result row for api_benchmark_session_models. Pure function —
+      # no shared state — so it's safe to call from worker threads.
+      private def benchmark_single_model(model_cfg, timeout_sec)
+        model_id   = model_cfg["id"].to_s
+        model_name = model_cfg["model"].to_s
+        base       = { model_id: model_id, model: model_name }
+
+        client = Clacky::Client.new(
+          model_cfg["api_key"].to_s,
+          base_url:         model_cfg["base_url"].to_s,
+          model:            model_name,
+          anthropic_format: model_cfg["anthropic_format"] || false
+        )
+
+        # Override Faraday timeouts via a short-lived env var isn't ideal;
+        # instead we rely on test_connection's own network path and wrap
+        # the call in Timeout as a last line of defence. Most providers
+        # respond within 2-3s for a 16-token reply.
+        t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        result = nil
+        begin
+          Timeout.timeout(timeout_sec) { result = client.test_connection(model: model_name) }
+        rescue Timeout::Error
+          return base.merge(ok: false, error: "timeout after #{timeout_sec}s")
+        end
+        t1 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+        if result && result[:success]
+          base.merge(ok: true, ttft_ms: ((t1 - t0) * 1000).round)
+        else
+          base.merge(ok: false, error: (result && result[:error]).to_s[0, 200])
+        end
+      rescue => e
+        base.merge(ok: false, error: "#{e.class}: #{e.message}"[0, 200])
+      end
+
 
       def api_change_session_working_dir(session_id, req, res)
         body = parse_json_body(req)

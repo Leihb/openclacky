@@ -134,12 +134,13 @@ module Clacky
 
     # === State updates ===
 
-    def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil)
+    def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil)
       data = {}
       data[:tasks] = tasks if tasks
       data[:cost] = cost if cost
       data[:cost_source] = cost_source if cost_source
       data[:status] = status if status
+      data[:latency] = latency if latency
       emit("session_update", **data) unless data.empty?
     end
 

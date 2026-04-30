@@ -106,7 +106,7 @@ module Clacky
     end
 
     # === State updates ===
-    def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil); end
+    def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil); end
     def update_todos(todos); end
     def set_working_status; end
     def set_idle_status; end

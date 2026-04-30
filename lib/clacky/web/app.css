@@ -2209,6 +2209,65 @@ body {
 #sib-tasks { opacity: 0.75; flex-shrink: 0; }   /* tier 2 */
 #sib-cost  { opacity: 0.45; flex-shrink: 0; }   /* tier 3 */
 
+/* ── Latency signal (right after model name) ──────────────────────────────
+   A compact 4-bar signal + TTFT value. Placed adjacent to #sib-model so the
+   user's mental mapping "this model is fast/slow" is immediate. Variant
+   classes (-ok/-warn/-bad) are applied by Sessions._renderSignal based on
+   TTFT thresholds; colours intentionally use CSS vars so the same palette
+   works in both light and dark themes. */
+#sib-signal-wrap { position: relative; flex-shrink: 0; }
+.sib-signal-clickable {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  cursor: default;                         /* no click handler yet — step 3/4 will add one */
+  border-radius: 3px;
+  opacity: 0.85;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+  font-variant-numeric: tabular-nums;      /* prevents the text from jittering as values change */
+}
+.sib-signal-clickable:hover {
+  opacity: 1;
+  background: var(--color-bg-hover);
+}
+/* Bar stack: four 2-px wide vertical bars of increasing height, mimicking
+   a phone signal-strength icon. Each <i> is hollow by default; Sessions adds
+   .on to the ones that should light up for the current signal level. */
+.sib-signal-clickable .sig-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 11px;
+}
+.sib-signal-clickable .sig-bars i {
+  display: inline-block;
+  width: 2px;
+  background: var(--color-text-secondary);
+  opacity: 0.25;                           /* dim "off" bar */
+  border-radius: 1px;
+  transition: background-color 0.15s, opacity 0.15s;
+}
+/* Individual bar heights — short→tall */
+.sib-signal-clickable .sig-bars i:nth-child(1) { height: 3px;  }
+.sib-signal-clickable .sig-bars i:nth-child(2) { height: 5px;  }
+.sib-signal-clickable .sig-bars i:nth-child(3) { height: 8px;  }
+.sib-signal-clickable .sig-bars i:nth-child(4) { height: 11px; }
+.sib-signal-clickable .sig-bars i.on { opacity: 1; }
+
+/* Signal level → bar colour. Applied to .on bars only; "off" bars stay grey. */
+.sib-signal-ok   .sig-bars i.on { background: var(--color-accent-primary); }  /* green / brand */
+.sib-signal-warn .sig-bars i.on { background: #d39e00; }                      /* amber */
+.sib-signal-bad  .sig-bars i.on { background: #d9534f; }                      /* red */
+
+.sib-signal-clickable .sig-text {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.sib-signal-ok   .sig-text { color: var(--color-text-primary); }
+.sib-signal-warn .sig-text { color: #d39e00; }
+.sib-signal-bad  .sig-text { color: #d9534f; }
+
 /* Model name dropdown in session info bar */
 #sib-model-wrap {
   position: relative;
@@ -2269,6 +2328,94 @@ body {
 .sib-model-option .model-badge.lite {
   background: color-mix(in srgb, var(--color-accent-primary) 10%, transparent);
   color: var(--color-accent-primary);
+}
+
+/* ── Model switcher benchmark banner & latency column ──────────────────────
+   The banner sits at the top of the dropdown with a subtle border so it
+   visually separates from the scrollable model list below. The ⚡ button is
+   pushed to the RIGHT edge (where the eye naturally lands after scanning a
+   model name → latency row), while the optional hint ("done in 1.2s") sits
+   on the left. The per-row latency cell is right-aligned and uses
+   tabular-nums so numbers line up vertically regardless of width. */
+.sib-model-bench {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;   /* hint on the left, button on the right */
+  gap: 8px;
+  padding: 4px 8px 4px 10px;         /* compact: tighter top/bottom + tighter right side */
+  border-bottom: 1px solid var(--color-border-primary);
+  background: var(--color-bg-primary);
+  position: sticky;    /* keep visible while scrolling a long model list */
+  top: 0;
+  z-index: 1;
+  min-height: 0;
+}
+.sib-bench-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  font-family: inherit;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  order: 2;   /* force button to the right even if DOM order changes */
+  flex: 0 0 auto;
+}
+.sib-bench-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+.sib-bench-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+.sib-bench-hint {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  order: 1;   /* hint stays on the left */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sib-model-option .sib-model-name {
+  /* Keep long model names from pushing the latency cell offscreen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sib-model-option .sib-model-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.sib-model-option .sib-model-latency {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;            /* reserves space so rows don't jitter before benchmark */
+  text-align: right;
+  color: var(--color-text-secondary);
+}
+.sib-model-option .sib-model-latency.is-ok   { color: var(--color-accent-primary); }
+.sib-model-option .sib-model-latency.is-warn { color: #d39e00; }
+.sib-model-option .sib-model-latency.is-bad  { color: #d9534f; }
+.sib-model-option .sib-model-latency.is-err  { color: #d9534f; }
+.sib-model-option .sib-model-latency.is-pending {
+  color: var(--color-text-secondary);
+  opacity: 0.7;
 }
 
 /* ── Input area (wraps preview strip + input bar) ────────────────────────── */

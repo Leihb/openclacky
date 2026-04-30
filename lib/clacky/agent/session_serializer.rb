@@ -36,6 +36,15 @@ module Clacky
         # Restore previous_total_tokens for accurate delta calculation across sessions
         @previous_total_tokens = session_data.dig(:stats, :previous_total_tokens) || 0
 
+        # Recover the latest latency metric from the most recent assistant message
+        # that carries a :latency field. This is the source of truth for the status-bar
+        # signal — no separate session-level field is needed. Older sessions (pre-feature)
+        # simply start with nil; the signal stays hidden until the next LLM call populates it.
+        last_assistant_with_latency = @history.to_a.reverse.find do |m|
+          m[:role].to_s == "assistant" && m[:latency]
+        end
+        @latest_latency = last_assistant_with_latency&.dig(:latency)
+
         # Restore Time Machine state
         @task_parents = session_data.dig(:time_machine, :task_parents) || {}
         @current_task_id = session_data.dig(:time_machine, :current_task_id) || 0

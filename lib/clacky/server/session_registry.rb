@@ -169,7 +169,8 @@ module Clacky
             live_cost_source = s[:agent]&.cost_source
             { status: s[:status], error: s[:error], model: model_info&.dig(:model), name: live_name,
               total_tasks: s[:agent]&.total_tasks, total_cost: s[:agent]&.total_cost,
-              cost_source: live_cost_source }
+              cost_source: live_cost_source,
+              latest_latency: s[:agent]&.latest_latency }
           end
         end
 
@@ -234,6 +235,11 @@ module Clacky
             total_tasks:   ls&.dig(:total_tasks) || s.dig(:stats, :total_tasks) || 0,
             total_cost:    ls&.dig(:total_cost)  || s.dig(:stats, :total_cost_usd) || 0.0,
             cost_source:   (ls&.dig(:cost_source) || s.dig(:stats, :cost_source) || "estimated").to_s,
+            # latest_latency is in-memory only (live sessions) — not persisted
+            # at the session-level on disk. The on-disk source of truth is
+            # per-assistant-message `latency` fields in messages[]. Reloaded
+            # sessions start with nil and get populated on the next LLM call.
+            latest_latency: ls&.dig(:latest_latency),
             pinned:        s[:pinned] || false,
           }
         end
@@ -311,6 +317,7 @@ module Clacky
           source:          agent.source.to_s,
           agent_profile:   agent.agent_profile.name,
           pinned:          agent.pinned || false,
+          latest_latency:  agent.latest_latency,
         }
       end
     end

@@ -42,7 +42,8 @@ module Clacky
 
     attr_reader :session_id, :name, :history, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
                 :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile,
-                :status, :error, :updated_at, :source
+                :status, :error, :updated_at, :source,
+                :latest_latency  # Hash of latency metrics from the most recent LLM call (see Client#send_messages_with_tools)
     attr_accessor :pinned
 
     def permission_mode
@@ -78,6 +79,7 @@ module Clacky
       @task_cost_source = :estimated  # Track cost source for current task
       @previous_total_tokens = 0  # Track tokens from previous iteration for delta calculation
       @interrupted = false  # Flag for user interrupt
+      @latest_latency = nil  # Most recent LLM call's latency metrics (see Client#send_messages_with_tools)
       @ui = ui  # UIController for direct UI interaction
       @debug_logs = []  # Debug logs for troubleshooting
       @pending_injections = []     # Pending inline skill injections to flush after observe()
@@ -208,6 +210,7 @@ module Clacky
 
       @start_time = Time.now
       @task_truncation_count = 0  # Reset truncation counter for each task
+      @task_timeout_hint_injected = false  # Reset read-timeout hint injection (see LlmCaller)
       @task_cost_source = :estimated  # Reset for new task
       # Note: Do NOT reset @previous_total_tokens here - it should maintain the value from the last iteration
       # across tasks to correctly calculate delta tokens in each iteration
@@ -681,6 +684,17 @@ module Clacky
       end
       # Store token_usage in the message so replay_history can re-emit it
       msg[:token_usage] = response[:token_usage] if response[:token_usage]
+      # Store per-message latency — this is the source of truth (session.json)
+      # for all time-to-first-token / duration / throughput info. The status
+      # bar signal reads the last assistant message's latency; no separate
+      # config file or top-level session field is introduced.
+      if response[:latency]
+        msg[:latency] = response[:latency]
+        @latest_latency = response[:latency]
+        # Push to UI so the status-bar signal updates immediately after the
+        # model finishes (before any tool execution delays the next event).
+        @ui&.update_sessionbar(latency: response[:latency])
+      end
       # Preserve reasoning_content from the real LLM response.
       # This is the authoritative signal used by MessageHistory#to_api to
       # detect thinking-mode providers (DeepSeek V4, Kimi K2 thinking, etc.)

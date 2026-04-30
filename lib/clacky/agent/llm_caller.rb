@@ -86,7 +86,45 @@ module Clacky
           # Successful response — if we were probing, confirm primary is healthy.
           handle_probe_success if @config.probing?
 
-        rescue Faraday::ConnectionFailed, Faraday::TimeoutError, Faraday::SSLError, Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
+        rescue Faraday::TimeoutError => e
+          # ── Read-timeout path (distinct from connection-level failures) ──
+          # Faraday::TimeoutError on our non-streaming POST almost always means
+          # the *response* took longer than the 300s read-timeout to come back —
+          # i.e. the model is trying to produce a huge output in one shot
+          # (e.g. "write me a 2000-line snake game"). Blindly retrying the same
+          # request with the same prompt reproduces the same timeout.
+          #
+          # Strategy:
+          #   1. On the FIRST timeout in a task, inject a `[SYSTEM]` user message
+          #      telling the model to break the work into smaller steps, then
+          #      retry. The history edit changes the prompt, so the retry is
+          #      materially different from the failed attempt.
+          #   2. On subsequent timeouts in the same task, fall back to the
+          #      generic "just retry" behaviour (the model may have ignored
+          #      the hint; don't pile on duplicate hints).
+          #   3. Probing-mode timeouts still go through handle_probe_failure.
+          retries += 1
+
+          if @config.probing?
+            handle_probe_failure
+            retry
+          end
+
+          if retries <= max_retries
+            inject_large_output_hint_if_first_timeout(e)
+            @ui&.show_progress(
+              "Response too slow (likely generating too much at once): #{e.message}",
+              progress_type: "retrying",
+              phase: "active",
+              metadata: { attempt: retries, total: max_retries }
+            )
+            sleep retry_delay
+            retry
+          else
+            raise AgentError, "[LLM] Request timed out after #{max_retries} retries: #{e.message}"
+          end
+
+        rescue Faraday::ConnectionFailed, Faraday::SSLError, Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
           retries += 1
 
           # Probing failure: primary still down — renew cooling-off and retry with fallback.
@@ -95,9 +133,10 @@ module Clacky
             retry
           end
 
-          # Network-level errors (timeouts, connection failures) are likely transient
-          # infrastructure blips — do NOT trigger fallback.  Just retry on the current
-          # model (primary or already-active fallback) up to max_retries.
+          # Connection-level errors (DNS, TCP refused, open-timeout, TLS) are
+          # transient infrastructure blips — do NOT trigger fallback, and do
+          # NOT inject the "break into steps" hint (the model did nothing wrong).
+          # Just retry on the current model up to max_retries.
           if retries <= max_retries
             @ui&.show_progress(
               "Network failed: #{e.message}",
@@ -228,6 +267,50 @@ module Clacky
         msg.include?("reasoning_content") &&
           (msg.include?("thinking") || msg.include?("must be passed back") ||
            msg.include?("must be provided"))
+      end
+
+      # On the FIRST Faraday::TimeoutError within a task, append a [SYSTEM]
+      # user message to the history instructing the model to break its work
+      # into smaller steps. Subsequent timeouts in the same task are ignored
+      # here (caller just retries) so we don't pollute history with duplicate
+      # hints.
+      #
+      # The injected message carries `system_injected: true` so it is:
+      #   - Hidden from UI replay (session_serializer / replay_history filters)
+      #   - Skipped by prompt-caching marker placement (client.rb)
+      #   - Skipped by message compression's "recent user turn" protection
+      #     (message_compressor_helper.rb)
+      #
+      # Reset per-task via Agent#run (see @task_timeout_hint_injected = false).
+      private def inject_large_output_hint_if_first_timeout(err)
+        return if @task_timeout_hint_injected
+
+        @task_timeout_hint_injected = true
+
+        hint = "[SYSTEM] The previous LLM response timed out (read timeout after ~300s). " \
+               "This usually means the model was trying to produce too much output in a single response. " \
+               "Please change your approach:\n" \
+               "- Break the task into multiple smaller steps, each producing a short response.\n" \
+               "- For long files: first create a skeleton with `write` (structure + placeholder comments only), " \
+               "then fill in each section with separate `edit` calls.\n" \
+               "- Keep each single tool-call argument (especially file content) well under ~500 lines.\n" \
+               "- Do NOT attempt to output the entire deliverable in one response."
+
+        @history.append({
+          role: "user",
+          content: hint,
+          system_injected: true,
+          task_id: @current_task_id
+        })
+
+        Clacky::Logger.info(
+          "[llm_caller] Read-timeout detected — injected 'break into smaller steps' hint " \
+          "(error=#{err.class}: #{err.message})"
+        )
+
+        @ui&.show_warning(
+          "LLM response timed out — asking model to break the task into smaller steps and retrying..."
+        )
       end
     end
   end

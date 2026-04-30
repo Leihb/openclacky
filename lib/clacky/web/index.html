@@ -271,6 +271,16 @@
           <div id="sib-model-dropdown" class="sib-model-dropdown" style="display:none"></div>
         </span>
         <span class="sib-sep sib-sep-after-model">│</span>
+        <!-- Latency signal: 4-bar signal + TTFT number. Hidden until the first LLM
+             call completes (see updateInfoBar / Sessions.renderSignalBars). Click
+             opens a mini benchmark panel (see Step 3/4 — not yet implemented). -->
+        <span id="sib-signal-wrap" style="display:none">
+          <span id="sib-signal" class="sib-signal-clickable" title="Recent LLM latency">
+            <span class="sig-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <span class="sig-text"></span>
+          </span>
+        </span>
+        <span class="sib-sep sib-sep-after-signal" style="display:none">│</span>
         <!-- Detail fields: mode, tasks, cost -->
         <span class="sib-detail">
           <span id="sib-mode"></span>

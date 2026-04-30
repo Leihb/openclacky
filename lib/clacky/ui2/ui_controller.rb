@@ -108,7 +108,8 @@ module Clacky
       # @param cost [Float] Total cost (optional)
       # @param cost_source [Symbol, nil] :api / :price / :default (optional)
       # @param status [String] Workspace status ('idle' or 'working') (optional)
-      def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil)
+      # @param latency [Hash, nil] Latency metrics; accepted but not displayed in the TUI.
+      def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil)
         @tasks_count = tasks if tasks
         @total_cost = cost if cost
         @input_area.update_sessionbar(
