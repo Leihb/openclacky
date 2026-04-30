@@ -22,7 +22,7 @@ module Clacky
         "name" => "OpenClacky",
         "base_url" => "https://api.openclacky.com",
         "api" => "bedrock",
-        "default_model" => "abs-claude-sonnet-4-6",
+        "default_model" => "abs-claude-sonnet-4-5",
         "models" => [
           "abs-claude-opus-4-7",
           "abs-claude-opus-4-6",
@@ -131,7 +131,7 @@ module Clacky
       }.freeze,
 
       "clackyai-sea" => {
-        "name" => "ClackyAI( Sea )",
+        "name" => "ClackyAI(Sea)",
         "base_url" => "https://api.clacky.ai",
         "api" => "bedrock",
         "default_model" => "abs-claude-sonnet-4-5",
