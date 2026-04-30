@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-04-30
+
+### Added
+- **Speed test tool in Web UI.** Test API response latency for different models and providers directly from the settings panel, making it easy to find the fastest endpoint for your region.
+- **History chunk loading.** Previously compressed conversation chunks can now be loaded back into the session when needed, so long-running conversations don't lose context.
+- **Default model changed to 4.5.** New default model provides better balance of speed, quality, and cost for most tasks.
+
+### Improved
+- **Thinking indicator now visible for more steps.** The "thinking..." indicator stays visible longer during complex operations, giving better feedback about what the agent is doing.
+- **Message timestamps display correctly in Web UI.** User message times now show properly without layout issues, and the scroll behavior is smoother.
+
+### Fixed
+- **Scroll position no longer jumps unexpectedly** in the Web UI when loading session history.
 
 ## [1.0.0.beta.6] - 2026-04-30
 
