@@ -154,12 +154,22 @@ module Clacky
         # Note: we need to remove the compression instruction message we just added
         original_messages = @history.to_a[0..-2]  # All except the last (compression instruction)
 
-        # Archive compressed messages to a chunk MD file before discarding them
-        # Count existing compressed_summary messages in history to determine the next chunk index.
-        # Using @compressed_summaries.size would reset to 0 on process restart and overwrite existing
-        # chunk files, creating circular chunk references. Counting from history is always accurate.
-        existing_chunk_count = original_messages.count { |m| m[:compressed_summary] }
-        chunk_index = existing_chunk_count + 1
+        # Archive compressed messages to a chunk MD file before discarding them.
+        #
+        # IMPORTANT: chunk_index and previous_chunks MUST come from disk, not from
+        # message history. Each compression's rebuild_with_compression keeps only
+        # ONE compressed_summary message (the new one), dropping older summaries
+        # and embedding their references into the new summary's content. So
+        # counting compressed_summary messages in history caps at 1 from the
+        # second compression onward — causing chunk-2.md to be overwritten on
+        # every subsequent compression, and losing references to chunk-1.md.
+        #
+        # Disk is the only durable source of truth: chunk files survive process
+        # restarts, session reloads, and message rebuilds. SessionManager owns
+        # all chunk file I/O (naming, writing, discovery) — we just ask it.
+        sm = session_manager
+        existing_chunks = sm.chunks_for_current(@session_id, @created_at)
+        chunk_index = sm.next_chunk_index(@session_id, @created_at)
 
         # Extract topics from the LLM response to store in both the chunk MD front
         # matter and the compressed_summary message hash (for future chunk indexing).
@@ -173,14 +183,13 @@ module Clacky
           topics: topics
         )
 
-        # Collect previous chunk references so the new summary carries a complete
-        # index of all older archives. Without this, each new compression would
-        # lose all prior chunk references — leaving only the newest chunk reachable
-        # via replay_history. The AI can still access older chunks via file_reader
-        # using the embedded basenames and topics.
-        previous_chunks = original_messages
-          .select { |m| m[:compressed_summary] && m[:chunk_path] }
-          .map { |m| { basename: File.basename(m[:chunk_path]), path: m[:chunk_path], topics: m[:topics] } }
+        # Build previous_chunks index from the disk-discovered chunks (already
+        # sorted by index ascending). This gives the new summary a complete
+        # chronological index of all older archives so the AI can recall any
+        # past chunk via file_reader, not just the most recent one.
+        previous_chunks = existing_chunks.map do |c|
+          { basename: c[:basename], path: c[:path], topics: c[:topics] }
+        end
 
         @history.replace_all(@message_compressor.rebuild_with_compression(
           compressed_content,
@@ -348,8 +357,22 @@ module Clacky
         end
       end
 
-      # Save the messages being compressed to a chunk MD file for future recall
-      # File path: ~/.clacky/sessions/{datetime}-{short_id}-chunk-{n}.md
+      # Lazy accessor for a SessionManager instance used by compression chunk I/O.
+      # We keep this local to the helper rather than threading a manager instance
+      # through the Agent constructor — Agent itself doesn't persist sessions
+      # (CLI / HTTP server do that), but the compression archive lives in the
+      # same directory under SessionManager's ownership.
+      #
+      # NOTE: Uses Clacky::SessionManager::SESSIONS_DIR by default. Tests can
+      # stub that constant to point at a tmpdir.
+      private def session_manager
+        @session_manager ||= Clacky::SessionManager.new
+      end
+
+      # Save the messages being compressed to a chunk MD file for future recall.
+      # The filesystem concerns (path, write, chmod) are delegated to SessionManager;
+      # this method is responsible only for the business rules of WHAT gets archived.
+      #
       # @param original_messages [Array<Hash>] All messages before compression (excluding compression instruction)
       # @param recent_messages [Array<Hash>] Recent messages being kept (to exclude from chunk)
       # @param chunk_index [Integer] Sequential chunk number
@@ -373,19 +396,14 @@ module Clacky
 
         return nil if messages_to_archive.empty?
 
-        sessions_dir = Clacky::SessionManager::SESSIONS_DIR
-        datetime = Time.parse(@created_at).strftime("%Y-%m-%d-%H-%M-%S")
-        short_id = @session_id[0..7]
-        base_name = "#{datetime}-#{short_id}"
-        chunk_filename = "#{base_name}-chunk-#{chunk_index}.md"
-        chunk_path = File.join(sessions_dir, chunk_filename)
+        md_content = build_chunk_md(messages_to_archive,
+                                    chunk_index: chunk_index,
+                                    compression_level: compression_level,
+                                    topics: topics)
 
-        md_content = build_chunk_md(messages_to_archive, chunk_index: chunk_index, compression_level: compression_level, topics: topics)
-
-        File.write(chunk_path, md_content)
-        FileUtils.chmod(0o600, chunk_path)
-
-        chunk_path
+        # Delegate filesystem concerns (path assembly, write, chmod) to SessionManager —
+        # it owns the on-disk layout for sessions and their chunk archives.
+        session_manager.write_chunk(@session_id, @created_at, chunk_index, md_content)
       rescue => e
         @ui&.log("Failed to save chunk MD: #{e.message}", level: :warn)
         nil

@@ -582,60 +582,270 @@ RSpec.describe "Compression chunk MD archiving" do
     end
   end
 
-  # ── chunk_index derivation from history ──────────────────────────────────────
+  # ── chunk_index derivation from disk ─────────────────────────────────────────
   #
-  # chunk_index must be derived by counting compressed_summary messages already
-  # in original_messages — NOT from @compressed_summaries.size, which resets to
-  # 0 on every process restart and would cause index collisions that overwrite
-  # existing chunk files, creating circular chunk references.
-  describe "chunk_index derivation from compressed_summary messages in history" do
-    def count_index(messages)
-      messages.count { |m| m[:compressed_summary] } + 1
+  # chunk_index MUST be derived by scanning the sessions directory for existing
+  # chunk files matching the current session — NOT from @compressed_summaries.size
+  # (which resets to 0 on every process restart) and NOT from counting
+  # compressed_summary messages in history (which caps at 1 because each
+  # compression's rebuild keeps only the latest summary).
+  #
+  # The SessionManager owns all on-disk chunk I/O; these tests exercise it
+  # directly rather than reaching through an agent helper.
+  describe "SessionManager chunk discovery" do
+    let(:sm) { Clacky::SessionManager.new(sessions_dir: sessions_dir) }
+
+    # Seed a chunk using SessionManager's own write method so tests exercise
+    # the real naming convention.
+    def seed_chunk(sid, ca, idx, topics: nil, content_extra: "")
+      md = +"---\nsession_id: #{sid}\nchunk: #{idx}\n"
+      md << "topics: #{topics}\n" if topics
+      md << "---\n\n# chunk #{idx}#{content_extra}\n"
+      sm.write_chunk(sid, ca, idx, md)
     end
 
-    it "first compression produces chunk-1 when history has no prior summaries" do
-      messages = [
-        { role: "system",    content: "sys" },
-        { role: "user",      content: "hi" },
-        { role: "assistant", content: "hello" }
-      ]
-      expect(count_index(messages)).to eq(1)
+    it "returns [] when no chunks exist on disk yet" do
+      existing = sm.chunks_for_current(session_id, created_at)
+      expect(existing).to eq([])
+      expect(sm.next_chunk_index(session_id, created_at)).to eq(1)
     end
 
-    it "second compression produces chunk-2 when one summary already in history" do
-      messages = [
-        { role: "system",    content: "sys" },
-        { role: "assistant", content: "Summary of chunk 1", compressed_summary: true, chunk_path: "xxx-chunk-1.md" },
-        { role: "user",      content: "next question" }
-      ]
-      expect(count_index(messages)).to eq(2)
+    it "returns 2 when chunk-1.md already exists on disk" do
+      seed_chunk(session_id, created_at, 1, topics: "topic one")
+
+      existing = sm.chunks_for_current(session_id, created_at)
+      expect(existing.size).to eq(1)
+      expect(existing.first[:index]).to eq(1)
+      expect(existing.first[:topics]).to eq("topic one")
+
+      expect(sm.next_chunk_index(session_id, created_at)).to eq(2)
     end
 
-    it "third compression produces chunk-3 with two prior summaries" do
-      messages = [
-        { role: "system",    content: "sys" },
-        { role: "assistant", content: "s1", compressed_summary: true, chunk_path: "xxx-chunk-1.md" },
-        { role: "assistant", content: "s2", compressed_summary: true, chunk_path: "xxx-chunk-2.md" },
-        { role: "user",      content: "q" }
-      ]
-      expect(count_index(messages)).to eq(3)
+    it "returns 3 when both chunk-1.md and chunk-2.md exist on disk (regression)" do
+      # THIS IS THE REGRESSION: the old implementation returned 2 here because
+      # history only ever has 1 compressed_summary message. Disk-based discovery
+      # correctly sees both chunk-1.md and chunk-2.md.
+      seed_chunk(session_id, created_at, 1, topics: "t1")
+      seed_chunk(session_id, created_at, 2, topics: "t2")
+
+      existing = sm.chunks_for_current(session_id, created_at)
+      expect(existing.map { |c| c[:index] }).to eq([1, 2])
+
+      expect(sm.next_chunk_index(session_id, created_at)).to eq(3)
     end
 
-    it "after restart with 9 existing chunks produces chunk-10 (no reset)" do
-      messages = 9.times.map { |i|
-        { role: "assistant", content: "s#{i+1}", compressed_summary: true, chunk_path: "xxx-chunk-#{i+1}.md" }
-      } + [{ role: "user", content: "new" }]
-      expect(count_index(messages)).to eq(10)
+    it "sorts chunks ascending by index even when filesystem order differs" do
+      # Write in reverse order so filesystem iteration may not match index order
+      seed_chunk(session_id, created_at, 3, topics: "third")
+      seed_chunk(session_id, created_at, 1, topics: "first")
+      seed_chunk(session_id, created_at, 2, topics: "second")
+
+      existing = sm.chunks_for_current(session_id, created_at)
+      expect(existing.map { |c| c[:index] }).to eq([1, 2, 3])
+      expect(existing.map { |c| c[:topics] }).to eq(["first", "second", "third"])
     end
 
-    it "ignores non-compressed assistant messages in the count" do
-      messages = [
-        { role: "assistant", content: "normal reply" },                                          # no compressed_summary
-        { role: "assistant", content: "s1", compressed_summary: true, chunk_path: "c-1.md" },
-        { role: "assistant", content: "s2", compressed_summary: false, chunk_path: "c-x.md" },  # explicitly false
-        { role: "user",      content: "q" }
-      ]
-      expect(count_index(messages)).to eq(2)
+    it "handles double-digit chunk numbers correctly (chunk-10 > chunk-9)" do
+      # Lexicographic sort would put chunk-10 between chunk-1 and chunk-2 — we
+      # must parse the integer to compare correctly.
+      [1, 2, 9, 10].each { |i| seed_chunk(session_id, created_at, i, topics: "t#{i}") }
+
+      existing = sm.chunks_for_current(session_id, created_at)
+      expect(existing.map { |c| c[:index] }).to eq([1, 2, 9, 10])
+      expect(sm.next_chunk_index(session_id, created_at)).to eq(11)
+    end
+
+    it "returns [] when session_id or created_at is missing" do
+      expect(sm.chunks_for_current(nil, created_at)).to eq([])
+      expect(sm.chunks_for_current(session_id, nil)).to eq([])
+      expect(sm.next_chunk_index(nil, created_at)).to eq(1)
+    end
+
+    it "only matches chunks for the current session (session_id + datetime prefix)" do
+      # A different session in the same directory must not leak into results
+      other_session_id = "zzzzzzzz-0000-0000-0000-000000000000"
+      seed_chunk(other_session_id, created_at, 5, topics: "other")
+
+      seed_chunk(session_id, created_at, 1, topics: "mine")
+
+      existing = sm.chunks_for_current(session_id, created_at)
+      expect(existing.size).to eq(1)
+      expect(existing.first[:index]).to eq(1)
+      expect(existing.first[:topics]).to eq("mine")
+    end
+
+    it "reads topics from chunk MD front matter" do
+      seed_chunk(session_id, created_at, 1, topics: "Rails setup, DB config")
+
+      existing = sm.chunks_for_current(session_id, created_at)
+      expect(existing.first[:topics]).to eq("Rails setup, DB config")
+    end
+
+    it "tolerates chunks without topics in front matter" do
+      seed_chunk(session_id, created_at, 1, topics: nil)
+
+      existing = sm.chunks_for_current(session_id, created_at)
+      expect(existing.first[:topics]).to be_nil
+    end
+
+    it "#write_chunk returns a path with the correct naming convention" do
+      path = sm.write_chunk(session_id, created_at, 7, "# content")
+      filename = File.basename(path)
+      expect(filename).to match(/\A2026-03-08-10-00-00-abc12345-chunk-7\.md\z/)
+      expect(File.exist?(path)).to be true
+      expect(File.read(path)).to eq("# content")
+    end
+
+    it "#write_chunk chmods the file to 0600" do
+      path = sm.write_chunk(session_id, created_at, 1, "content")
+      mode = File.stat(path).mode & 0o777
+      expect(mode).to eq(0o600)
+    end
+
+    it "#write_chunk returns nil when session_id or created_at is missing" do
+      expect(sm.write_chunk(nil, created_at, 1, "x")).to be_nil
+      expect(sm.write_chunk(session_id, nil, 1, "x")).to be_nil
+    end
+  end
+
+  # ── End-to-end regression: 3+ consecutive compressions ───────────────────────
+  #
+  # Reproduces the production bug: after the second compression, every
+  # subsequent compression was overwriting chunk-2.md and losing references
+  # to chunk-1.md, because chunk_index was derived from history (which caps
+  # at 1 compressed_summary message after rebuild).
+  #
+  # With the disk-based fix:
+  #   - Each compression writes chunk-N.md with a unique, monotonically
+  #     increasing N (1, 2, 3, 4, ...)
+  #   - The new summary message embeds references to ALL prior chunks on disk
+  describe "end-to-end: consecutive compressions produce unique chunk files" do
+    # A minimal agent that carries just the state handle_compression_response needs
+    let(:full_agent_class) do
+      Class.new do
+        include Clacky::Agent::MessageCompressorHelper
+
+        attr_accessor :session_id, :created_at, :compressed_summaries,
+                      :compression_level, :previous_total_tokens,
+                      :history, :message_compressor, :ui, :config
+
+        # Expose for the helper's instance-variable access pattern
+        def initialize
+          @compressed_summaries = []
+          @compression_level = 0
+          @previous_total_tokens = 0
+          @ui = nil
+        end
+      end
+    end
+
+    let(:cfg) do
+      instance_double(Clacky::AgentConfig, enable_compression: true)
+    end
+
+    subject(:full_agent) do
+      a = full_agent_class.new
+      a.session_id = session_id
+      a.created_at = created_at
+      a.config = cfg
+      a.history = Clacky::MessageHistory.new([])
+      a.message_compressor = Clacky::MessageCompressor.new(nil)
+      a
+    end
+
+    # Simulates one full compression round: seed history, invoke the helper
+    # with a fake LLM response, return [chunk_path, summary_message].
+    def run_compression_round(agent, round_number)
+      # Seed history: system + several user/assistant turns + some recent msgs
+      system = { role: "system", content: "System prompt" }
+
+      # If prior compressions happened, the history already contains the latest
+      # compressed_summary and some post-summary messages. Preserve those.
+      pre_existing = agent.history.to_a
+      new_turns = 6.times.flat_map do |i|
+        [
+          { role: "user", content: "round #{round_number} user msg #{i}" },
+          { role: "assistant", content: "round #{round_number} reply #{i}" }
+        ]
+      end
+
+      if pre_existing.empty?
+        agent.history = Clacky::MessageHistory.new([system, *new_turns])
+      else
+        # Append new turns to the existing history (which already has system + summary + recent)
+        agent.history.replace_all(pre_existing + new_turns)
+      end
+
+      all = agent.history.to_a
+      recent_messages = all.last(4)
+
+      compression_context = {
+        recent_messages: recent_messages,
+        original_token_count: 50_000,
+        original_message_count: all.size,
+        compression_level: round_number
+      }
+
+      # Insert the compression instruction (as the real flow does)
+      agent.history.append({ role: "user", content: "compress please", system_injected: true })
+
+      # Fake LLM response
+      fake_response = {
+        content: "<topics>Round #{round_number} topics</topics>\n<summary>Round #{round_number} summary body</summary>"
+      }
+
+      agent.send(:handle_compression_response, fake_response, compression_context)
+
+      # Return the latest chunk info for assertions. Read from SessionManager
+      # (the canonical owner of chunk discovery).
+      sm = Clacky::SessionManager.new(sessions_dir: sessions_dir)
+      latest_chunk = sm.chunks_for_current(agent.session_id, agent.created_at).last
+      summary_msg = agent.history.to_a.find { |m| m[:compressed_summary] }
+      [latest_chunk, summary_msg]
+    end
+
+    it "produces chunk-1.md, chunk-2.md, chunk-3.md on three consecutive compressions (no overwrite)" do
+      chunk1, summary1 = run_compression_round(full_agent, 1)
+      chunk2, summary2 = run_compression_round(full_agent, 2)
+      chunk3, summary3 = run_compression_round(full_agent, 3)
+
+      # Each round produced a distinct chunk file on disk
+      expect(chunk1[:index]).to eq(1)
+      expect(chunk2[:index]).to eq(2)
+      expect(chunk3[:index]).to eq(3)
+
+      expect(chunk1[:basename]).to include("chunk-1.md")
+      expect(chunk2[:basename]).to include("chunk-2.md")
+      expect(chunk3[:basename]).to include("chunk-3.md")
+
+      # All three files still exist (no overwrites)
+      expect(File.exist?(chunk1[:path])).to be true
+      expect(File.exist?(chunk2[:path])).to be true
+      expect(File.exist?(chunk3[:path])).to be true
+
+      # Each file has distinct content (summaries differ per round)
+      expect(File.read(chunk1[:path])).to include("round 1 user msg")
+      expect(File.read(chunk2[:path])).to include("round 2 user msg")
+      expect(File.read(chunk3[:path])).to include("round 3 user msg")
+
+      # The latest summary message references ALL prior chunks (chunk-1 AND chunk-2)
+      expect(summary3[:content]).to include("chunk-1.md")
+      expect(summary3[:content]).to include("chunk-2.md")
+      # And the current chunk anchor
+      expect(summary3[:content]).to include("chunk-3.md")
+
+      # Previous-chunks section is present with topics from BOTH earlier rounds
+      expect(summary3[:content]).to include("Round 1 topics")
+      expect(summary3[:content]).to include("Round 2 topics")
+    end
+
+    it "continues to produce unique chunks for 5 consecutive compressions" do
+      5.times { |i| run_compression_round(full_agent, i + 1) }
+
+      chunk_files = Dir.glob(File.join(sessions_dir, "*-chunk-*.md")).map { |p| File.basename(p) }
+      # Exactly 5 unique chunk indexes
+      indexes = chunk_files.map { |n| n[/-chunk-(\d+)\.md\z/, 1].to_i }.sort
+      expect(indexes).to eq([1, 2, 3, 4, 5])
     end
   end
 end

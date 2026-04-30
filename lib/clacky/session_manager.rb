@@ -84,6 +84,67 @@ module Clacky
       { session: session, json_path: json_path, chunks: chunks }
     end
 
+    # ── Chunk file I/O (for conversation compression archives) ────────────────
+    #
+    # The SessionManager is the single owner of sessions/{base}-chunk-N.md
+    # file naming, writing, discovery, and deletion. Everything else in the
+    # codebase (MessageCompressorHelper, SessionSerializer) should go through
+    # these methods rather than building paths or scanning the directory
+    # directly — this keeps the on-disk layout under one roof and makes it
+    # easy to evolve (e.g. add encryption, switch to a DB).
+
+    # Discover all chunk MD files on disk for a given session.
+    # Returns them sorted by chunk index ascending (oldest first).
+    #
+    # @param session_id [String] full session id (or at least first 8 chars)
+    # @param created_at [String] ISO-8601 timestamp used in the base filename
+    # @return [Array<Hash>] each with :index, :path, :basename, :topics
+    def chunks_for_current(session_id, created_at)
+      return [] unless session_id && created_at
+
+      base = chunk_base_name(session_id, created_at)
+      pattern = File.join(@sessions_dir, "#{base}-chunk-*.md")
+
+      Dir.glob(pattern).filter_map do |path|
+        basename = File.basename(path)
+        # Extract integer index from "<base>-chunk-<N>.md"
+        m = basename.match(/-chunk-(\d+)\.md\z/)
+        next nil unless m
+
+        {
+          index: m[1].to_i,
+          path: path,
+          basename: basename,
+          topics: read_chunk_topics(path)
+        }
+      end.sort_by { |c| c[:index] }
+    end
+
+    # Next unused chunk index for a session, derived from disk.
+    # This is the ONLY correct way to compute the next chunk index —
+    # counting compressed_summary messages in history caps at 1 after the
+    # second compression (rebuild keeps only the latest summary) and
+    # in-memory counters reset on process restart.
+    def next_chunk_index(session_id, created_at)
+      existing = chunks_for_current(session_id, created_at)
+      (existing.map { |c| c[:index] }.max || 0) + 1
+    end
+
+    # Write a chunk MD file to disk. Returns the absolute path.
+    # Caller is responsible for generating the MD content — this method
+    # only handles filesystem concerns (path assembly, write, chmod).
+    def write_chunk(session_id, created_at, chunk_index, md_content)
+      return nil unless session_id && created_at
+
+      base = chunk_base_name(session_id, created_at)
+      chunk_path = File.join(@sessions_dir, "#{base}-chunk-#{chunk_index}.md")
+
+      File.write(chunk_path, md_content)
+      FileUtils.chmod(0o600, chunk_path)
+
+      chunk_path
+    end
+
     # All sessions from disk, newest-first (sorted by created_at).
     # Optional filters:
     #   current_dir: (String) if given, sessions matching working_dir come first
@@ -141,9 +202,52 @@ module Clacky
     end
 
     def generate_filename(session_id, created_at)
+      "#{chunk_base_name(session_id, created_at)}.json"
+    end
+
+    # Base name (without extension) shared by a session's .json file and its
+    # chunk-N.md archive files. Kept as a single source of truth so chunk
+    # I/O stays consistent with the session filename.
+    private def chunk_base_name(session_id, created_at)
       datetime = Time.parse(created_at).strftime("%Y-%m-%d-%H-%M-%S")
       short_id = session_id[0..7]
-      "#{datetime}-#{short_id}.json"
+      "#{datetime}-#{short_id}"
+    end
+
+    # Read the `topics:` field from a chunk MD file's YAML-like front matter.
+    # Only scans the first ~20 lines — front matter is tiny and we don't
+    # want to read megabytes of archived conversation just to grab one line.
+    # Returns nil if the file is missing, unreadable, or has no topics.
+    private def read_chunk_topics(path)
+      return nil unless File.exist?(path)
+
+      lines = []
+      File.open(path, "r") do |f|
+        20.times do
+          line = f.gets
+          break if line.nil?
+          lines << line
+        end
+      end
+
+      in_front_matter = false
+      lines.each do |line|
+        stripped = line.strip
+        if stripped == "---"
+          break if in_front_matter
+          in_front_matter = true
+          next
+        end
+        next unless in_front_matter
+
+        if (m = stripped.match(/\Atopics:\s*(.+)\z/))
+          topics = m[1].strip
+          return topics.empty? ? nil : topics
+        end
+      end
+      nil
+    rescue
+      nil
     end
 
     # Delete a session JSON file and all its associated chunk MD files.
