@@ -54,6 +54,20 @@ module Clacky
         max_retries = 10
         retry_delay = 5
         retries = 0
+
+        # Track whether any of the retry/fallback branches below opened a
+        # "retrying" progress slot via show_progress(progress_type:
+        # "retrying", phase: "active"). If so, we MUST close it before
+        # leaving call_llm — otherwise the UI's legacy shim in
+        # UI2::UIController keeps the :quiet ProgressHandle alive, its
+        # ticker thread keeps running, and the user sees a frozen
+        # "Network failed: ... (681s)" line long after the task finished.
+        #
+        # The close is done in the outer ensure below so it runs on:
+        #   - normal success (response returned)
+        #   - unrecoverable failure (raise propagates out)
+        #   - BadRequestError reasoning-content retry success
+        retrying_progress_opened = false
         # One-shot flag set by the BadRequestError rescue below when the server
         # complained about missing reasoning_content. The subsequent retry will
         # pad every assistant message's reasoning_content, which satisfies
@@ -67,6 +81,7 @@ module Clacky
         thinking_retry_attempted = false
 
         begin
+          begin
           # Use active_messages (Time Machine) when undone, otherwise send full history.
           # to_api strips internal fields and handles orphaned tool_calls.
           messages_to_send = if respond_to?(:active_messages)
@@ -118,6 +133,7 @@ module Clacky
               phase: "active",
               metadata: { attempt: retries, total: max_retries }
             )
+            retrying_progress_opened = true
             sleep retry_delay
             retry
           else
@@ -144,6 +160,7 @@ module Clacky
               phase: "active",
               metadata: { attempt: retries, total: max_retries }
             )
+            retrying_progress_opened = true
             sleep retry_delay
             retry
           else
@@ -180,6 +197,7 @@ module Clacky
               phase: "active",
             metadata: { attempt: retries, total: current_max }
           )
+          retrying_progress_opened = true
           sleep retry_delay
           retry
         else
@@ -213,6 +231,21 @@ module Clacky
         response[:token_usage] = token_data
 
         response
+        ensure
+          # Close any "retrying" progress slot that was opened during the
+          # retry/fallback loop above. The legacy UI shim allocates a
+          # separate :quiet ProgressHandle under the "retrying" key; if it
+          # is never finished its ticker thread keeps running and the user
+          # sees a stale "Network failed: ... (NNN s)" line long after the
+          # task has completed. This ensure runs on:
+          #   - successful retry → close the slot, message is "Recovered"
+          #     so the final frame is informative rather than blank
+          #   - unrecoverable failure that raises out → close the slot so
+          #     the spinner doesn't linger while the error bubbles up
+          if retrying_progress_opened
+            @ui&.show_progress(progress_type: "retrying", phase: "done")
+          end
+        end
       end
 
       # Attempt to activate the provider fallback model for the given primary model.

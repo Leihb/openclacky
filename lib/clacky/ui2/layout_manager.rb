@@ -112,14 +112,17 @@ module Clacky
 
       # Replace an existing entry's content. The screen is updated in place
       # if the entry still lives in the output area; otherwise (committed
-      # to scrollback) this is a silent no-op.
+      # to scrollback, or partially scrolled off) this is a silent no-op.
       def replace_entry(id, content)
         return if id.nil? || content.nil?
         content = sanitize(content)
 
         @render_mutex.synchronize do
           entry = @buffer.entry_by_id(id)
+          # Skip if gone, fully committed, or only partially visible (its
+          # prefix is already in terminal scrollback and cannot be edited).
           return if entry.nil? || entry.committed
+          return if (entry.committed_line_offset || 0) > 0
 
           old_lines = entry.lines.dup
           new_lines = wrap_content_to_lines(content)
@@ -167,6 +170,10 @@ module Clacky
         @render_mutex.synchronize do
           entry = @buffer.entry_by_id(id)
           return if entry.nil? || entry.committed
+          # Can't remove an entry whose prefix has already scrolled into
+          # terminal scrollback — those rows are immutable. The visible
+          # suffix will roll off on its own as more output is produced.
+          return if (entry.committed_line_offset || 0) > 0
 
           height = entry.height
           # Check whether this entry is the tail of live entries. Only tail

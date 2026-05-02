@@ -771,10 +771,37 @@ module Clacky
 
       # Set workspace status to idle (called when agent stops working)
       def set_idle_status
+        # Safety net: close any legacy progress slots that were opened via
+        # show_progress(progress_type: X, phase: "active") but never paired
+        # with a corresponding phase: "done" call. Historically the
+        # "retrying" slot in LlmCaller was leaked on every successful
+        # recovery, leaving the user with a stale "Network failed ... (NNN s)"
+        # line ticking forever. LlmCaller now closes its own slot (see the
+        # ensure in call_llm), but we mirror that defense here so any
+        # future code path that forgets to close a slot still gets cleaned
+        # up at the well-defined idle boundary.
+        close_leaked_legacy_progress_handles
+
         update_sessionbar(status: 'idle')
         # Clear user tip when agent stops working
         @input_area.clear_user_tip
         @layout.render_input
+      end
+
+      # Finish every ProgressHandle still registered in the legacy
+      # (show_progress) handle map. Called from set_idle_status as a
+      # defense-in-depth against unpaired active/done calls.
+      private def close_leaked_legacy_progress_handles
+        return unless @legacy_progress_handles
+
+        leaked = @legacy_progress_handles.reject { |_type, h| h.nil? || !h.running? }
+        return if leaked.empty?
+
+        # Finish top-down so each handle is the one currently rendering
+        # when it closes (matches the invariant in interrupt_all_progress).
+        leaked.values.reverse_each(&:finish)
+
+        @legacy_progress_handles.clear
       end
 
       # Set workspace status to working (called when agent starts working)

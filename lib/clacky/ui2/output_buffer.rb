@@ -33,10 +33,23 @@ module Clacky
       # @!attribute lines [Array<String>]  Rendered (already-wrapped) visual lines
       # @!attribute kind [Symbol]   :text | :progress | :system  (hint for renderer)
       # @!attribute committed [Boolean] True once pushed into terminal scrollback
-      Entry = Struct.new(:id, :lines, :kind, :committed, keyword_init: true) do
-        # Visual row count this entry occupies on screen (before it's committed)
+      Entry = Struct.new(:id, :lines, :kind, :committed, :committed_line_offset, keyword_init: true) do
+        # Visual row count this entry currently OCCUPIES on screen. Once a
+        # prefix of the entry's lines has been pushed into scrollback by
+        # a scroll+partial-commit, those prefix rows are no longer on
+        # screen — so height drops accordingly. When +committed+ flips to
+        # true the entry is considered fully off-screen and height is 0.
         def height
-          lines.length
+          return 0 if committed
+          lines.length - (committed_line_offset || 0)
+        end
+
+        # The currently on-screen lines of this entry (lines that haven't
+        # been pushed to scrollback yet). Returns [] once fully committed.
+        def visible_lines
+          return [] if committed
+          off = committed_line_offset || 0
+          off.zero? ? lines : lines[off..] || []
         end
 
         def to_s
@@ -69,7 +82,7 @@ module Clacky
       def append(content, kind: :text)
         @mutex.synchronize do
           lines = normalize_lines(content)
-          entry = Entry.new(id: next_id!, lines: lines, kind: kind, committed: false)
+          entry = Entry.new(id: next_id!, lines: lines, kind: kind, committed: false, committed_line_offset: 0)
           @entries << entry
           @index[entry.id] = entry
           trim_if_needed
@@ -83,18 +96,22 @@ module Clacky
       # this is a no-op and returns nil.
       #
       # Replacing a committed entry is silently ignored — committed content
-      # lives in terminal scrollback and cannot be edited in place.
+      # lives in terminal scrollback and cannot be edited in place. Same
+      # for an entry whose prefix has been partial-committed: the prefix
+      # is already in scrollback and replacing the entry would either
+      # strand those lines (if shorter) or duplicate them (if longer).
       #
       # @param id [Integer]
       # @param content [String, Array<String>]
-      # @return [Integer, nil] Old height if replaced, nil if no-op
+      # @return [Integer, nil] Old visible height if replaced, nil if no-op
       def replace(id, content)
         @mutex.synchronize do
           entry = @index[id]
           return nil unless entry
           return nil if entry.committed
+          return nil if (entry.committed_line_offset || 0) > 0
 
-          old_height = entry.lines.length
+          old_height = entry.height
           entry.lines = normalize_lines(content)
           bump_version
           old_height
@@ -102,7 +119,9 @@ module Clacky
       end
 
       # Remove an entry. Committed entries cannot be removed (they are in
-      # terminal scrollback). Returns the removed Entry, or nil if no-op.
+      # terminal scrollback). Partially-committed entries also cannot be
+      # removed — their prefix is frozen in scrollback. Returns the
+      # removed Entry, or nil if no-op.
       #
       # @param id [Integer]
       # @return [Entry, nil]
@@ -111,6 +130,7 @@ module Clacky
           entry = @index[id]
           return nil unless entry
           return nil if entry.committed
+          return nil if (entry.committed_line_offset || 0) > 0
 
           @entries.delete(entry)
           @index.delete(id)
@@ -142,34 +162,55 @@ module Clacky
         end
       end
 
-      # Commit the oldest N entries. Used when the renderer scrolls N lines
-      # off the top via native \n. It commits full entries greedily: if the
-      # N lines span across entry boundaries, all fully-scrolled entries
-      # are marked committed, and the partially-scrolled entry (if any) is
-      # left uncommitted (it will be handled next time).
+      # Commit the oldest N VISUAL rows. Used when the renderer scrolls N
+      # lines off the top via native \n. Commits are precise at the visual
+      # row granularity (even mid-entry): if the oldest live entry is
+      # multi-line and only its prefix has scrolled off, that prefix is
+      # recorded in +committed_line_offset+ and only the still-visible
+      # suffix remains eligible for future repaints.
+      #
+      # This is the critical invariant for preventing the "scroll up to
+      # see a line already in scrollback, then render_output_from_buffer
+      # repaints it again on screen" duplicate-output regression: every
+      # visual row that went into terminal scrollback MUST be removed
+      # from the buffer's pool of repaintable live rows, regardless of
+      # whether it sat alone in a 1-line entry or at the top of a 10-line
+      # entry.
       #
       # @param line_count [Integer] Number of visual lines pushed to scrollback
-      # @return [Integer] Number of entries actually marked committed
+      # @return [Integer] Number of entries NEWLY marked fully committed
+      #   (partial commits on an entry do NOT count toward this total —
+      #   callers use the return value only as a debug hint, not for row
+      #   bookkeeping).
       def commit_oldest_lines(line_count)
         return 0 if line_count <= 0
 
         @mutex.synchronize do
           remaining = line_count
           committed = 0
+          changed   = false
           @entries.each do |e|
             break if remaining <= 0
             next if e.committed
 
-            if e.height <= remaining
+            h = e.height
+            if h <= remaining
+              # Full scroll-off of this entry's remaining visible rows.
               e.committed = true
-              remaining  -= e.height
-              committed  += 1
+              e.committed_line_offset = e.lines.length  # normalize
+              remaining -= h
+              committed += 1
+              changed    = true
             else
-              # Partial scroll — can't commit this entry yet
+              # Partial scroll: record the new offset and stop (there are
+              # still visible rows of this entry on screen).
+              e.committed_line_offset = (e.committed_line_offset || 0) + remaining
+              remaining = 0
+              changed   = true
               break
             end
           end
-          bump_version if committed > 0
+          bump_version if changed
           committed
         end
       end
@@ -198,12 +239,17 @@ module Clacky
             break if collected.length >= n
             next if e.committed
 
-            # Prepend the entry's lines in order
+            # The entry's still-visible lines (excluding any prefix already
+            # committed to scrollback via a partial commit).
+            vis = e.visible_lines
+            next if vis.empty?
+
+            # Prepend the entry's visible lines in order
             remaining = n - collected.length
-            if e.lines.length <= remaining
-              collected = e.lines + collected
+            if vis.length <= remaining
+              collected = vis + collected
             else
-              collected = e.lines.last(remaining) + collected
+              collected = vis.last(remaining) + collected
               break
             end
           end
@@ -224,6 +270,20 @@ module Clacky
         @mutex.synchronize do
           e = @index[id]
           !!(e && !e.committed)
+        end
+      end
+
+      # Does this id refer to an entry that can still be replaced or
+      # removed in place? A partially-committed entry (prefix already in
+      # scrollback via a scroll) is NOT editable — its visible suffix is
+      # frozen until it either fully commits or (rare) a full repaint
+      # rewrites the screen.
+      #
+      # @param id [Integer]
+      def fully_editable?(id)
+        @mutex.synchronize do
+          e = @index[id]
+          !!(e && !e.committed && (e.committed_line_offset || 0) == 0)
         end
       end
 

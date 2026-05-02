@@ -127,16 +127,29 @@ RSpec.describe Clacky::UI2::OutputBuffer do
       expect(buf.entry_by_id(id3).committed).to be false
     end
 
-    it "does NOT commit an entry that only partially scrolled off" do
+    it "records a partial commit as a per-entry line offset, not by flipping committed" do
+      # Partial scroll-off of a multi-line entry is tracked via
+      # committed_line_offset so the still-visible suffix remains
+      # repaintable while the already-scrolled prefix is hidden from
+      # tail_lines / live_line_count. This is the fix for the
+      # "multi-line entry leaks into a buffer repaint and shows up as
+      # a duplicate of a line already in scrollback" bug.
       buf = described_class.new
       _id1 = buf.append("A")
       id2  = buf.append("B1\nB2\nB3")  # 3-line entry
 
-      # Only 2 lines scroll off total — first line fully, then 1 line of B
+      # Only 2 lines scroll off total — A (1 line) fully, then 1 line of B
       buf.commit_oldest_lines(2)
 
-      # id1 is committed, id2 is NOT (can't atomically commit a split entry)
+      # id2 is NOT fully committed (can't atomically finalize a split entry)
       expect(buf.entry_by_id(id2).committed).to be false
+      # …but its first line IS recorded as committed via the offset.
+      expect(buf.entry_by_id(id2).committed_line_offset).to eq(1)
+      # Visible height reflects only the still-on-screen suffix.
+      expect(buf.entry_by_id(id2).height).to eq(2)
+      # And the committed prefix is hidden from tail_lines / live count.
+      expect(buf.live_line_count).to eq(2)
+      expect(buf.tail_lines(5)).to eq(["B2", "B3"])
     end
 
     it "is a no-op when nothing has scrolled" do
