@@ -6,82 +6,90 @@
 [![Downloads](https://img.shields.io/gem/dt/openclacky?label=downloads&style=flat-square&color=brightgreen)](https://rubygems.org/gems/openclacky)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)](LICENSE.txt)
 
-**From expertise to business — turn your professional knowledge into a monetizable OpenClaw Skill.**
+**The most Token-efficient open-source AI Agent.**
 
-OpenClacky is the creator-side platform for the OpenClaw ecosystem. Package your methods and workflows into encrypted, white-labeled Skills that your clients install and use — under your name, your brand, your price.
+OpenClacky matches Claude Code on capability at comparable cost, and saves significantly against other open-source agents (~50% vs OpenClaw, ~3× cheaper than Hermes). 100% open source (MIT), BYOK with any OpenAI-compatible model, built on two years of Agentic R&D and harness engineering.
+
+> Website: https://www.openclacky.com/ · Backed by **MiraclePlus · ZhenFund · Sequoia China · Hillhouse Capital**
 
 ## Why OpenClacky?
 
-The OpenClaw ecosystem has 5,700+ Skills and growing. But almost all of them are open-sourced, free, and easily copied. The real scarcity isn't more Skills — it's **expertise-backed, production-grade Skills worth paying for**.
+Same task, how much do you pay? Under comparable agent workloads, OpenClacky saves a large amount of Token spend compared to mainstream alternatives.
 
-OpenClacky is built for the people who have that expertise.
-
-|  | **Openclaw** | **OpenClacky** |
+| Agent | Relative cost | Notes |
 |---|---|---|
-| **Core model** | Open sharing | Encrypted & protected |
-| **Primary users** | Users who install Skills | Creators who sell Skills |
-| **Revenue** | None | Creator-defined pricing |
-| **Brand** | Platform brand | Your own brand |
-| **Driven by** | Technical contributors | Domain expertise |
+| **OpenClacky** | **~0.8–1.2×** | 16 tools · ~100% cache hit · subagent routing |
+| Claude Code | 1.0× (baseline) | World-class harness, closed-source subscription |
+| OpenClaw | ~1.5× | Comparable harness agent |
+| Hermes | ~3× | 52 built-in tools — schema bloat ~3–4× |
 
-## How It Works
+*Numbers are averages measured on internal common agent tasks, using Claude Code as the baseline. Full benchmark reports will be published on GitHub.*
 
-**Four steps from capability to business:**
+## Feature comparison
 
-1. **Craft your Skill** — Turn your domain methodology into a repeatable AI workflow
-2. **Encrypt & protect** — Your logic stays yours; clients can't inspect or copy it
-3. **Package your brand** — Ship under your name, your logo, your onboarding experience
-4. **Launch & acquire** — One-click sales page, built-in SEO, start converting traffic
+Core agent capability is roughly on par across the field — the real differentiators are **cost, openness, Skill evolution, and integrations**.
 
-## Who It's For
+| Feature | Claude Code | OpenClaw | Hermes | **OpenClacky** |
+|---|:---:|:---:|:---:|:---:|
+| Token cost | 1.0× | ~1.5× | ~3× | **~0.8–1.2×** |
+| Open source | ❌ Closed | ✅ Open | ✅ Open | ✅ MIT |
+| BYOK / model freedom | ❌ Anthropic only | ✅ | ✅ | ✅ |
+| Skill self-evolution | ❌ | ❌ | ✅ | ✅ |
+| IM integration (Feishu / WeCom / WeChat) | ❌ | ✅ | ✅ | ✅ |
 
-OpenClacky is built for domain experts whose knowledge can be expressed as *information processing + executable actions*:
+## How we get the cost down
 
-- **SEO specialists** — keyword research, content scoring, rank monitoring
-- **Lawyers** — contract review, case retrieval, risk flagging
-- **Traders** — signal detection, strategy backtesting, automated execution
-- **Data analysts** — cleaning, modeling, report generation
-- **Content strategists** — topic selection, outlines, drafts at scale
+Not by cutting features — by compounding the right choice at every layer.
 
-## Features
+### 1. Ultra-high cache hit rate
+Sessions never restart, double cache markers, **Insert-then-Compress** — the system prompt is never mutated, so compression still reuses the cache. **Measured cache hit rate: near 100%.**
 
-- [x] **Skill builder** — Create AI workflows via conversation or UI, iterate and ship fast
-- [x] **Encryption** — Protect your knowledge assets; end users cannot read your Skill source
-- [x] **White-label packaging** — Your brand, your product line, your client experience
-- [x] **Auto-update delivery** — Push updates to all users seamlessly, with version control
-- [x] **Cross-platform distribution** — Windows, macOS, Linux — one Skill, every platform
-- [x] **Sales page generator** — Launch your storefront fast, with built-in SEO foundations
-- [x] **Cost monitoring** — Real-time token tracking, automatic compression (up to 90% savings)
-- [x] **Multi-provider support** — OpenAI, Anthropic, DeepSeek, and any OpenAI-compatible API
-- [ ] **Skill marketplace** — Discover and distribute premium Skills *(coming soon)*
+### 2. Minimal tool set
+Only **16 core tools**. Capabilities are offloaded to the Skill ecosystem via a single `invoke_skill` meta-tool. Tool count is not the metric — task completion rate is.
 
-## Coding Support
+| OpenClacky | Claude Code | OpenClaw | Hermes |
+|:--:|:--:|:--:|:--:|
+| **16** | 40+ | 23 | 52 |
 
-OpenClacky also works as a general AI coding assistant — scaffold full-stack Rails apps, add features, or explore an unfamiliar codebase:
+### 3. Idle-time auto-compression
+Go to a meeting, grab coffee — the agent compresses long context in the background and pre-warms the cache. Your first message back hits the cache directly. **Cold-start first-token cost reduced by 50%+.**
 
-```bash
-$ openclacky
-> /new my-app        # scaffold a full-stack Rails app
-> Add user auth with email and password
-> How does the payment module work?
-```
+### 4. BYOK — you pick the model, you set the cost
+Any OpenAI-compatible API, plug and play. Official direct, aggregate routing, compatible relays — the choice is 100% yours. Use Claude for code, auto-route subtasks to DeepSeek, save another chunk of tokens.
 
-Built on a production-ready Rails architecture with one-click deployment, dev/prod isolation, and automatic backups.
+Built on **2 years · 3 generations of agentic architecture · 6 core harness engineering decisions**.
+
+## Skills — the soul of the agent
+
+- **Invoke with `/`** — instant browse, fuzzy search, direct call. Hundreds of Skills at your fingertips.
+- **Create Skills in natural language** — just describe what you want; the agent drafts `SKILL.md`, breaks down steps, and runs validation. No code required.
+- **Self-evolving** — after each run, the agent updates the Skill based on execution context and results. The next call is more stable and more accurate.
+- **Open & compatible** — supports Claude Skills / Markdown Pack / custom formats.
+- **Monetizable** — polished Skills can be packaged for sale, with encrypted distribution, License management, and creator-defined pricing.
 
 ## Installation
 
-### Method 1: One-line Install (Recommended)
+### Desktop installer (recommended)
 
-```bash
-/bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/clacky-ai/openclacky/main/scripts/install.sh)"
-```
+Double-click to install — environment, dependencies, and Skills all set up automatically.
 
-### Method 2: RubyGems
+- **macOS** — [Download `.dmg`](https://oss.1024code.com/openclacky-installer/official/openclacky-installer.dmg) (Apple Silicon / Intel)
+- **Windows** — [Download `.exe`](https://oss.1024code.com/openclacky-installer/official/openclacky-installer.exe) (Windows 10 2004+ / Windows 11)
+
+More options: https://www.openclacky.com/
+
+### Command line
 
 **Requirements:** Ruby >= 3.1.0
 
 ```bash
 gem install openclacky
+```
+
+Or one-line install:
+
+```bash
+/bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/clacky-ai/openclacky/main/scripts/install.sh)"
 ```
 
 ## Quick Start
@@ -95,16 +103,16 @@ openclacky            # start interactive agent in current directory
 ### Web UI
 
 ```bash
-openclacky server     # start the web server (default: http://localhost:7070)
+openclacky server     # default: http://localhost:7070
 ```
 
-Then open **http://localhost:7070** in your browser. You'll get a full-featured chat interface with multi-session support — run separate sessions for coding, copywriting, research, and more, all in parallel.
+Open **http://localhost:7070** for a full chat interface with multi-session support — run coding, copywriting, research sessions in parallel.
 
 Options:
 
 ```bash
-openclacky server --port 8080          # custom port
-openclacky server --host 0.0.0.0      # listen on all interfaces (e.g. remote access)
+openclacky server --port 8080        # custom port
+openclacky server --host 0.0.0.0     # listen on all interfaces (remote access)
 ```
 
 ## Configuration
@@ -114,7 +122,26 @@ $ openclacky
 > /config
 ```
 
-You'll be prompted to set your **API Key**, **Model**, and **Base URL** (any OpenAI-compatible provider).
+Set your **API Key**, **Model**, and **Base URL** (any OpenAI-compatible provider).
+
+Supported out of the box: **Claude (Anthropic) · GPT (OpenAI) · DeepSeek · Kimi (Moonshot) · MiniMax · OpenRouter** — or any custom endpoint.
+
+## Coding use case
+
+OpenClacky works as a general AI coding assistant — scaffold full-stack apps, add features, or explore unfamiliar codebases:
+
+```bash
+$ openclacky
+> /new my-app        # scaffold a new project
+> Add user auth with email and password
+> How does the payment module work?
+```
+
+## Advanced — Creator Program
+
+Already power users are turning their workflows into vertical AI experts on OpenClacky — encrypted distribution, License management, self-set pricing. Legal, healthcare, financial planning, and more.
+
+Learn more: https://www.openclacky.com/ → Creators
 
 ## Install from Source
 
@@ -124,6 +151,13 @@ cd openclacky
 bundle install
 bin/clacky
 ```
+
+## Trust & Credibility
+
+- **100% open source** — MIT License, all code public, all decisions traceable
+- **2 years of Agentic R&D** — 3 generations of architecture
+- **16 core tools** — minimal by design
+- **Backed by** MiraclePlus · ZhenFund · Sequoia China · Hillhouse Capital
 
 ## Contributing
 
