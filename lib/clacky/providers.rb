@@ -183,6 +183,30 @@ module Clacky
           "glm-5v-turbo" => { "vision" => true }.freeze
         }.freeze,
         "website_url" => "https://open.bigmodel.cn/usercenter/apikeys"
+      }.freeze,
+
+      "openai" => {
+        "name" => "OpenAI (GPT)",
+        "base_url" => "https://api.openai.com/v1",
+        "api" => "openai-completions",
+        "default_model" => "gpt-5.5",
+        "models" => [
+          "gpt-5.5",
+          "gpt-5.4",
+          "gpt-5.4-mini",
+          "gpt-5.4-nano",
+          "o4-mini",
+          "o3"
+        ],
+        # GPT-5.x and o-series models are multimodal (text + image input).
+        "capabilities" => { "vision" => true }.freeze,
+        # Per-primary lite pairing: subagents use mini/nano for cheap/fast work.
+        # o4-mini and o3 are reasoning models without a lite-tier sibling here.
+        "lite_models" => {
+          "gpt-5.5" => "gpt-5.4-mini",
+          "gpt-5.4" => "gpt-5.4-mini"
+        },
+        "website_url" => "https://platform.openai.com/api-keys"
       }.freeze
 
     }.freeze
