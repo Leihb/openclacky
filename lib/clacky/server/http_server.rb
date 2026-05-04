@@ -3104,6 +3104,11 @@ module Clacky
             conn.session_id = session_id
             subscribe(session_id, conn)
             conn.send_json(type: "subscribed", session_id: session_id)
+            # Push a fresh snapshot so a reconnecting tab sees the true current
+            # status (it may have missed session_update events while offline).
+            if (snap = @registry.snapshot(session_id))
+              conn.send_json(type: "session_update", session: snap)
+            end
             # If a shell command is still running, replay progress + buffered stdout
             # to the newly subscribed tab so it sees the live state it may have missed.
             @registry.with_session(session_id) { |s| s[:ui]&.replay_live_state }
@@ -3436,7 +3441,7 @@ module Clacky
       # Broadcast a session_update event to all clients so they can patch their
       # local session list without needing a full session_list refresh.
       def broadcast_session_update(session_id)
-        session = @registry.list(limit: 200).find { |s| s[:id] == session_id }
+        session = @registry.snapshot(session_id)
         return unless session
 
         broadcast_all(type: "session_update", session: session)

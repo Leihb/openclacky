@@ -489,7 +489,8 @@ module Clacky
           if persistent && state == :matched && session_healthy?(session)
             # Command finished cleanly — return the shell to the pool so
             # the next call reuses it (no cold-start cost).
-            PersistentSessionPool.instance.release(session)
+            stored = PersistentSessionPool.instance.release(session)
+            cleanup_session(session) unless stored
           else
             cleanup_session(session)
           end
@@ -892,7 +893,7 @@ module Clacky
         #   2. stty -echo stops the PTY from echoing our wrapper lines
         #      back into captured output.
         #   3. Empty PS1/PS2 keeps prompt noise out of captured output.
-        setup_line = %Q{HISTFILE=/dev/null; HISTSIZE=0; SAVEHIST=0; unset HISTFILE 2>/dev/null; stty -echo 2>/dev/null; PS1=""; PS2=""\n}
+        setup_line = %Q{HISTFILE=/dev/null; HISTSIZE=0; SAVEHIST=0; unset HISTFILE 2>/dev/null; set +o histexpand 2>/dev/null; stty -echo 2>/dev/null; PS1=""; PS2=""\n}
         session.mutex.synchronize { session.writer.write(setup_line) }
 
         # Install the safe-rm shell function. Single-line `source`
