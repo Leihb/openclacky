@@ -230,6 +230,49 @@ module Clacky
         token_data = track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
         response[:token_usage] = token_data
 
+        # [DIAG] Log raw client response shape. Only emit when we see the
+        # "finish_reason=stop + non-empty tool_calls" combo, or when any
+        # tool_call's arguments look empty/unparseable — both indicate the
+        # upstream (Bedrock/relay/model) cut the tool_use stream short.
+        # Normal responses produce no log line (too noisy).
+        begin
+          tool_calls = response[:tool_calls] || []
+          if !tool_calls.empty?
+            raw_tcs = tool_calls.map do |c|
+              args_str = c[:arguments].is_a?(String) ? c[:arguments] : c[:arguments].to_s
+              parseable = begin
+                JSON.parse(args_str)
+                true
+              rescue StandardError
+                false
+              end
+              {
+                name: c[:name].to_s,
+                args_len: args_str.length,
+                args_parseable: parseable,
+                args_head: args_str[0, 120]
+              }
+            end
+            truncated_call = raw_tcs.any? { |t| t[:args_len] == 0 || t[:args_len] == 2 || !t[:args_parseable] }
+            suspicious     = response[:finish_reason] == "stop"
+
+            if suspicious || truncated_call
+              Clacky::Logger.warn("llm.response_suspicious",
+                model: current_model,
+                finish_reason: response[:finish_reason].to_s,
+                tool_calls_count: raw_tcs.size,
+                tool_calls: raw_tcs,
+                completion_tokens: token_data[:completion_tokens],
+                ttft_ms: response.dig(:latency, :ttft_ms),
+                combo_stop_with_toolcalls: suspicious,
+                has_truncated_args: truncated_call
+              )
+            end
+          end
+        rescue StandardError => e
+          Clacky::Logger.warn("llm.response_log_failed", error: e.message)
+        end
+
         response
         ensure
           # Close any "retrying" progress slot that was opened during the

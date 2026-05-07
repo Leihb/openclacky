@@ -373,8 +373,47 @@ module Clacky
           # Skip if compression happened (response is nil)
           next if response.nil?
 
+          # [DIAG] Only log when finish_reason=="stop" AND tool_calls non-empty —
+          # the suspicious combo that indicates an upstream-truncated tool_use
+          # response. Normal responses produce no log line here to avoid noise.
+          begin
+            tool_calls = response[:tool_calls] || []
+            if response[:finish_reason] == "stop" && !tool_calls.empty?
+              tc_summary = tool_calls.map do |c|
+                args_str = c[:arguments].is_a?(String) ? c[:arguments] : c[:arguments].to_s
+                {
+                  name: c[:name].to_s,
+                  args_len: args_str.length,
+                  args_head: args_str[0, 120]
+                }
+              end
+              Clacky::Logger.warn("agent.think_response",
+                session_id: @session_id,
+                iteration: @iterations,
+                finish_reason: response[:finish_reason].to_s,
+                tool_calls_count: tool_calls.size,
+                tool_calls: tc_summary,
+                content_len: response[:content].to_s.length,
+                completion_tokens: response.dig(:token_usage, :completion_tokens),
+                ttft_ms: response.dig(:latency, :ttft_ms),
+                suspicious_truncation: true
+              )
+            end
+          rescue StandardError => e
+            Clacky::Logger.warn("agent.think_response.log_failed", error: e.message)
+          end
+
           # Check if done (no more tool calls needed)
           if response[:finish_reason] == "stop" || response[:tool_calls].nil? || response[:tool_calls].empty?
+            # [DIAG] Pin down exactly which sub-condition triggered the task exit.
+            Clacky::Logger.info("agent.loop_break_normal",
+              session_id: @session_id,
+              iteration: @iterations,
+              branch: (response[:finish_reason] == "stop" ? "finish_reason_stop" :
+                       response[:tool_calls].nil? ? "tool_calls_nil" : "tool_calls_empty"),
+              finish_reason: response[:finish_reason].to_s,
+              tool_calls_count: (response[:tool_calls] || []).size
+            )
             if response[:content] && !response[:content].empty?
               emit_assistant_message(response[:content])
             end
