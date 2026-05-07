@@ -148,7 +148,7 @@ RSpec.describe Clacky::Utils::FileProcessor do
     end
 
     context "with markdown files" do
-      it "uses file content directly as preview (no parser)" do
+      it "points preview_path at the original file (no tmpdir copy)" do
         Dir.mktmpdir do |dir|
           path = File.join(dir, "notes.md")
           File.write(path, "# Heading\nbody line")
@@ -157,7 +157,8 @@ RSpec.describe Clacky::Utils::FileProcessor do
 
           ref = described_class.process_path(path)
           expect(ref.type).to eq(:text)
-          expect(ref.preview_path).to end_with(".preview.md")
+          # preview_path is the original file itself — no redundant copy in UPLOAD_DIR
+          expect(ref.preview_path).to eq(path)
           expect(File.read(ref.preview_path)).to include("# Heading")
           expect(ref.parse_error).to be_nil
         end
@@ -170,7 +171,7 @@ RSpec.describe Clacky::Utils::FileProcessor do
             File.write(path, "content of #{fname}")
             ref = described_class.process_path(path)
             expect(ref.type).to eq(:text)
-            expect(ref.preview_path).not_to be_nil
+            expect(ref.preview_path).to eq(path)
             expect(File.read(ref.preview_path)).to eq("content of #{fname}")
           end
         end

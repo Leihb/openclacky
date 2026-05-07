@@ -141,26 +141,14 @@ module Clacky
         FileRef.new(name: name, type: :image, original_path: path)
 
       when ".csv"
-        # CSV is plain text — read directly, no external parser needed.
-        # Try UTF-8 first, then GBK (common in Chinese-origin CSV), then binary with replacement.
-        begin
-          text         = read_text_with_encoding_fallback(path)
-          preview_path = save_preview(text, path)
-          FileRef.new(name: name, type: :csv, original_path: path, preview_path: preview_path)
-        rescue => e
-          FileRef.new(name: name, type: :csv, original_path: path, parse_error: e.message)
-        end
+        # CSV is plain text — the file itself IS the preview. No parser, no copy.
+        # FileReader handles encoding fallback via safe_utf8 when it reads the file.
+        FileRef.new(name: name, type: :csv, original_path: path, preview_path: path)
 
       when *TEXT_PREVIEW_EXTENSIONS
-        # Markdown / plain text: the file itself IS the preview.
-        # No parser needed — just copy through (with encoding normalisation).
-        begin
-          text         = read_text_with_encoding_fallback(path)
-          preview_path = save_preview(text, path)
-          FileRef.new(name: name, type: :text, original_path: path, preview_path: preview_path)
-        rescue => e
-          FileRef.new(name: name, type: :text, original_path: path, parse_error: e.message)
-        end
+        # Markdown / plain text / log: the file itself IS the preview.
+        # No parser needed, no tmpdir copy — just point preview_path at the original.
+        FileRef.new(name: name, type: :text, original_path: path, preview_path: path)
 
       else
         result = Utils::ParserManager.parse(path)
@@ -420,26 +408,6 @@ module Clacky
       base.empty? ? 'upload' : base
     end
 
-    # Read a text file with automatic encoding detection.
-    # Tries UTF-8, then GBK (common for Chinese-origin CSV/text files), then
-    # falls back to binary read with invalid byte replacement.
-    def self.read_text_with_encoding_fallback(path)
-      # Try UTF-8 first (most common, fastest path)
-      raw = File.binread(path)
-      utf8 = raw.dup.force_encoding("UTF-8")
-      return utf8.encode("UTF-8") if utf8.valid_encoding?
-
-      # Try GBK (GB2312 superset — common in Chinese Windows/Excel exports)
-      begin
-        return raw.encode("UTF-8", "GBK", invalid: :replace, undef: :replace, replace: "?")
-      rescue Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError
-        # fall through
-      end
-
-      # Last resort: binary read with replacement characters
-      raw.encode("UTF-8", "binary", invalid: :replace, undef: :replace, replace: "?")
-    end
-
     # Detect the actual image MIME type from raw binary data by inspecting
     # magic bytes, ignoring the file extension. Falls back to extension-based
     # detection when magic bytes don't match any known format.
@@ -556,7 +524,6 @@ module Clacky
     end
 
     private_class_method :parse_zip_listing, :parse_tar_listing, :save_preview, :sanitize_filename,
-                         :read_text_with_encoding_fallback,
                          :downscale_png_chunky, :downscale_via_cli
   end
   end
