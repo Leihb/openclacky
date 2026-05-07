@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-05-07
+
+### Added
+- **Multi-region provider endpoints.** Providers can now expose multiple endpoint variants (e.g. global vs. CN-optimized Anthropic), and you can switch between them from both the onboarding flow and the Settings page. Bundled with updated model pricing data so cost estimates stay accurate across regions. (#67)
+- **Pre-installed platform-recommended skills during onboarding.** New users get a curated set of skills automatically during onboard — downloaded concurrently with dual-host fallback and a hard deadline so onboarding never hangs on a slow mirror. (#68)
+- **Builtin skills served via platform API.** Recommended skills are now fetched through `/api/v1/skills/builtin`, making the list easier to update without shipping a new gem. (#72)
+- **Feishu group chats: respond only when @-mentioned.** The Feishu adapter now parses the mentions array and ignores group messages that don't @ the bot, so the bot no longer replies to every message in a busy group. Sessions are also isolated per (chat, user) pair by default (`:chat_user` binding mode), preventing context leaks between DMs and groups. (#71)
+
+### Fixed
+- **Recover from truncated upstream tool calls.** When an upstream LLM response cuts off mid tool-call, the agent now detects the truncation and recovers automatically instead of getting stuck. Covered by extensive new tests.
+- **Feedback option click now sends the message.** Clicking a suggested feedback option previously set the input text but silently failed to send (due to a `sendMessage` vs `_sendMessage` scope bug). Now it dispatches immediately as expected. (#69)
+- **Sidebar footer and input area heights aligned.** Introduced a shared `--footer-height` CSS variable (56px) and reworked the stop button to use a pseudo-element square for pixel-perfect centering — both columns now line up cleanly. (#70)
+- **Feishu bot fails closed on API outage.** If `/open-apis/bot/v3/info` fails and `bot_open_id` can't be resolved, the adapter now drops group messages (with a warning) instead of spamming every group message as a fallback.
+- **`preview.md` no longer pollutes user project directories.** Preview files are written to the system tmpdir, and plain text formats (md/log/csv) skip preview generation entirely since they're already readable as-is.
+
+### More
+- Added agent stop logging to make interrupt / stop chains easier to debug.
+
 ## [1.0.1] - 2026-05-06
 
 ### Added
