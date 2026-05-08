@@ -768,6 +768,22 @@ module Clacky
       awaiting_feedback = false
 
       tool_calls.each_with_index do |call, index|
+        # Resolve tool name: handle case-insensitive and common alias mismatches
+        # from different LLM providers (e.g. "read" → "file_reader", "Read" → "file_reader")
+        original_name = call[:name]
+        resolved = @tool_registry.resolve(call[:name])
+        if resolved && resolved != call[:name]
+          @debug_logs << {
+            timestamp: Time.now.iso8601,
+            event: "tool_name_resolved",
+            original: original_name,
+            resolved: resolved
+          }
+          call = call.merge(name: resolved)
+        elsif resolved.nil?
+          # Tool truly not found — let the rescue below handle it with a clear message
+        end
+
         # Hook: before_tool_use
         hook_result = @hooks.trigger(:before_tool_use, call)
         if hook_result[:action] == :deny
