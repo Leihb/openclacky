@@ -41,6 +41,7 @@ module Clacky
 
       Examples:
         $ clacky agent --mode=auto_approve --path /path/to/project
+        $ clacky agent --model gpt-5.3-codex -m "write a hello world script"
     LONGDESC
     option :mode, type: :string, default: "confirm_safes",
            desc: "Permission mode: auto_approve, confirm_safes, confirm_all"
@@ -56,6 +57,7 @@ module Clacky
     option :file,  type: :array, aliases: "-f", desc: "File path(s) to attach (use with -m; supports images and documents)"
     option :image, type: :array, aliases: "-i", desc: "Image file path(s) to attach (alias for --file, kept for compatibility)"
     option :agent, type: :string, default: "coding", desc: "Agent profile to use: coding, general, or any custom profile name (default: coding)"
+    option :model, type: :string, desc: "Override the model to use (by name, e.g. gpt-5.3-codex or deepseek-v4-pro). Uses default model if not specified"
     option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
     def agent
       # Handle help option
@@ -69,6 +71,15 @@ module Clacky
       Clacky::Telemetry.startup!
 
       agent_config = Clacky::AgentConfig.load
+
+      # Override model if --model option is specified
+      if options[:model]
+        unless agent_config.switch_model_by_name(options[:model])
+          # During early startup @ui may not be ready; use simple error output
+          $stderr.puts "Error: model '#{options[:model]}' not found. Available: #{agent_config.model_names.join(', ')}"
+          exit 1
+        end
+      end
 
       # Handle session listing
       if options[:list]

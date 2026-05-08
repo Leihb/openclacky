@@ -426,6 +426,23 @@ module Clacky
       true
     end
 
+    # Switch to a model by its display name (fuzzy match, case-insensitive).
+    #
+    # @param name [String] the model name to search for (e.g. "gpt-5.3-codex")
+    # @return [Boolean] true if switched, false if name not found
+    def switch_model_by_name(name)
+      return false if name.nil? || name.to_s.strip.empty?
+
+      name_str = name.to_s.strip.downcase
+      index = @models.find_index { |m| m["model"].to_s.downcase == name_str }
+      return false if index.nil?
+
+      @current_model_id = @models[index]["id"]
+      @current_model_index = index
+
+      true
+    end
+
     # Set the **global** default model marker (`type: "default"`).
     #
     # This is separate from `switch_model_by_id`:
