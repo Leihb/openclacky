@@ -203,15 +203,6 @@ module Clacky
 
         Clacky::Logger.info("[HttpServer PID=#{Process.pid}] start() mode=#{@inherited_socket ? 'worker' : 'standalone'} inherited_socket=#{@inherited_socket.inspect} master_pid=#{@master_pid.inspect}")
 
-        # In standalone mode (no master), kill any stale server and manage our own PID file.
-        # In worker mode the master owns the PID file; we just skip this block.
-        if @inherited_socket.nil?
-          kill_existing_server(@port)
-          pid_file = File.join(Dir.tmpdir, "clacky-server-#{@port}.pid")
-          File.write(pid_file, Process.pid.to_s)
-          at_exit { File.delete(pid_file) if File.exist?(pid_file) }
-        end
-
         # Expose server address and brand name to all child processes (skill scripts, shell commands, etc.)
         # so they can call back into the server without hardcoding the port,
         # and use the correct product name without re-reading brand.yml.
@@ -412,7 +403,13 @@ module Clacky
         when ["PATCH",  "/api/sessions/:id/model"] then api_switch_session_model(req, res)
         when ["PATCH",  "/api/sessions/:id/working_dir"] then api_change_session_working_dir(req, res)
         else
-          if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
+          if method == "POST" && path.match?(%r{^/api/channels/[^/]+/send$})
+            platform = path.sub("/api/channels/", "").sub("/send", "")
+            api_send_channel_message(platform, req, res)
+          elsif method == "GET" && path.match?(%r{^/api/channels/[^/]+/users$})
+            platform = path.sub("/api/channels/", "").sub("/users", "")
+            api_list_channel_users(platform, res)
+          elsif method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
             api_test_channel(platform, req, res)
           elsif method == "POST" && path.start_with?("/api/channels/")
@@ -1437,6 +1434,79 @@ module Clacky
         end
 
         json_response(res, 200, { channels: platforms })
+      end
+
+      # POST /api/channels/:platform/send
+      # Proactively send a message to a user via the given IM platform.
+      #
+      # Body:
+      #   { "message": "hello",            # required
+      #     "user_id": "some_user_id" }    # optional — defaults to most-recently active user
+      #
+      # Response:
+      #   200 { ok: true }
+      #   400 { ok: false, error: "..." }  — missing/invalid params or platform not running
+      #   503 { ok: false, error: "..." }  — no known users (nobody has messaged the bot yet)
+      #
+      # Constraints:
+      #   - The platform adapter must be running (channel must be enabled + connected).
+      #   - For Weixin (iLink protocol), a context_token is required per message. This is
+      #     automatically looked up from the in-memory cache populated by inbound messages.
+      #     If no token exists for the target user (i.e. the user has never messaged the bot
+      #     in this server session), the message cannot be delivered.
+      def api_send_channel_message(platform, req, res)
+        platform = platform.to_sym
+        body     = parse_json_body(req)
+        message  = body["message"].to_s.strip
+
+        if message.empty?
+          json_response(res, 400, { ok: false, error: "message is required" })
+          return
+        end
+
+        # Resolve target user_id
+        user_id = body["user_id"].to_s.strip
+        if user_id.empty?
+          # Default to the most-recently active user for this platform
+          known = @channel_manager.known_users(platform)
+          if known.empty?
+            json_response(res, 503, {
+              ok:    false,
+              error: "No known users for :#{platform}. The user must send a message to the bot first."
+            })
+            return
+          end
+          user_id = known.last
+        end
+
+        result = @channel_manager.send_to_user(platform, user_id, message)
+        if result.nil?
+          json_response(res, 400, {
+            ok:    false,
+            error: "Failed to send message. The :#{platform} adapter may not be running, or no context_token is available for user #{user_id}."
+          })
+        else
+          json_response(res, 200, { ok: true, platform: platform, user_id: user_id })
+        end
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # GET /api/channels/:platform/users
+      # Returns the list of known user IDs for the given platform.
+      # These are users who have sent at least one message to the bot in this server session.
+      #
+      # For Weixin: returns users with a cached context_token (required for proactive messaging).
+      # For Feishu / WeCom: returns user IDs extracted from channel session bindings.
+      #
+      # Response:
+      #   200 { users: ["uid1", "uid2", ...] }
+      def api_list_channel_users(platform, res)
+        platform = platform.to_sym
+        users    = @channel_manager.known_users(platform)
+        json_response(res, 200, { platform: platform, users: users })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
       end
 
       # POST /api/upload
@@ -3646,36 +3716,6 @@ module Clacky
       def not_found(res)
         res.status = 404
         res.body   = "Not Found"
-      end
-
-      # Stop any previously running server on the given port via its PID file.
-      private def kill_existing_server(port)
-        pid_file = File.join(Dir.tmpdir, "clacky-server-#{port}.pid")
-        return unless File.exist?(pid_file)
-
-        pid = File.read(pid_file).strip.to_i
-        return if pid <= 0
-        # After exec-restart, the new process inherits the same PID as the old one.
-        # Skip sending TERM to ourselves — we are already the new server.
-        if pid == Process.pid
-          Clacky::Logger.info("[Server] exec-restart detected (PID=#{pid}), skipping self-kill.")
-          return
-        end
-
-        begin
-          Process.kill("TERM", pid)
-          Clacky::Logger.info("[Server] Stopped existing server (PID=#{pid}) on port #{port}.")
-          puts "Stopped existing server (PID: #{pid}) on port #{port}."
-          # Give it a moment to release the port
-          sleep 0.5
-        rescue Errno::ESRCH
-          Clacky::Logger.info("[Server] Existing server PID=#{pid} already gone.")
-        rescue Errno::EPERM
-          Clacky::Logger.warn("[Server] Could not stop existing server (PID=#{pid}) — permission denied.")
-          puts "Could not stop existing server (PID: #{pid}) — permission denied."
-        ensure
-          File.delete(pid_file) if File.exist?(pid_file)
-        end
       end
 
       # ── Inner classes ─────────────────────────────────────────────────────────
