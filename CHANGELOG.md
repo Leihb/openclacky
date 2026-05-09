@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session list scroll jump on "load more".** The list no longer snaps back to the top when older sessions are paginated in. (C-5568, #85)
 - Reverted an earlier message line-wrap change (#74) that caused regressions; will be revisited. (#84)
 
-
+## [1.0.2] - 2026-05-07
 
 ### Added
 - **Multi-region provider endpoints.** Providers can now expose multiple endpoint variants (e.g. global vs. CN-optimized Anthropic), and you can switch between them from both the onboarding flow and the Settings page. Bundled with updated model pricing data so cost estimates stay accurate across regions. (#67)
