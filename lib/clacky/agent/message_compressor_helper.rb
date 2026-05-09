@@ -103,8 +103,24 @@ module Clacky
 
       # Check if compression is needed and return compression context
       # @param force [Boolean] Force compression even if thresholds not met
+      # @param pull_back_from_tail [Integer] Number of messages to temporarily pop
+      #   from the tail of history before building the compression instruction.
+      #   Used by the context-overflow recovery path: when the current history
+      #   is already at/over the model's context window, we cannot append even
+      #   a small compression instruction without overflowing. Popping K messages
+      #   from the tail frees up token budget for the compression call itself.
+      #
+      #   Cache-preservation note: thanks to the model's two-checkpoint prompt
+      #   cache (cache#A at second-to-last, cache#B at last), pulling back K=1
+      #   message keeps cache#A intact — the compression LLM call still hits the
+      #   cached prefix [system, m1..m(N-1)]. K>=2 sacrifices cache hits but is
+      #   only used as fallback when one message isn't enough headroom.
+      #
+      #   The popped messages are NOT discarded — they ride along in the
+      #   returned context and are reattached to the rebuilt history's tail by
+      #   handle_compression_response, so recent task progress is preserved.
       # @return [Hash, nil] Compression context or nil if not needed
-      def compress_messages_if_needed(force: false)
+      def compress_messages_if_needed(force: false, pull_back_from_tail: 0)
         # Check if compression is enabled
         return nil unless @config.enable_compression
 
@@ -148,6 +164,27 @@ module Clacky
 
         # Get the most recent N messages, ensuring tool_calls/tool results pairs are kept together
         all_messages = @history.to_a
+
+        # Pull back K messages from the tail (context-overflow recovery path).
+        # We *physically* remove them from @history so the next call_llm
+        # (which reads @history.to_api) doesn't include them in the prompt.
+        # They will be reattached to the rebuilt history's tail by
+        # handle_compression_response after compression succeeds. If compression
+        # fails, the caller is responsible for restoring them via the returned
+        # context (rollback path).
+        pulled_back_messages = []
+        if pull_back_from_tail > 0
+          k = [pull_back_from_tail, all_messages.size - 1].min  # never pop the system message
+          k.times do
+            popped = @history.pop_last
+            pulled_back_messages.unshift(popped) if popped
+          end
+          # Recompute all_messages from the now-shrunk history so downstream
+          # logic (recent_messages selection, build_compression_message) sees
+          # the post-pop view.
+          all_messages = @history.to_a
+        end
+
         recent_messages = get_recent_messages_with_tool_pairs(all_messages, target_recent_count)
         recent_messages = [] if recent_messages.nil?
 
@@ -160,6 +197,7 @@ module Clacky
         {
           compression_message: compression_message,
           recent_messages: recent_messages,
+          pulled_back_messages: pulled_back_messages,
           original_token_count: total_tokens,
           original_message_count: @history.size,
           compression_level: @compression_level
@@ -227,7 +265,8 @@ module Clacky
           recent_messages: compression_context[:recent_messages],
           chunk_path: chunk_path,
           topics: topics,
-          previous_chunks: previous_chunks
+          previous_chunks: previous_chunks,
+          pulled_back_messages: compression_context[:pulled_back_messages] || []
         ))
 
         # Reset to the estimated size of the rebuilt (small) history.

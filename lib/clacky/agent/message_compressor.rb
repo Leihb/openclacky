@@ -93,8 +93,13 @@ module Clacky
     # @param original_messages [Array<Hash>] Original messages before compression
     # @param recent_messages [Array<Hash>] Recent messages to preserve
     # @param chunk_path [String, nil] Path to the archived chunk MD file (if saved)
-    # @return [Array<Hash>] Rebuilt message list: system + compressed + recent
-    def rebuild_with_compression(compressed_content, original_messages:, recent_messages:, chunk_path: nil, topics: nil, previous_chunks: [])
+    # @param pulled_back_messages [Array<Hash>] Messages temporarily popped from the
+    #   tail of @history before the compression LLM call (to free up token budget so
+    #   the compression call itself doesn't overflow context). These are NOT discarded —
+    #   they are reattached to the tail of the rebuilt history so recent task progress
+    #   is preserved. Default: [] (normal compression path doesn't need this).
+    # @return [Array<Hash>] Rebuilt message list: system + compressed + recent + pulled_back
+    def rebuild_with_compression(compressed_content, original_messages:, recent_messages:, chunk_path: nil, topics: nil, previous_chunks: [], pulled_back_messages: [])
       # Find and preserve system message
       system_msg = original_messages.find { |m| m[:role] == "system" }
 
@@ -112,13 +117,19 @@ module Clacky
         raise "LLM compression failed: unable to parse compressed messages"
       end
 
-      # Return system message + compressed messages + recent messages.
+      # Return system message + compressed messages + recent messages + pulled_back messages.
       # Strip any system messages from recent_messages as a safety net —
       # get_recent_messages_with_tool_pairs already excludes them, but this
       # guard ensures we never end up with duplicate system prompts even if
       # the caller passes an unfiltered list.
+      #
+      # pulled_back_messages: messages that were temporarily popped from the tail
+      # of @history before the compression LLM call (to free up token budget so
+      # the compression call itself doesn't overflow context). They are reattached
+      # here to preserve recent task progress.
       safe_recent = recent_messages.reject { |m| m[:role] == "system" }
-      [system_msg, *parsed_messages, *safe_recent].compact
+      safe_pulled_back = pulled_back_messages.reject { |m| m[:role] == "system" }
+      [system_msg, *parsed_messages, *safe_recent, *safe_pulled_back].compact
     end
 
 

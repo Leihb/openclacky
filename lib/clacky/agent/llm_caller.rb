@@ -79,6 +79,14 @@ module Clacky
         # the error is something else and we let it propagate.
         force_reasoning_content_pad = false
         thinking_retry_attempted = false
+        # One-shot flag for context-overflow recovery. When the server complains
+        # the input exceeds the model's context window, we run a forced
+        # compression with pull_back_from_tail: 1 (preserves the model's
+        # two-checkpoint prompt cache) and retry the original request once.
+        # We retry at most once — if still overflowing afterward, the issue is
+        # something else (e.g. tool schemas alone exceed the window) and we let
+        # the error propagate.
+        context_overflow_retry_attempted = false
 
         begin
           begin
@@ -220,6 +228,55 @@ module Clacky
         end
 
         rescue Clacky::BadRequestError => e
+          # One-shot recovery for "context too long" errors. The model's
+          # context window is exceeded by the current history+tools+system
+          # prompt. We run a forced compression with pull_back_from_tail: 1
+          # (preserves the two-checkpoint prompt cache so the compression
+          # call itself still hits cache#A on the second-to-last position),
+          # then retry the original request once.
+          if !context_overflow_retry_attempted &&
+              !@compressing_for_overflow &&
+              context_too_long_error?(e) &&
+              respond_to?(:compress_messages_if_needed, true)
+            context_overflow_retry_attempted = true
+            Clacky::Logger.info(
+              "[context-overflow] caught BadRequestError, attempting forced compression with pull-back",
+              error_message: e.message[0, 200],
+              history_size: @history.size,
+              previous_total_tokens: @previous_total_tokens
+            )
+            # Layer 1: standard cache-preserving compression (pull_back: 1).
+            # Handles 99% of real overflow cases (newest message tipped the
+            # request just past the window).
+            if perform_context_overflow_compression(mode: :standard)
+              retry
+            end
+
+            # Layer 2: aggressive fallback. The Layer 1 compression call
+            # itself overflowed — happens when a single newly-appended
+            # message is enormous (huge tool_result, pasted file, etc.) so
+            # popping just K=1 didn't bring the request below the window.
+            # Pop ~half the history this time; sacrifices prompt cache to
+            # guarantee the compression call fits.
+            Clacky::Logger.warn(
+              "[context-overflow] standard compression failed, escalating to aggressive mode"
+            )
+            if perform_context_overflow_compression(mode: :aggressive)
+              retry
+            end
+
+            # Both layers exhausted. Let the original error propagate so the
+            # user sees the underlying provider message. This should be
+            # extremely rare — would require both halves of the history to
+            # individually exceed the window, which is essentially impossible
+            # under the "previous turn succeeded" invariant.
+            Clacky::Logger.error(
+              "[context-overflow] both standard and aggressive compression failed; " \
+              "propagating original error"
+            )
+            raise
+          end
+
           # One-shot recovery for thinking-mode providers (DeepSeek V4, Kimi K2)
           # that require every assistant message in the history to carry a
           # reasoning_content field. The history-evidence heuristic in
@@ -342,6 +399,101 @@ module Clacky
         )
       end
 
+      # Run a forced compression to recover from a context-overflow error.
+      # Called by the BadRequestError rescue when context_too_long_error?
+      # returns true.
+      #
+      # Two-layer defence:
+      # ────────────────────────────────────────────────────────────────────
+      # Layer 1 (mode: :standard, default) — preserves prompt cache.
+      #   Pop K=1 message from @history tail, then run compression. This
+      #   frees just enough token budget for the compression LLM call
+      #   itself to fit, while preserving the model's two-checkpoint prompt
+      #   cache (cache#A at second-to-last position is still hit). The
+      #   popped message is reattached to the rebuilt history's tail by
+      #   handle_compression_response, so recent task progress is not lost.
+      #   Handles 99% of real-world cases where overflow is caused by the
+      #   newest message pushing total just past the window.
+      #
+      # Layer 2 (mode: :aggressive) — sacrifices prompt cache to survive.
+      #   Pop ~half the history (capped) from the tail. This dramatically
+      #   shrinks the compression call's input regardless of how big any
+      #   single message is. Used as a fallback when Layer 1 itself raises
+      #   context_too_long — i.e. a single newly-appended message is so
+      #   large (e.g. >50K-token tool_result, pasted huge file) that even
+      #   removing it didn't bring the request under the window, OR the
+      #   popped message was small but earlier history grew past the limit.
+      #   Pulled-back messages are still reattached after compression so no
+      #   user content is silently dropped.
+      #
+      # @param mode [Symbol] :standard or :aggressive
+      # @return [Boolean] true if compression succeeded (caller should retry
+      #   the original request), false if compression was unable to run
+      #   (compression disabled, history too short, etc.) or itself failed
+      #   — caller decides whether to escalate to the next layer or
+      #   propagate the original error.
+      private def perform_context_overflow_compression(mode: :standard)
+        return false unless respond_to?(:compress_messages_if_needed, true)
+
+        # Compute pull-back count.
+        # Standard: K=1 (cache-preserving).
+        # Aggressive: pop ~half the history, but never less than 4 and never
+        #   more than (history_size - 2) so we always keep system + at least
+        #   one recent message. Capped at 64 to bound the worst case (an
+        #   enormous history that should never realistically occur).
+        pull_back =
+          if mode == :aggressive
+            half = @history.size / 2
+            [[half, 4].max, [@history.size - 2, 64].min].min
+          else
+            1
+          end
+
+        @compressing_for_overflow = true
+        compression_context = nil
+
+        begin
+          compression_context = compress_messages_if_needed(
+            force: true,
+            pull_back_from_tail: pull_back
+          )
+          return false if compression_context.nil?
+
+          compression_message = compression_context[:compression_message]
+          @history.append(compression_message)
+
+          response = call_llm  # recursive — guarded by @compressing_for_overflow
+          handle_compression_response(response, compression_context)
+          Clacky::Logger.info(
+            "[context-overflow] compression succeeded",
+            mode: mode,
+            pull_back: pull_back
+          )
+          true
+        rescue => e
+          # Compression failed mid-flight. Restore @history to a sensible state:
+          # roll back the compression instruction we appended, and re-append the
+          # pulled-back messages so the user's recent work isn't silently lost.
+          if compression_context
+            cm = compression_context[:compression_message]
+            @history.rollback_before(cm) if cm
+            (compression_context[:pulled_back_messages] || []).each do |m|
+              @history.append(m)
+            end
+          end
+          Clacky::Logger.warn(
+            "[context-overflow] compression failed during overflow recovery",
+            mode: mode,
+            pull_back: pull_back,
+            error_class: e.class.name,
+            error_message: e.message[0, 200]
+          )
+          false
+        ensure
+          @compressing_for_overflow = false
+        end
+      end
+
       # True when a 400 BadRequestError is specifically about a missing
       # reasoning_content field in thinking mode (DeepSeek V4, Kimi K2 thinking).
       # We require TWO distinct substrings to avoid false positives — a generic
@@ -356,6 +508,72 @@ module Clacky
         msg.include?("reasoning_content") &&
           (msg.include?("thinking") || msg.include?("must be passed back") ||
            msg.include?("must be provided"))
+      end
+
+      # True when a 400 BadRequestError indicates the request exceeded the
+      # model's context window (i.e. the conversation history is too long).
+      #
+      # We deliberately favour broad detection over narrow precision:
+      #   - False positive cost: one extra (no-op) compression cycle.
+      #   - False negative cost: user is stuck — every retry hits the same wall.
+      # So the matcher is intentionally permissive.
+      #
+      # Coverage (verified against real production error strings):
+      #
+      #   OpenAI:
+      #     "This model's maximum context length is 128000 tokens. However
+      #      you requested ... Please reduce the length of the messages."
+      #     error.code == "context_length_exceeded"
+      #
+      #   Anthropic:
+      #     "prompt is too long: 218849 tokens > 200000 maximum"
+      #
+      #   Qwen / Alibaba (DashScope):
+      #     "You passed 117345 input tokens and requested 8192 output tokens.
+      #      However the model's context length is only 125536 tokens, resulting
+      #      in a maximum input length of 117344 tokens. Please reduce the length
+      #      of the input prompt. (parameter=input_tokens, value=117345)"
+      #
+      #   Qwen / Alibaba (DashScope) — newer/terser format (qwen3.6 series):
+      #     "InternalError.Algo.InvalidParameter: Range of input length should be [1, 229376]"
+      #
+      #   DeepSeek / Kimi / MiniMax / most OpenAI-compatible relays:
+      #     Variants of OpenAI-style "context length" / "tokens exceeds" wording.
+      #
+      #   Generic gateways (Portkey, OpenRouter):
+      #     "The total number of tokens exceeds the model's maximum context length"
+      private def context_too_long_error?(err)
+        return false unless err.is_a?(Clacky::BadRequestError)
+
+        msg = err.message.to_s.downcase
+
+        # Strong phrases — any one of these is conclusive on its own.
+        # Each phrase is two-or-more semantic words to avoid single-word noise.
+        strong_phrases = [
+          "context length",                 # OpenAI / Qwen / many compat APIs
+          "context_length_exceeded",        # OpenAI error.code
+          "maximum context",                # OpenAI variant
+          "maximum input length",           # Qwen
+          "prompt is too long",             # Anthropic
+          "input is too long",              # Anthropic-compat relays
+          "exceeds the maximum context",    # Portkey & generic gateways
+          "exceeds the model's context",    # Generic
+          "exceeds the model's maximum",    # Generic
+          "reduce the length of the input", # Qwen action hint
+          "reduce the length of the messages", # OpenAI action hint
+          "reduce the length of your",      # Generic action hint
+          "reduce the length of the prompt", # Generic action hint
+          "range of input length"           # Qwen DashScope qwen3.6+ terse format
+        ]
+        return true if strong_phrases.any? { |p| msg.include?(p) }
+
+        # Pattern 1: Anthropic-style "<N> tokens > <N> maximum"
+        return true if msg =~ /\d+\s*tokens?\s*>\s*\d+/
+
+        # Pattern 2: Qwen-style structured field "parameter=input_tokens"
+        return true if msg.include?("parameter=input_tokens")
+
+        false
       end
 
       # Detect upstream tool-call truncation and raise UpstreamTruncatedError
