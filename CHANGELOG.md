@@ -5,7 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.2] - 2026-05-07
+## [1.0.3] - 2026-05-09
+
+### Added
+- **Channel send command — push messages from CLI/agent to IM channels.** New `clacky channel send` CLI command and full outbound channel pipeline. The agent can now actively reach out to users on Feishu/WeCom/WeChat (e.g. for cron tasks or background completions) instead of only replying. Includes a new `ChannelManager` for routing, multi-master server discovery, and proper `chat_id` extraction for outbound messages. (#73)
+- **`--model` flag to override the model per invocation.** Run any one-off command with a different model without changing config: `clacky --model gpt-4o-mini "..."`. Useful for quick comparisons or routing specific tasks to cheaper/faster models. (#76)
+- **Fuzzy tool-name resolution for cross-model compatibility.** When a model emits a slightly off tool name (e.g. `read_file` vs `file_reader`, case mismatches, or hyphen/underscore differences), the agent now resolves it to the closest registered tool instead of erroring out. Significantly improves reliability when switching between Claude, GPT, and other providers. (#78)
+- **Context overflow auto-recovery.** When an upstream LLM call hits a context-length error, the agent now detects it via `LlmCaller`'s error classification and automatically compresses message history to retry — instead of bubbling a hard error to the user. Backed by 175 new error-detection and 169 new recovery specs.
+- **Refined session list UI with SVG icons.** Reworked sidebar session list with crisp SVG icons and tightened styling for a more polished look. (#83)
+
+### Fixed
+- **EPIPE crashes when stdout/stderr is closed.** Wrapped server I/O in `EpipeSafeIO` so the master/web server no longer crashes when its output stream goes away (e.g. terminal closed, pipe broken). Covered by 193 new specs.
+- **Duplicate `$` in CLI completion line.** Removed the stray dollar sign that appeared at the end of completed commands. (C-5583, #86)
+- **Session list scroll jump on "load more".** The list no longer snaps back to the top when older sessions are paginated in. (C-5568, #85)
+- Reverted an earlier message line-wrap change (#74) that caused regressions; will be revisited. (#84)
+
+
 
 ### Added
 - **Multi-region provider endpoints.** Providers can now expose multiple endpoint variants (e.g. global vs. CN-optimized Anthropic), and you can switch between them from both the onboarding flow and the Settings page. Bundled with updated model pricing data so cost estimates stay accurate across regions. (#67)
