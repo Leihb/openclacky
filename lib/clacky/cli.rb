@@ -992,6 +992,22 @@ module Clacky
         # Spawned by Master. Inherit the listen socket from the file descriptor
         # passed via CLACKY_INHERIT_FD, and report back to master via CLACKY_MASTER_PID.
         require_relative "server/http_server"
+        require_relative "server/epipe_safe_io"
+
+        # Protect $stdout / $stderr from Errno::EPIPE.
+        #
+        # The worker inherits fd 1/2 from the Master process. If the Master's
+        # stdout pipe ever breaks (e.g. it was launched by an installer or GUI
+        # that has since exited), the next `puts` would raise Errno::EPIPE and
+        # crash the worker — destroying all in-memory sessions, agent loops,
+        # and SSE connections, and looping forever because the respawned
+        # worker inherits the same broken fd.
+        #
+        # In healthy state these wrappers are transparent — output goes to
+        # the user's terminal as usual. On first broken-pipe failure they
+        # silently fall back to /dev/null and the worker stays alive.
+        $stdout = Clacky::Server::EPIPESafeIO.new($stdout)
+        $stderr = Clacky::Server::EPIPESafeIO.new($stderr)
 
         fd         = ENV["CLACKY_INHERIT_FD"].to_i
         master_pid = ENV["CLACKY_MASTER_PID"].to_i

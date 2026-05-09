@@ -143,10 +143,16 @@ module Clacky
 
         Clacky::Logger.info("[Master PID=#{Process.pid}] spawn: #{ruby} #{script} #{worker_argv.join(' ')}")
         Clacky::Logger.info("[Master PID=#{Process.pid}] env: #{env.inspect}")
+
         # pgroup: 0 puts worker in its own process group.
         # This lets Master send TERM/KILL to the entire group (-pid) on shutdown,
         # ensuring grandchildren (e.g. chrome-devtools-mcp node process) are also
         # cleaned up even if the worker is force-killed before its shutdown_proc runs.
+        #
+        # NOTE on stdio: we deliberately let the worker inherit Master's fd 0/1/2
+        # so users see startup banner / request logs in their terminal. Protection
+        # against Errno::EPIPE on broken parent stdout is installed inside the
+        # worker itself (see cli.rb worker entry — EPIPESafeIO wrapper).
         pid = spawn(env, ruby, script, *worker_argv, pgroup: 0)
         Clacky::Logger.info("[Master PID=#{Process.pid}] Spawned worker PID=#{pid} pgroup=#{pid}")
         pid
