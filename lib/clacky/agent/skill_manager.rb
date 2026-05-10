@@ -378,10 +378,13 @@ module Clacky
           fm = parse_memory_frontmatter(path)
           topic       = fm["topic"]       || filename.sub(/\.md$/, "")
           description = fm["description"] || "(no description)"
-          updated_at  = fm["updated_at"]
+          # Use file mtime as the "last seen" signal (covers both writes and
+          # touch-on-recall LRU bumps). Authoritative — no longer relies on
+          # an LLM-maintained `updated_at` frontmatter field.
+          last_seen = File.mtime(path).strftime("%Y-%m-%d")
 
           entry = "- **#{filename}** | topic: #{topic} | #{description}"
-          entry += " | updated: #{updated_at}" if updated_at
+          entry += " | last seen: #{last_seen}"
           lines << entry
         end
 

@@ -29,8 +29,7 @@ Adding todos is NOT completion — it's just the planning phase. After creating 
 
 ## Long-term Memory
 
-You have long-term memories in `~/.clacky/memories/`. Use `invoke_skill("recall-memory", "<topic>")` when:
-- The user references something from a past session
-- You encounter a concept or decision you're unsure about
+Topical knowledge lives in `~/.clacky/memories/`.
 
-Do NOT recall proactively — only when genuinely needed.
+- **Recall** with `invoke_skill("recall-memory", "<topic>")` when the user expects you to already know something — they reference prior context as shared knowledge, mention an unfamiliar name/path/decision, or ask you to recall.
+- **Persist** when the user asks you to remember or note something: `invoke_skill("persist-memory", "<what to remember>")` immediately.

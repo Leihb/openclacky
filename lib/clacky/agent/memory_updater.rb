@@ -168,12 +168,24 @@ module Clacky
         false
       end
 
-      # Build the memory update prompt with the current memory file list injected.
-      # Uses a whitelist approach: default is NO write, only write if explicit criteria are met.
+      # Build the memory update prompt for the forked subagent.
+      #
+      # Architecture:
+      #   - Decision (whitelist) lives HERE — MemoryUpdater is the trigger
+      #     and decides whether/what to persist.
+      #   - Execution (file naming, merging, frontmatter, size limits) lives
+      #     in the persist-memory skill — MemoryUpdater loads SKILL.md
+      #     directly via SkillManager and embeds it as the executor manual.
+      #
+      #   We do NOT call invoke_skill here (that would fork a second
+      #   subagent — the persist-memory skill is fork_agent:true). Instead
+      #   the subagent we already forked plays both roles: it reads the
+      #   whitelist, decides what (if anything) to persist, and follows
+      #   the embedded SKILL.md rules to write the files.
+      #
       # @return [String]
       private def build_memory_update_prompt
-        today = Time.now.strftime("%Y-%m-%d")
-        meta  = load_memories_meta
+        executor_manual = load_persist_memory_skill_body
 
         <<~PROMPT
           ═══════════════════════════════════════════════════════════════
@@ -207,36 +219,35 @@ module Clacky
           - Any task that produced no lasting decisions or preferences
           - Repeating or slightly rephrasing what is already in memory
 
-          ## Existing Memory Files (pre-loaded — do NOT re-scan the directory)
+          ═══════════════════════════════════════════════════════════════
+          EXECUTOR MANUAL (from persist-memory skill)
+          ═══════════════════════════════════════════════════════════════
+          If — and ONLY if — the whitelist matched, follow the manual below
+          to actually write the files. The manual owns file naming, merging,
+          frontmatter, and size limits. Treat it as authoritative for
+          execution; ignore any "should I write?" framing inside it (that
+          decision has already been made above).
 
-          #{meta}
+          #{executor_manual}
 
-          Each file has YAML frontmatter:
-          ```
-          ---
-          topic: <topic name>
-          description: <one-line description>
-          updated_at: <YYYY-MM-DD>
-          ---
-          <content in concise Markdown>
-          ```
-
-          ## Steps (only if a whitelist condition is met)
-
-          For each qualifying topic:
-            a. If a matching file exists → read it with `file_reader(path: "~/.clacky/memories/<filename>")`, then write an updated version (merge new + old, drop stale)
-            b. If no matching file → create a new one at `~/.clacky/memories/<new-filename>.md`
-          Use the `write` tool to save each file. Do NOT use `terminal` or `file_reader` to list the directory.
-
-          ## Hard constraints (CRITICAL)
-          - Each file MUST stay under 4000 characters of content (after the frontmatter)
-          - If merging would exceed this limit, remove the least important information
-          - Write concise, factual Markdown — no fluff
-          - Update `updated_at` to today's date: #{today}
-          - Only write files for topics that genuinely appeared in this conversation
-
+          ───────────────────────────────────────────────────────────────
           Begin by checking the whitelist. If no condition is met, stop immediately.
         PROMPT
+      end
+
+      # Load the persist-memory skill's expanded body (frontmatter stripped,
+      # template variables like <%= memories_meta %> resolved).
+      #
+      # The persist-memory skill is a built-in default skill — it is always
+      # present. If it isn't, that's a build/install bug and we want it to
+      # surface loudly rather than silently degrade.
+      #
+      # @return [String]
+      private def load_persist_memory_skill_body
+        skill = @skill_loader.find_by_name("persist-memory")
+        raise "persist-memory skill not found — built-in skill is missing" unless skill
+
+        skill.process_content(template_context: build_template_context)
       end
     end
   end

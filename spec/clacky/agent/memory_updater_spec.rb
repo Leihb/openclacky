@@ -75,15 +75,53 @@ RSpec.describe Clacky::Agent::MemoryUpdater do
   end
 
   describe "#build_memory_update_prompt" do
-    it "includes key instructions" do
+    # All build_memory_update_prompt tests need a working skill_loader since
+    # persist-memory is a built-in skill that must always be present.
+    let(:fake_skill) do
+      double("skill").tap do |s|
+        allow(s).to receive(:process_content).and_return(
+          "# Persist Memory Subagent\nSKILL_BODY_MARKER\n4000 characters\n~/.clacky/memories/\n"
+        )
+      end
+    end
+    let(:fake_loader) do
+      double("skill_loader").tap do |l|
+        allow(l).to receive(:find_by_name).with("persist-memory").and_return(fake_skill)
+      end
+    end
+
+    before do
+      agent.instance_variable_set(:@skill_loader, fake_loader)
+      allow(agent).to receive(:build_template_context).and_return({})
+    end
+
+    it "includes whitelist decision rules and executor manual" do
       agent.iterations = 10
       agent.task_start_iterations = 0
       prompt = agent.send(:build_memory_update_prompt)
+
+      # Decision layer (owned by MemoryUpdater itself)
       expect(prompt).to include("MEMORY UPDATE MODE")
+      expect(prompt).to include("Whitelist")
+      expect(prompt).to include("No memory updates needed.")
+
+      # Executor manual layer (delegated to persist-memory skill)
+      expect(prompt).to include("EXECUTOR MANUAL")
       expect(prompt).to include("~/.clacky/memories/")
       expect(prompt).to include("4000 characters")
-      expect(prompt).to include("updated_at")
-      expect(prompt).to include(Time.now.strftime("%Y-%m-%d"))
+    end
+
+    it "embeds the persist-memory skill body via skill.process_content" do
+      prompt = agent.send(:build_memory_update_prompt)
+      expect(fake_skill).to have_received(:process_content)
+        .with(template_context: {})
+      expect(prompt).to include("SKILL_BODY_MARKER")
+    end
+
+    it "raises when persist-memory skill is missing (built-in must exist)" do
+      allow(fake_loader).to receive(:find_by_name).with("persist-memory").and_return(nil)
+      expect { agent.send(:build_memory_update_prompt) }
+        .to raise_error(/persist-memory skill not found/)
     end
   end
 
@@ -152,6 +190,15 @@ RSpec.describe Clacky::Agent::MemoryUpdater do
       a = full_agent_class.new(ui: ui, config: config, fork_target: subagent)
       # Silence Logger
       allow(Clacky::Logger).to receive(:error)
+      # Stub skill_loader + build_template_context so build_memory_update_prompt
+      # can load the persist-memory skill body. (persist-memory is a built-in
+      # skill — required, never optional.)
+      fake_skill = double("persist_memory_skill")
+      allow(fake_skill).to receive(:process_content).and_return("EXECUTOR MANUAL BODY")
+      fake_loader = double("skill_loader")
+      allow(fake_loader).to receive(:find_by_name).with("persist-memory").and_return(fake_skill)
+      a.instance_variable_set(:@skill_loader, fake_loader)
+      def a.build_template_context; {}; end
       a
     end
 

@@ -76,12 +76,11 @@ RSpec.describe "SkillManager memory helpers" do
       expect(agent.load_memories_meta).to eq("(No long-term memories found.)")
     end
 
-    it "lists memory files with topic, description and updated_at" do
+    it "lists memory files with topic, description and last-seen mtime" do
       write_memory("user.md", <<~MD)
         ---
         topic: User Profile
         description: Background info about the user
-        updated_at: "2026-03-08"
         ---
         Content.
       MD
@@ -90,7 +89,25 @@ RSpec.describe "SkillManager memory helpers" do
       expect(result).to include("user.md")
       expect(result).to include("User Profile")
       expect(result).to include("Background info about the user")
-      expect(result).to include("updated: 2026-03-08")
+      # mtime-based — always shows today's date for a freshly written file.
+      expect(result).to include("last seen: #{Time.now.strftime("%Y-%m-%d")}")
+    end
+
+    it "ignores any legacy `updated_at` frontmatter field" do
+      # Old memory files may still carry updated_at; we no longer surface it.
+      write_memory("legacy.md", <<~MD)
+        ---
+        topic: Legacy
+        description: Has stale frontmatter date
+        updated_at: "2020-01-01"
+        ---
+        Content.
+      MD
+
+      result = agent.load_memories_meta
+      expect(result).not_to include("2020-01-01")
+      expect(result).not_to include("updated:")
+      expect(result).to include("last seen:")
     end
 
     it "falls back to filename stem as topic when frontmatter is missing" do
