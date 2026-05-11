@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-05-11
+
+### Added
+- **`persist-memory` subagent skill — agents can now save things to long-term memory.** New built-in `persist-memory` skill (forked subagent, auto-summarized, no web tools) handles file naming, topic merging, frontmatter, and size limits when writing to `~/.clacky/memories/`. The memory updater and skill manager now route persistence requests through this subagent for cleaner separation of concerns. Covered by new specs in `memory_updater_spec.rb` and `skill_manager_memories_spec.rb`.
+- **System prompts aligned with Claude Code behavioral rules.** Rewrote `base_prompt.md` and the coding/general system prompts with 6 new sections (Code Style, File Modification Rules, Response Style, Git Safety Protocol, Error Handling, Task Tracking). Internal benchmark on 5 tasks showed −40% response verbosity, −24% task duration, and qualitative improvement on 4/5 tasks with no regression in completion rate. (#96)
+- **Local image proxy via `GET /api/local-image` (C-5523).** New HTTP server endpoint exposes local images (e.g. screenshots written by tools) to the Web UI through a controlled proxy, with new `FileProcessor` utilities backing it. 86 new specs in `file_processor_spec.rb`. (#93)
+- **Kimi Code (Coding Plan) provider preset.** New first-class provider entry for Moonshot's Kimi Code coding plan, with proper Anthropic-format cache headers (`cache_creation_input_tokens` / `cache_read_input_tokens`) wired through the client so prompt caching actually lands on the backend. Verified end-to-end against a paid account with 14336 cached tokens hit on the second turn. (#89)
+- **Opt-in Feishu CLI install & auth step in channel setup.** `channel-setup` skill now offers an optional Feishu CLI install + auth step and ships an `import_lark_skills.rb` helper that imports Lark-related skills on demand. (#98)
+- **Ruby 4.0 added to CI matrix.** GitHub Actions main workflow now runs the test suite against Ruby 4.0 in addition to existing versions, catching forward-compat issues early.
+
+### Fixed
+- **Session bar correctly attributes cost & skill reflection in subagents.** Fixed `cost_tracker` and `skill_reflector` so the parent session's bar no longer mis-counts subagent activity, giving accurate per-session cost and skill stats when forked subagents (like `persist-memory`) run.
+
+### More
+- Updated onboarding skill copy.
+
 ## [1.0.3] - 2026-05-09
 
 ### Added
