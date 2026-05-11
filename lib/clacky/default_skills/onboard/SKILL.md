@@ -55,7 +55,7 @@ Example (English):
 > Let's take 30 seconds to personalize your experience — I'll ask just a couple of quick things.
 
 Example (Chinese):
-> 嗨！我是你的专属小龙虾一号
+> 嗨！我是你的专属员工一号
 > 只需 30 秒完成个性化设置，我会问你两个简单问题。
 
 ### A.3. Ask the user to name the AI (card)
