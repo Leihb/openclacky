@@ -47,8 +47,14 @@ module Clacky
         # Collect token usage data for this iteration (returned to caller for deferred display)
         token_data = collect_iteration_tokens(usage, iteration_cost)
 
-        # Update session bar cost in real-time (don't wait for agent.run to finish)
-        @ui&.update_sessionbar(cost: @total_cost, cost_source: @cost_source)
+        # Update session bar cost in real-time (don't wait for agent.run to finish).
+        # Subagents must NOT push their own (small, restarting-from-zero) cost into the
+        # shared UI — that would clobber the parent's accumulated total and cause the
+        # session bar to "jump back to ~$0" while a subagent is running, then snap back
+        # to the real total once the parent merges the subagent's cost. The parent agent
+        # is responsible for surfacing the merged cost after fork_subagent returns
+        # (see SkillManager#execute_skill_with_subagent and MemoryUpdater).
+        @ui&.update_sessionbar(cost: @total_cost, cost_source: @cost_source) unless @is_subagent
 
         # Track cache usage statistics (global)
         @cache_stats[:total_requests] += 1
