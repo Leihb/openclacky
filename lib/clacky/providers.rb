@@ -29,7 +29,7 @@ module Clacky
         "name" => "OpenClacky",
         "base_url" => "https://api.openclacky.com",
         "api" => "bedrock",
-        "default_model" => "abs-claude-sonnet-4-5",
+        "default_model" => "abs-claude-sonnet-4-6",
         "models" => [
           "abs-claude-opus-4-7",
           "abs-claude-opus-4-6",
@@ -80,7 +80,32 @@ module Clacky
         "base_url" => "https://openrouter.ai/api/v1",
         "api" => "openai-responses",
         "default_model" => "anthropic/claude-sonnet-4-6",
-        "models" => [],  # Dynamic - fetched from API
+        # Curated default lineup. OpenRouter's full catalogue is enormous
+        # (hundreds of models) and the live /models endpoint isn't always
+        # reachable from every region — shipping a small list of the
+        # mainstream Claude + GPT entries gives users a working dropdown
+        # out of the box. Users can still type any other OpenRouter model
+        # ID manually; this list only seeds the picker.
+        "models" => [
+          "anthropic/claude-sonnet-4-6",
+          "anthropic/claude-opus-4-7",
+          "anthropic/claude-opus-4-6",
+          "anthropic/claude-haiku-4-5",
+          "openai/gpt-5.5",
+          "openai/gpt-5.4",
+          "openai/gpt-5.4-mini"
+        ],
+        # Per-primary lite pairing — Claude family pairs with Haiku, GPT
+        # family pairs with the mini variant. Mirrors the openclacky and
+        # openai presets above so subagents on OpenRouter get a sensible
+        # cheap/fast sidekick automatically.
+        "lite_models" => {
+          "anthropic/claude-sonnet-4-6" => "anthropic/claude-haiku-4-5",
+          "anthropic/claude-opus-4-7"   => "anthropic/claude-haiku-4-5",
+          "anthropic/claude-opus-4-6"   => "anthropic/claude-haiku-4-5",
+          "openai/gpt-5.5"              => "openai/gpt-5.4-mini",
+          "openai/gpt-5.4"              => "openai/gpt-5.4-mini"
+        },
         # Per-model API type overrides. Matched by Regexp against the model name.
         # Why this exists: OpenRouter proxies Claude via both its OpenAI-compatible
         # /chat/completions endpoint AND a native Anthropic /v1/messages endpoint.
@@ -243,8 +268,8 @@ module Clacky
         "name" => "MiMo (Xiaomi)",
         "base_url" => "https://api.xiaomimimo.com/v1",
         "api" => "openai-completions",
-        "default_model" => "mimo-v2-pro",
-        "models" => ["mimo-v2-pro", "mimo-v2-omni"],
+        "default_model" => "mimo-v2.5-pro",
+        "models" => ["mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-omni"],
         # MiMo-V2-Pro is text-only; MiMo-V2-Omni supports vision (omni = multimodal).
         "capabilities" => { "vision" => false }.freeze,
         "model_capabilities" => {
