@@ -109,6 +109,10 @@ module Clacky
           base_url:      raw["base_url"],
           allowed_users: raw["allowed_users"]
         }.compact
+      when :discord
+        {
+          bot_token:     raw["bot_token"]
+        }.compact
       when :telegram
         {
           bot_token:     raw["bot_token"],

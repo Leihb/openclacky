@@ -1608,6 +1608,7 @@ module Clacky
 
         # Record when the token was last updated so clients can detect re-login
         fields[:token_updated_at] = Time.now.to_i if platform == :weixin && fields.key?(:token)
+        fields[:token_updated_at] = Time.now.to_i if platform == :discord && fields.key?(:bot_token)
 
         # Validate credentials against live API before persisting.
         # Merge with existing config so partial updates (e.g. allowed_users only) still validate correctly.
@@ -1688,6 +1689,12 @@ module Clacky
             allowed_users:     raw["allowed_users"] || [],
             has_token:         !raw["token"].to_s.strip.empty?,
             token_updated_at:  raw["token_updated_at"]  # Unix timestamp, nil if never set
+          }
+        when :discord
+          {
+            allowed_users:    raw["allowed_users"] || [],
+            has_token:        !raw["bot_token"].to_s.strip.empty?,
+            token_updated_at: raw["token_updated_at"]
           }
         when :telegram
           {
