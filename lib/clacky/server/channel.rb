@@ -24,6 +24,7 @@ require_relative "channel/adapters/base"
 require_relative "channel/adapters/feishu/adapter"
 require_relative "channel/adapters/wecom/adapter"
 require_relative "channel/adapters/weixin/adapter"
+require_relative "channel/adapters/telegram/adapter"
 
 require_relative "channel/channel_config"
 require_relative "channel/channel_ui_controller"
