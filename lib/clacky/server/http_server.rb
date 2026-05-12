@@ -244,7 +244,15 @@ module Clacky
             Clacky::Logger.warn("[HttpServer] Forced exit after graceful shutdown timeout.")
             exit!(0)
           end
-          # Stop channel and browser managers in parallel to minimize shutdown time.
+          # Detach the inherited (shared) listen socket BEFORE shutdown so that
+          # WEBrick's cleanup_listener does not call shutdown(SHUT_RDWR)+close on
+          # it — that would propagate to every process sharing the underlying
+          # kernel socket (Master + new worker), breaking subsequent accept()
+          # on Linux. macOS's BSD stack tolerates this; Linux does not.
+          if @inherited_socket && server.listeners.include?(@inherited_socket)
+            server.listeners.delete(@inherited_socket)
+            Clacky::Logger.info("[HttpServer PID=#{Process.pid}] detached inherited socket fd=#{@inherited_socket.fileno} before shutdown")
+          end
           t1 = Thread.new { @channel_manager.stop rescue nil }
           t2 = Thread.new { Clacky::BrowserManager.instance.stop rescue nil }
           t1.join(1.5)
@@ -1005,10 +1013,14 @@ module Clacky
       def api_get_version(res)
         current = Clacky::VERSION
         latest  = fetch_latest_version_cached
+        brand   = Clacky::BrandConfig.load
+        cli_cmd = brand.branded? && brand.package_name && !brand.package_name.empty? ? brand.package_name : "openclacky"
         json_response(res, 200, {
           current:      current,
           latest:       latest,
-          needs_update: latest ? version_older?(current, latest) : false
+          needs_update: latest ? version_older?(current, latest) : false,
+          launcher:     ENV["CLACKY_LAUNCHER"] || "cli",
+          cli_command:  cli_cmd
         })
       end
 

@@ -733,8 +733,9 @@ module Clacky
         @legacy_progress_handles ||= {}
 
         if phase.to_s == "done"
-          handle = @legacy_progress_handles.delete(type)
+          handle = @legacy_progress_handles[type]
           handle&.finish(final_message: message)
+          @legacy_progress_handles.delete(type)
           return
         end
 
