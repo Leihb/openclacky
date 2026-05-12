@@ -5,10 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.5] - 2026-05-12
 
 ### Added
 - **Telegram channel adapter.** New IM channel adapter that connects openclacky to Telegram via the Bot API. Setup is just a bot token from @BotFather — no browser automation, no QR. Mirrors the existing Feishu / WeCom / Weixin contract: HTTPS long-poll inbound, `sendMessage` / `sendPhoto` / `sendDocument` outbound, photo + document download routed through the standard FileProcessor + vision pipeline, group `@-mention` filtering and `allowed_users` whitelist. `base_url` is configurable to support self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) for networks where `api.telegram.org` is unreachable. Frontend Channels panel, `channel-setup` skill, English/Chinese i18n, and `app.css` logo class added. 32 new specs in `spec/clacky/server/channel/adapters/telegram/`.
+- **Discord channel adapter.** Full Discord integration via REST API + Gateway (WebSocket), with channel-setup support, Web UI Channels panel entry, and i18n strings. Connect Clacky to Discord servers for bot interactions through slash commands and message events.
+- **OpenRouter curated model list.** The OpenRouter provider now ships with a curated dropdown of mainstream Claude and GPT models (Sonnet, Opus, Haiku, GPT-5.5/5.4), so users can pick from the list instead of typing model IDs manually. Full catalogue still accessible by typing any model ID.
+- **OpenRouter lite model pairing.** Subagents on OpenRouter now automatically get a sensible cheap/fast sidekick — Claude family pairs with Haiku, GPT family pairs with the mini variant — matching the behavior already available on the native OpenAI and OpenClacky providers.
+- **MiMo 2.5 Pro (Xiaomi) model support.** Added `mimo-v2.5-pro` to the MiMo provider preset alongside existing MiMo models.
+- **AI key setup guide link.** New users and those configuring API keys now see a "New to AI keys? See the guide →" link on both onboarding and settings pages, pointing to the official documentation.
+
+### Improved
+- **Default model upgraded to claude-sonnet-4-6.** The OpenClacky provider now defaults to the latest Claude Sonnet model for better performance out of the box.
+
+### Fixed
+- **Linux server restart stability.** Fixed an inherited socket cleanup bug where WEBrick's shutdown would propagate `SHUT_RDWR` to the shared kernel socket, breaking subsequent `accept()` calls on Linux. The server now detaches inherited sockets before shutdown so worker restarts work reliably.
+- **Upgrade failure recovery UI.** When an in-app upgrade restart fails, the UI now shows both tray icon and CLI recovery paths (`gem update ...`) instead of leaving users stranded. Also added branded CLI command info to the version check API for white-label builds.
 
 ## [1.0.4] - 2026-05-11
 
