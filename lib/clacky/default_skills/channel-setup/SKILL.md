@@ -1,11 +1,11 @@
 ---
 name: channel-setup
 description: |
-  Configure IM platform channels (Feishu, WeCom, Weixin, Discord) for openclacky.
+  Configure IM platform channels (Feishu, WeCom, Weixin, Discord, Telegram) for openclacky.
   Uses browser automation for navigation; guides the user to paste credentials and perform UI steps.
-  Trigger on: "channel setup", "setup feishu", "setup wecom", "setup weixin", "setup wechat", "setup discord",
+  Trigger on: "channel setup", "setup feishu", "setup wecom", "setup weixin", "setup wechat", "setup discord", "setup telegram",
   "channel config", "channel status", "channel enable", "channel disable", "channel reconfigure", "channel doctor",
-  "send message to weixin", "send message to feishu", "send message to wecom", "send message to discord".
+  "send message to weixin", "send message to feishu", "send message to wecom", "send message to discord", "send message to telegram".
   Subcommands: setup, status, enable <platform>, disable <platform>, reconfigure, doctor, send.
 argument-hint: "setup | status | enable <platform> | disable <platform> | reconfigure | doctor | send <platform> <message>"
 allowed-tools:
@@ -28,13 +28,13 @@ Configure IM platform channels for openclacky.
 
 | User says | Subcommand |
 |---|---|
-| `channel setup`, `setup feishu`, `setup wecom`, `setup weixin`, `setup wechat`, `setup discord` | setup |
+| `channel setup`, `setup feishu`, `setup wecom`, `setup weixin`, `setup wechat`, `setup discord`, `setup telegram` | setup |
 | `channel status` | status |
-| `channel enable feishu/wecom/weixin/discord` | enable |
-| `channel disable feishu/wecom/weixin/discord` | disable |
+| `channel enable feishu/wecom/weixin/discord/telegram` | enable |
+| `channel disable feishu/wecom/weixin/discord/telegram` | disable |
 | `channel reconfigure` | reconfigure |
 | `channel doctor` | doctor |
-| `send <message> to weixin/feishu/wecom/discord` | send |
+| `send <message> to weixin/feishu/wecom/discord/telegram` | send |
 
 ---
 
@@ -52,7 +52,8 @@ Response shape (example):
   {"platform":"feishu","enabled":true,"running":true,"has_config":true,"app_id":"cli_xxx","domain":"https://open.feishu.cn","allowed_users":[]},
   {"platform":"wecom","enabled":false,"running":false,"has_config":false,"bot_id":""},
   {"platform":"weixin","enabled":true,"running":true,"has_config":true,"has_token":true,"base_url":"https://ilinkai.weixin.qq.com","allowed_users":[]},
-  {"platform":"discord","enabled":true,"running":true,"has_config":true,"has_bot_token":true,"allowed_users":[]}
+  {"platform":"discord","enabled":true,"running":true,"has_config":true,"has_token":true,"allowed_users":[]}
+  {"platform":"telegram","enabled":true,"running":true,"has_config":true,"has_token":true,"base_url":"https://api.telegram.org","parse_mode":"Markdown","allowed_users":[]}
 ]}
 ```
 
@@ -65,14 +66,16 @@ Platform   Enabled   Running   Details
 feishu     ✅ yes    ✅ yes    app_id: cli_xxx...
 wecom      ❌ no     ❌ no     (not configured)
 weixin     ✅ yes    ✅ yes    has_token: true
-discord    ✅ yes    ✅ yes    has_bot_token: true
+discord    ✅ yes    ✅ yes    has_token: true
+telegram   ✅ yes    ✅ yes    has_token: true
 ─────────────────────────────────────────────────────
 ```
 
 - Feishu: show `app_id` (truncated to 12 chars)
 - WeCom: show `bot_id` if present
 - Weixin: show `has_token: true/false` (token value is never displayed)
-- Discord: show `has_bot_token: true/false` (token value is never displayed)
+- Discord: show `has_token: true/false` (token value is never displayed)
+- Telegram: show `has_token: true/false` (bot token is never displayed)
 
 If the API is unreachable or returns an empty list: "No channels configured yet. Run `/channel-setup setup` to get started."
 
@@ -87,6 +90,7 @@ Ask:
 > 2. WeCom (Enterprise WeChat)
 > 3. Weixin (Personal WeChat via iLink QR login)
 > 4. Discord
+> 5. Telegram (Bot API)
 
 ---
 
@@ -408,6 +412,43 @@ If the reply is malformed (missing either field), apologise briefly and ask agai
    On exit 0: "✅ Discord channel configured! Bot is in `<guild_name>`. Mention it or DM it from any channel."
    On timeout: offer to re-open the invite URL — the bot token stays valid.
 
+### Telegram setup (Bot API)
+
+Telegram setup is by far the simplest — no browser automation, no QR. The user creates a bot via @BotFather and pastes the token here.
+
+#### Step 1 — Create a bot via @BotFather
+
+Tell the user:
+
+> Open Telegram and start a chat with **@BotFather** (https://t.me/BotFather). Send `/newbot`, choose a display name and a username ending in `bot`. BotFather will reply with an HTTP API token that looks like `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ`. Paste the token here.
+>
+> Optional: if your network blocks `api.telegram.org`, also tell me the base URL of your self-hosted Bot API server (e.g. `https://my-tg-proxy.example.com`). Otherwise leave it blank.
+
+Wait for the user's reply. Parse the token (matches `^\d+:[\w-]{30,}$`).
+
+#### Step 2 — Save credentials and validate
+
+Call the server API. It calls `getMe` against the Bot API to validate the token before persisting:
+
+```bash
+curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/channels/telegram \
+  -H "Content-Type: application/json" \
+  -d '{"bot_token":"<TOKEN>","base_url":"<BASE_URL_OR_OMIT>"}'
+```
+
+- `200 { "ok": true }` — token validated and saved. The adapter starts long-polling immediately.
+- `422 { "ok": false, "error": "..." }` — show the error (commonly "Unauthorized" → wrong token) and offer to retry.
+
+On success:
+
+> ✅ Telegram channel configured. Open your bot in Telegram and send any message to start chatting. In group chats, the bot only replies when you @-mention it.
+
+#### Notes
+
+- **Group chats**: Telegram bots respond only when @-mentioned or directly replied to (matches Feishu behaviour). For unrestricted reading in groups, the bot owner must disable "Group Privacy" in @BotFather (`/mybots → Bot Settings → Group Privacy → Turn off`), but `@-mention only` is recommended to avoid spam.
+- **Self-hosted Bot API**: set `base_url` when `api.telegram.org` is unreachable. See https://github.com/tdlib/telegram-bot-api for the official self-hosted server.
+- **`allowed_users`**: restrict which Telegram user IDs the bot will respond to. Find a user's numeric ID by messaging @userinfobot.
+
 ---
 
 ## `enable`
@@ -458,16 +499,23 @@ Check each item, report ✅ / ❌ with remediation:
    - WeCom: `bot_id`, `secret` present and non-empty
    - Weixin: `token` present and non-empty in `channels.yml`
    - Discord: `bot_token` present and non-empty in `channels.yml`
+   - Telegram: `bot_token` present and non-empty
 3. **Feishu credentials** (if enabled) — run the token API call, check `code=0`.
 4. **Weixin token** (if enabled) — call `GET /api/channels` and check `has_token: true` for the weixin entry.
-5. **WeCom credentials** (if enabled) — search today's log:
+5. **Telegram credentials** (if enabled) — call `getMe` against the Bot API:
+   ```bash
+   BOT_TOKEN=$(ruby -ryaml -e 'puts (YAML.load_file(File.expand_path("~/.clacky/channels.yml"))["channels"]["telegram"]["bot_token"] rescue "")')
+   BASE_URL=$(ruby -ryaml -e 'puts (YAML.load_file(File.expand_path("~/.clacky/channels.yml"))["channels"]["telegram"]["base_url"] || "https://api.telegram.org" rescue "https://api.telegram.org")')
+   curl -s "$BASE_URL/bot$BOT_TOKEN/getMe" | grep -q '"ok":true' && echo "✅ Telegram OK" || echo "❌ Telegram credentials rejected by getMe"
+   ```
+6. **WeCom credentials** (if enabled) — search today's log:
    ```bash
    grep -iE "wecom adapter loop started|WeCom authentication failed|WeCom WS error response|WecomAdapter" \
      ~/.clacky/logger/clacky-$(date +%Y-%m-%d).log
    ```
    - `WeCom authentication failed` or non-zero errcode → ❌ "WeCom credentials incorrect"
    - `adapter loop started` with no auth error → ✅
-6. **Discord credentials** (if enabled) — call `GET /api/channels` and check `has_bot_token: true`. Search today's log:
+6. **Discord credentials** (if enabled) — call `GET /api/channels` and check `has_token: true`. Search today's log:
    ```bash
    grep -iE "DiscordAdapter|discord-gateway|/users/@me failed" \
      ~/.clacky/logger/clacky-$(date +%Y-%m-%d).log
@@ -484,7 +532,7 @@ Proactively send a message to a user via an IM channel adapter.
 ### Parse the request
 
 Extract two things from the user's instruction:
-- **platform** — one of `weixin`, `feishu`, `wecom`, `discord`
+- **platform** — one of `weixin`, `feishu`, `wecom`, `discord`, `telegram`
 - **message** — the text content to send
 
 If the platform cannot be inferred, ask the user to clarify.
@@ -524,7 +572,7 @@ curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/channels/
 ### Constraints & notes
 
 - **Weixin (iLink protocol)**: Every outbound message requires a `context_token` that is obtained from the most recent inbound message from that user. The token is cached in memory and reset on server restart. If the server was restarted since the user last wrote, the token is gone and the send will fail — the user must message the bot again.
-- **Feishu / WeCom / Discord**: No context token required. As long as the adapter is running and the `user_id` / `chat_id` (or Discord channel/user id) is valid, the message will be delivered.
+- **Feishu / WeCom / Discord / Telegram**: No per-message token required. As long as the adapter is running and the `user_id` / `chat_id` (or Discord channel/user id) is valid, the message will be delivered. For Telegram specifically, the `user_id` must be a Telegram chat_id that the bot can write to — the user must have sent at least one message to the bot first.
 - This feature is intended for **proactive notifications** (e.g. task completion, reminders). It is not a replacement for the normal reply flow triggered by inbound messages.
 
 ---

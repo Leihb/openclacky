@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Telegram channel adapter.** New IM channel adapter that connects openclacky to Telegram via the Bot API. Setup is just a bot token from @BotFather — no browser automation, no QR. Mirrors the existing Feishu / WeCom / Weixin contract: HTTPS long-poll inbound, `sendMessage` / `sendPhoto` / `sendDocument` outbound, photo + document download routed through the standard FileProcessor + vision pipeline, group `@-mention` filtering and `allowed_users` whitelist. `base_url` is configurable to support self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) for networks where `api.telegram.org` is unreachable. Frontend Channels panel, `channel-setup` skill, English/Chinese i18n, and `app.css` logo class added. 32 new specs in `spec/clacky/server/channel/adapters/telegram/`.
+
 ## [1.0.4] - 2026-05-11
 
 ### Added

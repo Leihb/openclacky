@@ -111,7 +111,13 @@ module Clacky
         }.compact
       when :discord
         {
+          bot_token:     raw["bot_token"]
+        }.compact
+      when :telegram
+        {
           bot_token:     raw["bot_token"],
+          base_url:      raw["base_url"],
+          parse_mode:    raw.key?("parse_mode") ? raw["parse_mode"] : "Markdown",
           allowed_users: raw["allowed_users"]
         }.compact
       else
