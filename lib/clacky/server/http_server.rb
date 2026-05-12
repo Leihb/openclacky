@@ -1689,6 +1689,13 @@ module Clacky
             has_token:         !raw["token"].to_s.strip.empty?,
             token_updated_at:  raw["token_updated_at"]  # Unix timestamp, nil if never set
           }
+        when :telegram
+          {
+            base_url:      raw["base_url"] || Clacky::Channel::Adapters::Telegram::ApiClient::DEFAULT_BASE_URL,
+            parse_mode:    raw.key?("parse_mode") ? raw["parse_mode"] : "Markdown",
+            allowed_users: raw["allowed_users"] || [],
+            has_token:     !raw["bot_token"].to_s.strip.empty?
+          }
         else
           {}
         end

@@ -109,6 +109,13 @@ module Clacky
           base_url:      raw["base_url"],
           allowed_users: raw["allowed_users"]
         }.compact
+      when :telegram
+        {
+          bot_token:     raw["bot_token"],
+          base_url:      raw["base_url"],
+          parse_mode:    raw.key?("parse_mode") ? raw["parse_mode"] : "Markdown",
+          allowed_users: raw["allowed_users"]
+        }.compact
       else
         # Unknown platform — pass all non-meta keys as symbol-keyed hash
         raw.reject { |k, _| k == "enabled" }
