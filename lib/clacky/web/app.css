@@ -5764,6 +5764,11 @@ body.setup-mode[data-theme="dark"] {
   color: #fff;
 }
 
+.channel-logo-discord {
+  background: linear-gradient(135deg, #5865f2, #4752c4);
+  color: #fff;
+}
+
 .channel-card-name {
   font-size: 15px;
   font-weight: 600;

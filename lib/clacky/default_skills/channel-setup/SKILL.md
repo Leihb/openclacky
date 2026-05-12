@@ -1,11 +1,11 @@
 ---
 name: channel-setup
 description: |
-  Configure IM platform channels (Feishu, WeCom, Weixin) for openclacky.
+  Configure IM platform channels (Feishu, WeCom, Weixin, Discord) for openclacky.
   Uses browser automation for navigation; guides the user to paste credentials and perform UI steps.
-  Trigger on: "channel setup", "setup feishu", "setup wecom", "setup weixin", "setup wechat", "channel config",
-  "channel status", "channel enable", "channel disable", "channel reconfigure", "channel doctor",
-  "send message to weixin", "send message to feishu", "send message to wecom".
+  Trigger on: "channel setup", "setup feishu", "setup wecom", "setup weixin", "setup wechat", "setup discord",
+  "channel config", "channel status", "channel enable", "channel disable", "channel reconfigure", "channel doctor",
+  "send message to weixin", "send message to feishu", "send message to wecom", "send message to discord".
   Subcommands: setup, status, enable <platform>, disable <platform>, reconfigure, doctor, send.
 argument-hint: "setup | status | enable <platform> | disable <platform> | reconfigure | doctor | send <platform> <message>"
 allowed-tools:
@@ -28,13 +28,13 @@ Configure IM platform channels for openclacky.
 
 | User says | Subcommand |
 |---|---|
-| `channel setup`, `setup feishu`, `setup wecom`, `setup weixin`, `setup wechat` | setup |
+| `channel setup`, `setup feishu`, `setup wecom`, `setup weixin`, `setup wechat`, `setup discord` | setup |
 | `channel status` | status |
-| `channel enable feishu/wecom/weixin` | enable |
-| `channel disable feishu/wecom/weixin` | disable |
+| `channel enable feishu/wecom/weixin/discord` | enable |
+| `channel disable feishu/wecom/weixin/discord` | disable |
 | `channel reconfigure` | reconfigure |
 | `channel doctor` | doctor |
-| `send <message> to weixin/feishu/wecom` | send |
+| `send <message> to weixin/feishu/wecom/discord` | send |
 
 ---
 
@@ -51,7 +51,8 @@ Response shape (example):
 {"channels":[
   {"platform":"feishu","enabled":true,"running":true,"has_config":true,"app_id":"cli_xxx","domain":"https://open.feishu.cn","allowed_users":[]},
   {"platform":"wecom","enabled":false,"running":false,"has_config":false,"bot_id":""},
-  {"platform":"weixin","enabled":true,"running":true,"has_config":true,"has_token":true,"base_url":"https://ilinkai.weixin.qq.com","allowed_users":[]}
+  {"platform":"weixin","enabled":true,"running":true,"has_config":true,"has_token":true,"base_url":"https://ilinkai.weixin.qq.com","allowed_users":[]},
+  {"platform":"discord","enabled":true,"running":true,"has_config":true,"has_bot_token":true,"allowed_users":[]}
 ]}
 ```
 
@@ -64,12 +65,14 @@ Platform   Enabled   Running   Details
 feishu     ✅ yes    ✅ yes    app_id: cli_xxx...
 wecom      ❌ no     ❌ no     (not configured)
 weixin     ✅ yes    ✅ yes    has_token: true
+discord    ✅ yes    ✅ yes    has_bot_token: true
 ─────────────────────────────────────────────────────
 ```
 
 - Feishu: show `app_id` (truncated to 12 chars)
 - WeCom: show `bot_id` if present
 - Weixin: show `has_token: true/false` (token value is never displayed)
+- Discord: show `has_bot_token: true/false` (token value is never displayed)
 
 If the API is unreachable or returns an empty list: "No channels configured yet. Run `/channel-setup setup` to get started."
 
@@ -83,6 +86,7 @@ Ask:
 > 1. Feishu
 > 2. WeCom (Enterprise WeChat)
 > 3. Weixin (Personal WeChat via iLink QR login)
+> 4. Discord
 
 ---
 
@@ -344,6 +348,68 @@ Tell the user while waiting:
 
 ---
 
+### Discord setup
+
+Discord requires manual portal interaction (hCaptcha gates Application creation). The browser just navigates the user to the portal; the user clicks through and pastes the bot token + app id back.
+
+#### Step 1 — Open the developer portal
+
+Get the portal URL from the script and open it in the browser:
+
+```bash
+PORTAL_URL=$(ruby "SKILL_DIR/discord_setup.rb" --portal-url)
+```
+
+Open it: `browser(action="navigate", url="<PORTAL_URL>")`. If the browser tool is not configured, invoke `browser-setup` first, then retry.
+
+#### Step 2 — Guide the user through the portal (one round-trip)
+
+Tell the user **all** of the following in a single message, then call `request_user_feedback` to collect the values in one reply:
+
+> In the Discord Developer Portal I just opened:
+>
+> 1. Click **New Application** (top-right). Name it whatever you like (e.g. "Open Clacky"), check the ToS box, click **Create**.
+> 2. In the left nav click **Bot**.
+> 3. Scroll down to **Privileged Gateway Intents** and turn on **MESSAGE CONTENT INTENT**, then click **Save Changes**.
+> 4. Scroll up, click **Reset Token** → **Yes, do it!**. Click **Copy** to copy the bot token. (This is the only time the token is shown — don't navigate away before copying.)
+> 5. In the left nav click **General Information**. Copy the **Application ID**.
+>
+> Paste both values back here in this format (one line):
+>
+> `token=YOUR_BOT_TOKEN app_id=YOUR_APPLICATION_ID`
+
+If the user is chatting in a non-English language, append the localized label in parens after each bolded English button name (e.g. `**Bot**（机器人）`). The English label stays primary — it's what they physically click in the portal.
+
+Use `request_user_feedback` to collect the reply. Parse with tolerant regex (`token=\S+`, `app_id=\d+`).
+
+If the reply is malformed (missing either field), apologise briefly and ask again with the exact same format reminder. Up to 3 retries; after that, surface the original message and stop.
+
+#### Step 3 — Validate, save, invite, wait
+
+1. Validate the token and save credentials:
+   ```bash
+   ruby "SKILL_DIR/discord_setup.rb" --validate "<BOT_TOKEN>"
+   ```
+   On success the script prints `{"bot_id":"...","username":"..."}` and the adapter starts.
+
+2. Generate the invite URL using the application id from Step 2:
+   ```bash
+   ruby "SKILL_DIR/discord_setup.rb" --invite-url "<APP_ID>"
+   ```
+   Open it: `browser(action="navigate", url="<INVITE_URL>")`. Tell the user:
+   > Pick your server from the dropdown → **Continue** → **Authorize**. I'll detect when the bot joins.
+   >
+   > If the dropdown is empty, you don't have a server yet — open <https://discord.com/channels/@me>, click **Add a Server** (the **+** button on the left sidebar) → **Create My Own** → **For me and my friends** → name it → **Create**, then re-open the invite link.
+
+3. Wait for the bot to join a guild (long-poll, 10 min timeout). Run with `timeout: 620`:
+   ```bash
+   ruby "SKILL_DIR/discord_setup.rb" --watch-guild
+   ```
+   On exit 0: "✅ Discord channel configured! Bot is in `<guild_name>`. Mention it or DM it from any channel."
+   On timeout: offer to re-open the invite URL — the bot token stays valid.
+
+---
+
 ## `enable`
 
 Call the server API to re-enable the platform (this reads from disk, sets enabled, saves, and hot-reloads):
@@ -391,6 +457,7 @@ Check each item, report ✅ / ❌ with remediation:
    - Feishu: `app_id`, `app_secret` present and non-empty
    - WeCom: `bot_id`, `secret` present and non-empty
    - Weixin: `token` present and non-empty in `channels.yml`
+   - Discord: `bot_token` present and non-empty in `channels.yml`
 3. **Feishu credentials** (if enabled) — run the token API call, check `code=0`.
 4. **Weixin token** (if enabled) — call `GET /api/channels` and check `has_token: true` for the weixin entry.
 5. **WeCom credentials** (if enabled) — search today's log:
@@ -400,6 +467,13 @@ Check each item, report ✅ / ❌ with remediation:
    ```
    - `WeCom authentication failed` or non-zero errcode → ❌ "WeCom credentials incorrect"
    - `adapter loop started` with no auth error → ✅
+6. **Discord credentials** (if enabled) — call `GET /api/channels` and check `has_bot_token: true`. Search today's log:
+   ```bash
+   grep -iE "DiscordAdapter|discord-gateway|/users/@me failed" \
+     ~/.clacky/logger/clacky-$(date +%Y-%m-%d).log
+   ```
+   - `/users/@me failed` → ❌ "Discord token invalid or revoked — re-run setup"
+   - `authenticated as` with no error → ✅
 
 ---
 
@@ -410,7 +484,7 @@ Proactively send a message to a user via an IM channel adapter.
 ### Parse the request
 
 Extract two things from the user's instruction:
-- **platform** — one of `weixin`, `feishu`, `wecom`
+- **platform** — one of `weixin`, `feishu`, `wecom`, `discord`
 - **message** — the text content to send
 
 If the platform cannot be inferred, ask the user to clarify.
@@ -450,7 +524,7 @@ curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/channels/
 ### Constraints & notes
 
 - **Weixin (iLink protocol)**: Every outbound message requires a `context_token` that is obtained from the most recent inbound message from that user. The token is cached in memory and reset on server restart. If the server was restarted since the user last wrote, the token is gone and the send will fail — the user must message the bot again.
-- **Feishu / WeCom**: No token required. As long as the adapter is running and the `user_id` / `chat_id` is valid, the message will be delivered.
+- **Feishu / WeCom / Discord**: No context token required. As long as the adapter is running and the `user_id` / `chat_id` (or Discord channel/user id) is valid, the message will be delivered.
 - This feature is intended for **proactive notifications** (e.g. task completion, reminders). It is not a replacement for the normal reply flow triggered by inbound messages.
 
 ---

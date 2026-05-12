@@ -109,6 +109,11 @@ module Clacky
           base_url:      raw["base_url"],
           allowed_users: raw["allowed_users"]
         }.compact
+      when :discord
+        {
+          bot_token:     raw["bot_token"],
+          allowed_users: raw["allowed_users"]
+        }.compact
       else
         # Unknown platform — pass all non-meta keys as symbol-keyed hash
         raw.reject { |k, _| k == "enabled" }
