@@ -52,11 +52,6 @@ module Clacky
         begin
           expanded_path = base_path
 
-          # Initialize gitignore parser
-          gitignore_path = Clacky::Utils::FileIgnoreHelper.find_gitignore(expanded_path)
-          gitignore = gitignore_path ? Clacky::GitignoreParser.new(gitignore_path) : nil
-
-          # Track skipped files
           skipped = {
             binary: 0,
             too_large: 0,
@@ -64,8 +59,6 @@ module Clacky
           }
 
           # Auto-expand bare patterns (no slash, no **) to recursive search.
-          # e.g. "*install*" -> "**/*install*", "*.rb" -> "**/*.rb"
-          # This avoids surprising empty results when files are in subdirectories.
           effective_pattern = if !File.absolute_path?(pattern) &&
                                   !pattern.include?("/") &&
                                   !pattern.start_with?("**")
@@ -74,48 +67,28 @@ module Clacky
                                 pattern
                               end
 
-          # Build full pattern - handle absolute paths correctly
-          full_pattern = if File.absolute_path?(effective_pattern)
-                          effective_pattern
-                        else
-                          File.join(base_path, effective_pattern)
-                        end
-          # Always-ignored directory names that should never appear in results
-          always_ignored_dirs = Clacky::Utils::FileIgnoreHelper::ALWAYS_IGNORED_DIRS
+          fnmatch_flags = File::FNM_PATHNAME | File::FNM_DOTMATCH
 
-          all_matches = Dir.glob(full_pattern, File::FNM_DOTMATCH)
-                           .map { |p| p.encoding == Encoding::UTF_8 && p.valid_encoding? ? p : p.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}") }
-                           .reject { |path| File.directory?(path) }
-                           .reject { |path| path.end_with?(".", "..") }
-                           .reject do |path|
-                             # Fast path: reject files inside always-ignored dirs by path component
-                             parts = path.split(File::SEPARATOR)
-                             parts.any? { |part| always_ignored_dirs.include?(part) }
-                           end
+          matches = []
+          Clacky::Utils::FileIgnoreHelper.walk_files(expanded_path, skipped: skipped) do |file|
+            relative = file[(expanded_path.length + 1)..]
 
-          # Filter out ignored, binary, and too large files
-          matches = all_matches.select do |file|
-            # Skip if file should be ignored (unless it's a config file)
-            if Clacky::Utils::FileIgnoreHelper.should_ignore_file?(file, expanded_path, gitignore) && 
-               !Clacky::Utils::FileIgnoreHelper.is_config_file?(file)
-              skipped[:ignored] += 1
-              next false
+            unless File.fnmatch(effective_pattern, relative, fnmatch_flags)
+              next
             end
 
-            # Skip binary files (but allow known document types like PDF/Office)
             if Clacky::Utils::FileProcessor.binary_file_path?(file) &&
                !Clacky::Utils::FileProcessor.glob_allowed_binary?(file)
               skipped[:binary] += 1
-              next false
+              next
             end
 
-            # Skip files that are too large
             if File.size(file) > MAX_FILE_SIZE
               skipped[:too_large] += 1
-              next false
+              next
             end
 
-            true
+            matches << file
           end
 
           # Sort by modification time (most recent first)

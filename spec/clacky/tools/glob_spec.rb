@@ -107,6 +107,48 @@ RSpec.describe Clacky::Tools::Glob do
       end
     end
 
+    it "respects nested .gitignore in subdirectories" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "frontend", "dist"))
+        FileUtils.mkdir_p(File.join(dir, "frontend", "src"))
+        FileUtils.mkdir_p(File.join(dir, "backend"))
+
+        File.write(File.join(dir, "frontend", ".gitignore"), "dist/\n")
+
+        File.write(File.join(dir, "frontend", "dist", "bundle.js"), "compiled")
+        File.write(File.join(dir, "frontend", "src", "app.js"), "source")
+        File.write(File.join(dir, "backend", "server.rb"), "server")
+
+        result = tool.execute(pattern: "**/*", base_path: dir, limit: 100)
+
+        expect(result[:error]).to be_nil
+        basenames = result[:matches].map { |f| File.basename(f) }
+        expect(basenames).to include("app.js", "server.rb")
+        expect(basenames).not_to include("bundle.js")
+      end
+    end
+
+    it "respects root .gitignore and nested .gitignore together" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "node_modules", "pkg"))
+        FileUtils.mkdir_p(File.join(dir, "packages", "ui", "build"))
+        FileUtils.mkdir_p(File.join(dir, "packages", "ui", "src"))
+
+        File.write(File.join(dir, ".gitignore"), "node_modules/\n")
+        File.write(File.join(dir, "packages", "ui", ".gitignore"), "build/\n")
+
+        File.write(File.join(dir, "node_modules", "pkg", "index.js"), "dep")
+        File.write(File.join(dir, "packages", "ui", "build", "out.js"), "compiled")
+        File.write(File.join(dir, "packages", "ui", "src", "app.js"), "source")
+
+        result = tool.execute(pattern: "**/*.js", base_path: dir, limit: 100)
+
+        expect(result[:error]).to be_nil
+        filenames = result[:matches].map { |f| File.basename(f) }
+        expect(filenames).to eq(["app.js"])
+      end
+    end
+
     context "auto-completion for bare patterns (no slash, no **)" do
       it "auto-expands bare filename pattern to recursive search across subdirectories" do
         Dir.mktmpdir do |dir|

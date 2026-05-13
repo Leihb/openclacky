@@ -100,10 +100,6 @@ module Clacky
           regex_options = case_insensitive ? Regexp::IGNORECASE : 0
           regex = Regexp.new(pattern, regex_options)
 
-          # Initialize gitignore parser
-          gitignore_path = Clacky::Utils::FileIgnoreHelper.find_gitignore(expanded_path)
-          gitignore = gitignore_path ? Clacky::GitignoreParser.new(gitignore_path) : nil
-
           results = []
           total_matches = 0
           files_searched = 0
@@ -114,27 +110,22 @@ module Clacky
           }
           truncation_reason = nil
 
-          # Get files to search
           files = if File.file?(expanded_path)
                     [expanded_path]
                   else
-                    Dir.glob(File.join(expanded_path, file_pattern))
-                       .select { |f| File.file?(f) }
+                    fnmatch_flags = File::FNM_PATHNAME | File::FNM_DOTMATCH
+                    collected = []
+                    Clacky::Utils::FileIgnoreHelper.walk_files(expanded_path, skipped: skipped) do |f|
+                      relative = f[(expanded_path.length + 1)..]
+                      collected << f if File.fnmatch(file_pattern, relative, fnmatch_flags)
+                    end
+                    collected
                   end
 
-          # Search each file
           files.each do |file|
-            # Check if we've searched enough files
             if files_searched >= max_files_to_search
               truncation_reason ||= "max_files_to_search limit reached"
               break
-            end
-
-            # Skip if file should be ignored (unless it's a config file)
-            if Clacky::Utils::FileIgnoreHelper.should_ignore_file?(file, expanded_path, gitignore) &&
-               !Clacky::Utils::FileIgnoreHelper.is_config_file?(file)
-              skipped[:ignored] += 1
-              next
             end
 
             # Skip binary files

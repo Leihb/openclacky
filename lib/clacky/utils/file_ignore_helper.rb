@@ -116,6 +116,55 @@ module Clacky
         CONFIG_FILE_PATTERNS.any? { |pattern| file.match?(pattern) }
       end
 
+      # Walk a directory tree, pruning ignored directories early.
+      # Yields each non-ignored file path. Supports nested .gitignore files.
+      # @param skipped [Hash, nil] If provided, increments :ignored for each gitignore-skipped entry.
+      def self.walk_files(base_path, gitignore: nil, skipped: nil, &block)
+        return enum_for(:walk_files, base_path, gitignore: gitignore, skipped: skipped) unless block_given?
+
+        root_gitignore = gitignore || begin
+          gi_path = find_gitignore(base_path)
+          gi_path ? Clacky::GitignoreParser.new(gi_path) : nil
+        end
+
+        _walk_recursive(base_path, base_path, root_gitignore, skipped, &block)
+      end
+
+      def self._walk_recursive(dir, base_path, gitignore, skipped, &block)
+        child_gitignore_path = File.join(dir, ".gitignore")
+        if dir != base_path && File.exist?(child_gitignore_path)
+          gitignore ||= Clacky::GitignoreParser.new(nil)
+          relative_dir = dir[(base_path.length + 1)..]
+          gitignore.merge!(child_gitignore_path, prefix: relative_dir)
+        end
+
+        begin
+          entries = Dir.children(dir)
+        rescue Errno::EACCES, Errno::ENOENT
+          return
+        end
+
+        entries.sort.each do |name|
+          full = File.join(dir, name)
+          relative = full[(base_path.length + 1)..]
+
+          if File.directory?(full)
+            next if ALWAYS_IGNORED_DIRS.include?(name)
+            if gitignore&.ignored?("#{relative}/") || should_ignore_file?(full, base_path, gitignore)
+              next
+            end
+            _walk_recursive(full, base_path, gitignore, skipped, &block)
+          else
+            if !is_config_file?(full) && should_ignore_file?(full, base_path, gitignore)
+              skipped[:ignored] += 1 if skipped
+              next
+            end
+            yield full
+          end
+        end
+      end
+      private_class_method :_walk_recursive
+
     end
   end
 end
