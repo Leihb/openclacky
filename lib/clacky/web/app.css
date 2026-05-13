@@ -1049,7 +1049,7 @@ body {
   border-radius: 6px;
   border: 1px solid transparent;
   transition: background .2s ease;
-  margin-bottom: 4px;
+  margin: 0 8px 4px;
 }
 /* Default: secondary text color */
 .task-item .task-name,
@@ -5744,14 +5744,22 @@ body.setup-mode[data-theme="dark"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
-  font-weight: 700;
   flex-shrink: 0;
 }
 
+.channel-logo svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+
 .channel-logo-feishu {
-  background: linear-gradient(135deg, #1456f0, #0099ff);
-  color: #fff;
+  background: transparent;
+}
+
+.channel-logo-feishu svg {
+  width: 32px;
+  height: 32px;
 }
 
 .channel-logo-wecom {
@@ -5854,6 +5862,17 @@ body.setup-mode[data-theme="dark"] {
   font-weight: 500;
   border: none;
   transition: background 0.15s, opacity 0.15s;
+}
+
+/* Test button uses an outline / ghost style so it does not compete with the primary action */
+.btn-channel-test {
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-primary);
+}
+.btn-channel-test:hover {
+  background: var(--color-border-secondary);
+  color: var(--color-text-primary);
 }
 
 .btn-channel-test:disabled,
