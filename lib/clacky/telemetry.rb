@@ -67,22 +67,7 @@ module Clacky
       end
 
       private def resolve_device_id(brand)
-        if brand.device_id && !brand.device_id.empty?
-          brand.device_id
-        else
-          generate_anonymous_device_id
-        end
-      end
-
-      # Generate an anonymous device fingerprint that is stable for the same
-      # machine/user but does not reveal identifiable information.
-      private def generate_anonymous_device_id
-        components = [
-          Socket.gethostname,
-          ENV["USER"] || ENV["USERNAME"] || "",
-          RUBY_PLATFORM
-        ]
-        Digest::SHA256.hexdigest(components.join(":"))
+        brand.device_id
       end
 
       # Send a POST to the telemetry endpoint in a background thread.

@@ -76,13 +76,28 @@ module Clacky
 
     # Load brand configuration from ~/.clacky/brand.yml.
     # Returns an empty BrandConfig (no brand) if the file does not exist.
+    # Always ensures a stable device_id is present and persisted.
     def self.load
-      return new({}) unless File.exist?(BRAND_FILE)
+      if File.exist?(BRAND_FILE)
+        data = YAML.safe_load(File.read(BRAND_FILE)) || {}
+      else
+        data = {}
+      end
 
-      data = YAML.safe_load(File.read(BRAND_FILE)) || {}
-      new(data)
+      instance = new(data)
+      instance.ensure_device_id!
+      instance
     rescue StandardError
-      new({})
+      instance = new({})
+      instance.ensure_device_id!
+      instance
+    end
+
+    def ensure_device_id!
+      return if @device_id && !@device_id.strip.empty?
+
+      @device_id = generate_device_id
+      save
     end
 
     # Returns true when this installation has a product name configured.
