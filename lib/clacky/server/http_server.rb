@@ -3521,6 +3521,14 @@ module Clacky
       # session persistence, and idle compression timer lifecycle.
       # Yields to the caller to perform the actual agent.run call.
       private def run_agent_task(session_id, agent, &task)
+        if @registry.running_full?
+          broadcast(session_id, { type: "error", session_id: session_id,
+                                  message: "Too many concurrent tasks (max #{SessionRegistry::MAX_RUNNING_AGENTS}), please try again later" })
+          return
+        end
+
+        @registry.evict_excess_idle!
+
         idle_timer = nil
         @registry.with_session(session_id) { |s| idle_timer = s[:idle_timer] }
 

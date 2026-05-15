@@ -979,9 +979,12 @@ module Clacky
         next unless mime_type && base64_data
 
         data_url = "data:#{mime_type};base64,#{base64_data}"
+        label = path ? File.basename(path.to_s) : "image"
+        image_block = { type: "image_url", image_url: { url: data_url } }
+        image_block[:image_path] = path if path
         image_content = [
-          { type: "text",      text: "[Image from file_reader: #{File.basename(path.to_s)}]" },
-          { type: "image_url", image_url: { url: data_url } }
+          { type: "text", text: "[Image: #{label}]" },
+          image_block
         ]
         @history.append({
           role:             "user",

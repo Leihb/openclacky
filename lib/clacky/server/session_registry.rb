@@ -17,6 +17,8 @@ module Clacky
     # Thread safety: all public methods are protected by a Mutex.
     class SessionRegistry
       SESSION_TIMEOUT = 24 * 60 * 60 # 24 hours of inactivity before cleanup
+      MAX_RUNNING_AGENTS = 10
+      MAX_IDLE_AGENTS    = 10
 
       # session_manager: Clacky::SessionManager instance
       # session_restorer: callable(session_data) → session_id — builds agent + wires into registry
@@ -319,6 +321,50 @@ module Clacky
           @sessions.delete_if do |_id, session|
             session[:status] == :idle && session[:updated_at] < cutoff
           end
+        end
+      end
+
+      def count_by_status(status)
+        @mutex.synchronize do
+          @sessions.count { |_, s| s[:status] == status }
+        end
+      end
+
+      def running_full?
+        count_by_status(:running) >= MAX_RUNNING_AGENTS
+      end
+
+      # Evict oldest idle agents beyond MAX_IDLE_AGENTS.
+      # Persists session data to disk before releasing the agent from memory.
+      def evict_excess_idle!
+        to_evict = []
+
+        @mutex.synchronize do
+          idle = @sessions.select { |_, s| s[:status] == :idle && s[:agent] }
+                   .sort_by { |_, s| s[:updated_at] || Time.at(0) }
+
+          while idle.size > MAX_IDLE_AGENTS
+            id, session = idle.shift
+            to_evict << [id, session]
+          end
+        end
+
+        to_evict.each { |id, session| persist_and_release(id, session) }
+      end
+
+      private def persist_and_release(id, session)
+        agent = session[:agent]
+        @session_manager&.save(agent.to_session_data(status: :success)) if agent
+
+        @mutex.synchronize do
+          s = @sessions[id]
+          next unless s
+          s[:idle_timer]&.cancel
+          s[:agent] = nil
+          s[:ui] = nil
+          s[:idle_timer] = nil
+          s[:thread] = nil
+          @sessions.delete(id)
         end
       end
 

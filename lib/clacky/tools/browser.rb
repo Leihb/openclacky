@@ -108,7 +108,6 @@ module Clacky
         if action == "screenshot" && result[:image_data]
           mime_type       = result[:mime_type] || "image/png"
           image_data      = result[:image_data]
-          data_url        = "data:#{mime_type};base64,#{image_data}"
           original_path   = result[:original_path]
           compressed_path = result[:compressed_path]
 
@@ -118,10 +117,14 @@ module Clacky
                     "\n- Compressed (800px, sent to AI): #{compressed_path || 'unavailable'}"
           end
 
-          return [
-            { type: "text",      text:      text },
-            { type: "image_url", image_url: { url: data_url } }
-          ]
+          return {
+            content_string: text,
+            image_inject: {
+              mime_type: mime_type,
+              base64_data: image_data,
+              path: compressed_path || original_path
+            }
+          }
         end
 
         output = result[:output].to_s

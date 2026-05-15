@@ -178,6 +178,9 @@ module Clacky
         if formatted_result.is_a?(Hash) && formatted_result[:image_inject]
           image_inject = formatted_result[:image_inject]
           formatted_result = formatted_result.reject { |k, _| k == :image_inject }
+          if formatted_result[:content_string]
+            formatted_result = formatted_result[:content_string]
+          end
         end
 
         # If the tool returned a plain string, use it directly (avoids double-escaping).
@@ -187,7 +190,6 @@ module Clacky
         content = if formatted_result.is_a?(String)
                     formatted_result
                   elsif formatted_result.is_a?(Array)
-                    # Multipart content (e.g. screenshot image blocks) — keep as Array
                     formatted_result
                   else
                     JSON.generate(formatted_result)
