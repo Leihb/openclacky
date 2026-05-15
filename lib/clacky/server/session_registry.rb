@@ -17,16 +17,13 @@ module Clacky
     # Thread safety: all public methods are protected by a Mutex.
     class SessionRegistry
       SESSION_TIMEOUT = 24 * 60 * 60 # 24 hours of inactivity before cleanup
-      MAX_RUNNING_AGENTS = 10
-      MAX_IDLE_AGENTS    = 10
 
-      # session_manager: Clacky::SessionManager instance
-      # session_restorer: callable(session_data) → session_id — builds agent + wires into registry
-      def initialize(session_manager: nil, session_restorer: nil)
+      def initialize(session_manager: nil, session_restorer: nil, agent_config:)
         @sessions         = {}
         @mutex            = Mutex.new
         @session_manager  = session_manager
         @session_restorer = session_restorer
+        @agent_config     = agent_config
         # Tracks sessions currently being restored from disk.
         # Other threads calling ensure() for the same id will wait via @restore_cond
         # instead of seeing a half-built session (agent=nil).
@@ -330,8 +327,16 @@ module Clacky
         end
       end
 
+      def max_running_agents
+        @agent_config.max_running_agents
+      end
+
+      def max_idle_agents
+        @agent_config.max_idle_agents
+      end
+
       def running_full?
-        count_by_status(:running) >= MAX_RUNNING_AGENTS
+        count_by_status(:running) >= max_running_agents
       end
 
       # Evict oldest idle agents beyond MAX_IDLE_AGENTS.
@@ -343,7 +348,7 @@ module Clacky
           idle = @sessions.select { |_, s| s[:status] == :idle && s[:agent] }
                    .sort_by { |_, s| s[:updated_at] || Time.at(0) }
 
-          while idle.size > MAX_IDLE_AGENTS
+          while idle.size > max_idle_agents
             id, session = idle.shift
             to_evict << [id, session]
           end

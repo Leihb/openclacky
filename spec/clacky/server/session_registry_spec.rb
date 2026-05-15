@@ -6,14 +6,12 @@ require "json"
 require "time"
 
 require "clacky/session_manager"
+require "clacky/agent_config"
 require "clacky/server/session_registry"
 
-# Targeted specs for SessionRegistry#snapshot — the O(1) single-session
-# counterpart to #list used by the WS layer when pushing a fresh snapshot
-# to a client that just (re)subscribed.
 RSpec.describe Clacky::Server::SessionRegistry do
-  # Helper: materialize a minimal-but-valid session JSON on disk so
-  # session_manager.load / all_sessions can read it back.
+  let(:default_config) { Clacky::AgentConfig.new }
+
   def write_session_file(dir, session_id:, name:, created_at:, pinned: false)
     data = {
       session_id:    session_id,
@@ -42,14 +40,12 @@ RSpec.describe Clacky::Server::SessionRegistry do
                            created_at: "2026-04-02T00:00:00+00:00")
 
         manager  = Clacky::SessionManager.new(sessions_dir: dir)
-        registry = described_class.new(session_manager: manager)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
 
         from_list     = registry.list.find { |s| s[:id] == "sess_abcdef01" }
         from_snapshot = registry.snapshot("sess_abcdef01")
 
         expect(from_snapshot).not_to be_nil
-        # Keys must match 1:1 so the frontend's session_update handler can
-        # patch from either source interchangeably.
         expect(from_snapshot.keys.sort).to eq(from_list.keys.sort)
         expect(from_snapshot).to eq(from_list)
       end
@@ -58,7 +54,7 @@ RSpec.describe Clacky::Server::SessionRegistry do
     it "returns nil for an unknown session id" do
       Dir.mktmpdir("clacky_snapshot_spec") do |dir|
         manager  = Clacky::SessionManager.new(sessions_dir: dir)
-        registry = described_class.new(session_manager: manager)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
         expect(registry.snapshot("does_not_exist")).to be_nil
       end
     end
@@ -69,12 +65,11 @@ RSpec.describe Clacky::Server::SessionRegistry do
                            created_at: "2026-04-01T00:00:00+00:00")
 
         manager  = Clacky::SessionManager.new(sessions_dir: dir)
-        registry = described_class.new(session_manager: manager)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
 
         snap = registry.snapshot("sess_offline")
         expect(snap[:status]).to eq("idle")
         expect(snap[:error]).to be_nil
-        # Field types the frontend relies on
         expect(snap[:total_tasks]).to be_a(Integer)
         expect(snap[:total_cost]).to be_a(Numeric)
         expect(snap[:cost_source]).to be_a(String)
@@ -84,7 +79,7 @@ RSpec.describe Clacky::Server::SessionRegistry do
 
   describe "#count_by_status" do
     it "counts sessions with the given status" do
-      registry = described_class.new
+      registry = described_class.new(agent_config: default_config)
       registry.create(session_id: "s1")
       registry.create(session_id: "s2")
       registry.update("s1", status: :running)
@@ -95,10 +90,10 @@ RSpec.describe Clacky::Server::SessionRegistry do
   end
 
   describe "#running_full?" do
-    it "returns true when running count reaches MAX_RUNNING_AGENTS" do
-      registry = described_class.new
+    it "returns true when running count reaches default limit" do
+      registry = described_class.new(agent_config: default_config)
 
-      described_class::MAX_RUNNING_AGENTS.times do |i|
+      default_config.max_running_agents.times do |i|
         registry.create(session_id: "r#{i}")
         registry.update("r#{i}", status: :running)
       end
@@ -107,25 +102,37 @@ RSpec.describe Clacky::Server::SessionRegistry do
     end
 
     it "returns false when under the limit" do
-      registry = described_class.new
+      registry = described_class.new(agent_config: default_config)
       registry.create(session_id: "r0")
       registry.update("r0", status: :running)
 
       expect(registry.running_full?).to be false
     end
+
+    it "respects agent_config max_running_agents" do
+      config = Clacky::AgentConfig.new(max_running_agents: 2)
+      registry = described_class.new(agent_config: config)
+
+      2.times do |i|
+        registry.create(session_id: "r#{i}")
+        registry.update("r#{i}", status: :running)
+      end
+
+      expect(registry.running_full?).to be true
+    end
   end
 
   describe "#evict_excess_idle!" do
-    it "evicts oldest idle agents when exceeding MAX_IDLE_AGENTS" do
+    it "evicts oldest idle agents when exceeding default limit" do
       Dir.mktmpdir("clacky_evict_spec") do |dir|
         manager  = Clacky::SessionManager.new(sessions_dir: dir)
-        registry = described_class.new(session_manager: manager)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
 
         agent_double = double("agent", to_session_data: {
           session_id: "x", messages: [], created_at: Time.now.iso8601
         })
 
-        total = described_class::MAX_IDLE_AGENTS + 3
+        total = default_config.max_idle_agents + 3
         ids = total.times.map { |i| "evict_#{i}" }
 
         ids.each_with_index do |id, i|
@@ -138,22 +145,43 @@ RSpec.describe Clacky::Server::SessionRegistry do
 
         registry.evict_excess_idle!
 
-        expect(registry.count_by_status(:idle)).to eq(described_class::MAX_IDLE_AGENTS)
+        expect(registry.count_by_status(:idle)).to eq(default_config.max_idle_agents)
 
         ids.first(3).each do |id|
           expect(registry.exist?(id)).to be false
         end
-        ids.last(described_class::MAX_IDLE_AGENTS).each do |id|
+        ids.last(default_config.max_idle_agents).each do |id|
           expect(registry.exist?(id)).to be true
         end
       end
     end
 
+    it "respects agent_config max_idle_agents" do
+      Dir.mktmpdir("clacky_evict_spec") do |dir|
+        config = Clacky::AgentConfig.new(max_idle_agents: 2)
+        manager  = Clacky::SessionManager.new(sessions_dir: dir)
+        registry = described_class.new(session_manager: manager, agent_config: config)
+
+        agent_double = double("agent", to_session_data: {
+          session_id: "x", messages: [], created_at: Time.now.iso8601
+        })
+
+        4.times do |i|
+          registry.create(session_id: "evict_#{i}")
+          registry.with_session("evict_#{i}") { |s| s[:agent] = agent_double }
+          registry.update("evict_#{i}", status: :idle, updated_at: Time.now - (4 - i))
+        end
+
+        registry.evict_excess_idle!
+        expect(registry.count_by_status(:idle)).to eq(2)
+      end
+    end
+
     it "does not evict running agents" do
-      registry = described_class.new
+      registry = described_class.new(agent_config: default_config)
       agent_double = double("agent")
 
-      (described_class::MAX_IDLE_AGENTS + 2).times do |i|
+      (default_config.max_idle_agents + 2).times do |i|
         registry.create(session_id: "s#{i}")
         registry.with_session("s#{i}") { |s| s[:agent] = agent_double }
         registry.update("s#{i}", status: :running)
@@ -161,7 +189,7 @@ RSpec.describe Clacky::Server::SessionRegistry do
 
       registry.evict_excess_idle!
 
-      (described_class::MAX_IDLE_AGENTS + 2).times do |i|
+      (default_config.max_idle_agents + 2).times do |i|
         expect(registry.exist?("s#{i}")).to be true
       end
     end

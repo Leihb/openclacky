@@ -163,7 +163,8 @@ module Clacky
         @session_manager = Clacky::SessionManager.new(sessions_dir: sessions_dir)
         @registry        = SessionRegistry.new(
           session_manager:  @session_manager,
-          session_restorer: method(:build_session_from_data)
+          session_restorer: method(:build_session_from_data),
+          agent_config:     @agent_config
         )
         @ws_clients      = {}   # session_id => [WebSocketConnection, ...]
         @all_ws_conns    = []   # every connected WS client, regardless of session subscription
@@ -3523,7 +3524,7 @@ module Clacky
       private def run_agent_task(session_id, agent, &task)
         if @registry.running_full?
           broadcast(session_id, { type: "error", session_id: session_id,
-                                  message: "Too many concurrent tasks (max #{SessionRegistry::MAX_RUNNING_AGENTS}), please try again later" })
+                                  message: "Too many concurrent tasks (max #{@registry.max_running_agents}), please try again later" })
           return
         end
 

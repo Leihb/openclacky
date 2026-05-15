@@ -154,7 +154,8 @@ module Clacky
     attr_accessor :permission_mode, :max_tokens, :verbose,
                   :enable_compression, :enable_prompt_caching,
                   :models, :current_model_index, :current_model_id,
-                  :memory_update_enabled, :skill_evolution
+                  :memory_update_enabled, :skill_evolution,
+                  :max_running_agents, :max_idle_agents
 
     def initialize(options = {})
       @permission_mode = validate_permission_mode(options[:permission_mode])
@@ -194,6 +195,9 @@ module Clacky
       # but the rest of the codebase accesses with symbols.
       @skill_evolution = @skill_evolution.transform_keys(&:to_sym)
       @skill_evolution.transform_values! { |v| v.is_a?(Hash) ? v.transform_keys(&:to_sym) : v }
+
+      @max_running_agents = options[:max_running_agents] || 10
+      @max_idle_agents = options[:max_idle_agents] || 10
 
       # Per-session virtual model overlay.
       # When set, #current_model returns a *merged* hash (the resolved @models
@@ -368,7 +372,7 @@ module Clacky
     # These map directly to AgentConfig accessors.
     CONFIG_SETTINGS_KEYS = %w[
       enable_compression enable_prompt_caching memory_update_enabled
-      skill_evolution
+      skill_evolution max_running_agents max_idle_agents
     ].freeze
 
     # Serialize the current agent configuration to YAML.
@@ -382,7 +386,9 @@ module Clacky
         "enable_compression" => @enable_compression,
         "enable_prompt_caching" => @enable_prompt_caching,
         "memory_update_enabled" => @memory_update_enabled,
-        "skill_evolution" => @skill_evolution
+        "skill_evolution" => @skill_evolution,
+        "max_running_agents" => @max_running_agents,
+        "max_idle_agents" => @max_idle_agents
       }
       YAML.dump("settings" => settings, "models" => persistable_models)
     end
