@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-05-15
+
+### Added
+- **DingTalk channel adapter.** New IM channel adapter connects openclacky to DingTalk via Stream Mode WebSocket. Includes DingTalk API client for text/markdown messages, Device Flow QR setup script, and full Web UI integration with channel config, HTTP server routes, and i18n strings. (#112)
+- **Feishu channel-manager skill setup & onboard improvements.** Channel-manager now includes a dedicated Feishu skills installation flow (`install_feishu_skills.rb`) and updated setup instructions. Skill installation is serialized for reliability. (#122)
+- **Custom datepicker component with i18n support.** New reusable datepicker component with CSS variable theming and full English/Chinese localization, replacing browser-native date inputs. (#119)
+- **Rename sessions via modal dialog.** Session rename now uses a proper modal dialog with i18n support instead of inline editing, for a cleaner UX. (#113)
+- **Channel enable/disable toggle.** Configured channels can now be individually enabled or disabled from the Channels page without removing credentials. Distinguishes "disabled" from "not configured" in badge and hint text. (#108)
+- **Provider promo hint for OpenClacky.** When OpenClacky is selected as provider, a contextual promo hint appears below the dropdown on both settings and onboarding pages, with dark mode support and localized copy. (#109)
+- **Running config for concurrent agent limits.** New `AgentConfig` running configuration and `SessionRegistry` concurrency controls to limit the number of simultaneously active agents, preventing resource exhaustion on busy servers.
+
+### Improved
+- **Channel page and sidebar nav polish.** Visual refinements to the Channels page layout and sidebar navigation styling.
+- **Telegram group chat skill guidance.** Channel-setup skill now clarifies Privacy Mode requirements for Telegram group chats, preventing common misconfiguration. (#117)
+
+### Fixed
+- **Channel skill trigger matching.** Renamed `channel-setup` to `channel-manager` so the agent's send-message intent matches the correct skill more reliably. (C-5584, #120)
+- **Markdown image overflow in chat bubbles.** Images in assistant messages are now width-constrained to fit within the message bubble instead of overflowing. (C-5585, #118)
+- **Channel image rewriting scoped to Web UI.** Local image URL rewriting is now applied only in the Web UI context; IM channel messages use the file basename as attachment name instead. (C-5590, #115)
+- **Discord file upload.** Added multipart middleware to the Discord Faraday connection so file attachments upload correctly. (C-5589, #116)
+- **File walk respects ignore patterns.** Fixed glob/walk to apply ignore patterns before traversal, resolving cases where ignored files were still visited. (#102)
+- **Server restart kills stale PIDs.** Improved process cleanup on restart with better PID management and user-facing hints when restart fails.
+- **Device ID persistence.** Device ID is now persisted in `BrandConfig` instead of being regenerated, ensuring stable telemetry identity across restarts.
+- **Terminal markdown rendering on Ruby 4.0.** Fixed compatibility issue with Ruby 4.0's stricter method dispatch that broke terminal markdown output. (#99)
+
 ## [1.0.5] - 2026-05-12
 
 ### Added
