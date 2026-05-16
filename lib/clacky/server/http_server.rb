@@ -3156,6 +3156,7 @@ module Clacky
       # Export a session bundle as a .zip download containing:
       #   - session.json          (always)
       #   - chunk-*.md            (0..N archived conversation chunks)
+      #   - logs/clacky-YYYY-MM-DD.log  (today's logger file, if present)
       # Useful for debugging — user clicks "download" in the WebUI status bar
       # and we can ask them to attach the zip to a bug report.
       def api_export_session(session_id, res)
@@ -3176,6 +3177,12 @@ module Clacky
             # Preserve original chunk filename so the ordering (chunk-1.md, chunk-2.md, ...) is clear.
             zos.put_next_entry(File.basename(chunk_path))
             zos.write(File.binread(chunk_path))
+          end
+
+          log_path = Clacky::Logger.current_log_file
+          if log_path && File.exist?(log_path)
+            zos.put_next_entry("logs/#{File.basename(log_path)}")
+            zos.write(File.binread(log_path))
           end
         end
         buffer.rewind
