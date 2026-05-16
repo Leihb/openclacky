@@ -223,6 +223,16 @@ module Clacky
         @license_expires_at     = parse_time(data["expires_at"])
         server_device_id = data["device_id"].to_s.strip
         @device_id = server_device_id unless server_device_id.empty?
+
+        # Decide whether the new key belongs to the SAME brand as the previously
+        # activated one. If yes (e.g. trial → paid), keep the installed brand
+        # skills — they are still decryptable and the user shouldn't have to
+        # re-download. If no (switching brands), wipe them.
+        prev_package_name = @package_name
+        prev_product_name = @product_name
+        new_dist          = data["distribution"].is_a?(Hash) ? data["distribution"] : {}
+        same_brand        = brand_identity_match?(prev_package_name, prev_product_name, new_dist)
+
         # Clear ALL stale fields first, then apply fresh values from the new key.
         # Order matters: reset everything before re-assigning so no old value lingers.
         @product_name    = nil
@@ -239,10 +249,10 @@ module Clacky
         owner_uid = data["owner_user_id"]
         @license_user_id = owner_uid.to_s.strip if owner_uid && !owner_uid.to_s.strip.empty?
         apply_distribution(data["distribution"])
-        # Clear previously installed brand skills before saving the new license.
-        # Skills from the old brand are encrypted with that brand's keys — they
-        # cannot be decrypted with the new license and must be re-downloaded.
-        clear_brand_skills!
+        # Skills from a different brand are encrypted with that brand's keys —
+        # they cannot be decrypted with the new license and must be re-downloaded.
+        # Same-brand re-activation (trial→paid, key rotation) preserves them.
+        clear_brand_skills! unless same_brand
         save
         { success: true, message: "License activated successfully!", product_name: @product_name,
           user_id: @license_user_id, data: data }
@@ -268,15 +278,19 @@ module Clacky
 
       # Always derive product_name fresh from the key in mock mode,
       # so switching keys produces a different brand each time.
-      user_id       = parse_user_id_from_key(@license_key)
-      @product_name = "Brand#{user_id}"
+      user_id            = parse_user_id_from_key(@license_key)
+      new_product_name   = "Brand#{user_id}"
+      prev_product_name  = @product_name
+      same_brand         = brand_identity_match?(@package_name, prev_product_name,
+                                                 { "product_name" => new_product_name })
+      @product_name = new_product_name
 
       @license_activated_at   = Time.now.utc
       @license_last_heartbeat = Time.now.utc
       @license_last_heartbeat_failure = nil
       @license_expires_at     = Time.now.utc + (365 * 86_400)  # 1 year from now
-      # Clear old brand skills so stale encrypted files from a previous brand don't linger
-      clear_brand_skills!
+      # Same-brand re-activation preserves installed skills; switching brands wipes them.
+      clear_brand_skills! unless same_brand
       save
 
       {
@@ -1168,6 +1182,30 @@ module Clacky
     # Instance-level delegate so fetch_brand_skills! can call version_older? directly.
     private def version_older?(installed, latest)
       self.class.version_older?(installed, latest)
+    end
+
+    # Decide whether a re-activation key targets the same brand as the
+    # currently-loaded one, so we know whether installed brand skills can stay.
+    #
+    # Identity preference, in order:
+    #   1. package_name — bundle identifier, the strongest brand signal
+    #   2. product_name — display name fallback when package_name is missing
+    #
+    # If neither is present on either side, treat as different brand (safe default:
+    # wipe skills) since we can't confirm continuity.
+    private def brand_identity_match?(prev_package_name, prev_product_name, new_dist)
+      new_dist  = {} unless new_dist.is_a?(Hash)
+      new_pkg   = new_dist["package_name"].to_s.strip
+      old_pkg   = prev_package_name.to_s.strip
+      if !new_pkg.empty? && !old_pkg.empty?
+        return new_pkg == old_pkg
+      end
+
+      new_prod  = new_dist["product_name"].to_s.strip
+      old_prod  = prev_product_name.to_s.strip
+      return new_prod == old_prod if !new_prod.empty? && !old_prod.empty?
+
+      false
     end
 
     # Apply distribution fields from API response.

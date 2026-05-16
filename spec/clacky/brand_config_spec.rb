@@ -258,6 +258,25 @@ RSpec.describe Clacky::BrandConfig do
         expect(saved["product_name"]).to eq("Brand42")
       end
     end
+
+    it "preserves installed brand skills when re-activating with the same brand identity" do
+      with_temp_brand_file do
+        config = described_class.new
+        # Initial activation — same key derives product_name "Brand42" both times.
+        config.activate_mock!("0000002A-00000007-DEADBEEF-CAFEBABE-A1B2C3D4")
+        expect(config).not_to receive(:clear_brand_skills!)
+        config.activate_mock!("0000002A-99999999-DEADBEEF-CAFEBABE-FFFFFFFF")
+      end
+    end
+
+    it "wipes installed brand skills when switching to a different brand" do
+      with_temp_brand_file do
+        config = described_class.new
+        config.activate_mock!("0000002A-00000007-DEADBEEF-CAFEBABE-A1B2C3D4")  # Brand42
+        expect(config).to receive(:clear_brand_skills!).and_call_original
+        config.activate_mock!("00000001-FFFFFFFF-DEADBEEF-CAFEBABE-00000001")  # Brand1
+      end
+    end
   end
 
   # ── #to_h ─────────────────────────────────────────────────────────────────
