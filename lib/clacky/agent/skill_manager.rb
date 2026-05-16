@@ -91,6 +91,20 @@ module Clacky
       # Keeps context tokens bounded regardless of how many skills are installed.
       MAX_CONTEXT_SKILLS = 30
 
+      # Process-wide deduper for the "skill context limit" warning so that
+      # every newly constructed Agent (sub-agents, retries, web turns…) doesn't
+      # re-emit the same line.
+      @skill_limit_warned_signatures = {}
+      @skill_limit_warn_mutex = Mutex.new
+
+      def self.warn_skill_limit_once(signature, &block)
+        @skill_limit_warn_mutex.synchronize do
+          return if @skill_limit_warned_signatures[signature]
+          @skill_limit_warned_signatures[signature] = true
+        end
+        block.call
+      end
+
       # Generate skill context - loads all auto-invocable skills allowed by the agent profile
       # @return [String] Skill context to add to system prompt
       def build_skill_context
@@ -103,17 +117,16 @@ module Clacky
         auto_invocable = all_skills.select(&:model_invocation_allowed?)
 
         # Enforce system prompt injection limit to control token usage.
-        # Warn only when the set of dropped skills *changes* — this message
-        # is otherwise emitted once per agent turn (build_skill_context is
-        # called during every system prompt assembly) and floods the log.
+        # Warn at most once per process per dropped-set signature — build_skill_context
+        # runs on every system-prompt assembly and is invoked from many short-lived
+        # Agent instances (sub-agents, web turns…), so per-instance dedup wasn't enough.
         if auto_invocable.size > MAX_CONTEXT_SKILLS
           kept    = auto_invocable.first(MAX_CONTEXT_SKILLS)
           dropped = auto_invocable.drop(MAX_CONTEXT_SKILLS)
           dropped_names = dropped.map(&:identifier)
           signature = dropped_names.sort.join(",")
 
-          if @skill_limit_warned_signature != signature
-            @skill_limit_warned_signature = signature
+          SkillManager.warn_skill_limit_once(signature) do
             Clacky::Logger.warn(
               "Skill context limit: #{auto_invocable.size} auto-invocable skills found, " \
               "only injecting first #{MAX_CONTEXT_SKILLS} " \
