@@ -739,6 +739,9 @@ module Clacky
         # Inject UI into agent
         agent.instance_variable_set(:@ui, ui_controller)
 
+        # Inject current session id into UI session bar (parity with WebUI #sib-id)
+        ui_controller.update_sessionbar(session_id: agent.session_id)
+
         # Set skill loader for command suggestions, filtered by agent profile whitelist
         ui_controller.set_skill_loader(agent.skill_loader, agent.agent_profile)
 
@@ -848,7 +851,7 @@ module Clacky
             end
             ui_controller.show_info("Session cleared. Starting fresh.")
             # Update session bar with reset values
-            ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+            ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost, session_id: agent.session_id)
             # Clear todo area display
             ui_controller.update_todos([])
             next

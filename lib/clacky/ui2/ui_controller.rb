@@ -49,6 +49,7 @@ module Clacky
         @time_machine_callback = nil
         @tasks_count = 0
         @total_cost = 0.0
+        @session_id = nil
         @last_diff_lines = nil
 
         # ── Progress subsystem (v2: owned handles, stacked) ──────────────
@@ -73,6 +74,7 @@ module Clacky
 
         # Set session bar data before initializing screen
         @input_area.update_sessionbar(
+          session_id: @session_id,
           working_dir: @config[:working_dir],
           mode: @config[:mode],
           model: @config[:model],
@@ -109,10 +111,13 @@ module Clacky
       # @param cost_source [Symbol, nil] :api / :price / :default (optional)
       # @param status [String] Workspace status ('idle' or 'working') (optional)
       # @param latency [Hash, nil] Latency metrics; accepted but not displayed in the TUI.
-      def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil)
+      # @param session_id [String, nil] Full session id; rendered as first 8 chars (parity with WebUI).
+      def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil, session_id: nil)
         @tasks_count = tasks if tasks
         @total_cost = cost if cost
+        @session_id = session_id if session_id
         @input_area.update_sessionbar(
+          session_id: @session_id,
           working_dir: @config[:working_dir],
           mode: @config[:mode],
           model: @config[:model],
@@ -1287,6 +1292,7 @@ module Clacky
 
           # Update session bar data (will be rendered by request_confirmation's render_all)
           @input_area.update_sessionbar(
+            session_id: @session_id,
             working_dir: @config[:working_dir],
             mode: @config[:mode],
             model: @config[:model],
