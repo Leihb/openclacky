@@ -481,6 +481,8 @@ module Clacky
 
         # Clear user tip when agent stops working
         @input_area.clear_user_tip
+        # Hide todo area while idle (data preserved, restored on next work)
+        @layout.hide_todos
         @layout.render_input
 
         # Don't show completion message if awaiting user feedback
@@ -826,6 +828,8 @@ module Clacky
         @last_sessionbar_status = 'idle'
         # Clear user tip when agent stops working
         @input_area.clear_user_tip
+        # Hide todo area while idle (data preserved, restored on next work)
+        @layout.hide_todos
         @layout.render_input
       end
 
@@ -848,6 +852,8 @@ module Clacky
       # Set workspace status to working (called when agent starts working)
       def set_working_status
         update_sessionbar(status: 'working')
+        # Restore todo area if it was hidden during idle
+        @layout.show_todos
         # Show a random user tip with 40% probability when agent starts working
         @input_area.show_user_tip(probability: 0.4)
         @layout.render_input

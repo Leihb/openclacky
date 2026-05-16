@@ -502,6 +502,54 @@ module Clacky
         end
       end
 
+      # Hide todo area while preserving its data; pair with show_todos.
+      def hide_todos
+        return unless @todo_area
+
+        @render_mutex.synchronize do
+          old_height  = @todo_area.height
+          old_gap_row = @gap_row
+
+          @todo_area.hide
+          new_height = @todo_area.height
+
+          if old_height != new_height
+            calculate_layout
+            ([old_gap_row, 0].max...screen.height).each do |row|
+              screen.move_cursor(row, 0)
+              screen.clear_line
+            end
+          end
+
+          render_fixed_areas
+          screen.flush
+        end
+      end
+
+      # Show todo area again after a previous hide_todos.
+      def show_todos
+        return unless @todo_area
+
+        @render_mutex.synchronize do
+          old_height  = @todo_area.height
+          old_gap_row = @gap_row
+
+          @todo_area.show
+          new_height = @todo_area.height
+
+          if old_height != new_height
+            calculate_layout
+            ([old_gap_row, 0].max...screen.height).each do |row|
+              screen.move_cursor(row, 0)
+              screen.clear_line
+            end
+          end
+
+          render_fixed_areas
+          screen.flush
+        end
+      end
+
 
 
       # -----------------------------------------------------------------------
