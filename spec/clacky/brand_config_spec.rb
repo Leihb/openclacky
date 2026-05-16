@@ -160,20 +160,26 @@ RSpec.describe Clacky::BrandConfig do
   # ── #grace_period_exceeded? ───────────────────────────────────────────────
 
   describe "#grace_period_exceeded?" do
-    it "returns false when last_heartbeat is nil" do
+    it "returns false when there is no recorded heartbeat failure" do
       config = described_class.new({})
       expect(config.grace_period_exceeded?).to be false
     end
 
-    it "returns true when grace period has elapsed" do
-      old_ts = (Time.now.utc - Clacky::BrandConfig::HEARTBEAT_GRACE_PERIOD - 1).iso8601
-      config = described_class.new("license_last_heartbeat" => old_ts)
+    it "returns false when heartbeat last_heartbeat is old but no failure has been recorded" do
+      ancient_ts = (Time.now.utc - (10 * 86_400)).iso8601
+      config = described_class.new("license_last_heartbeat" => ancient_ts)
+      expect(config.grace_period_exceeded?).to be false
+    end
+
+    it "returns true when heartbeats have been failing continuously past the grace period" do
+      old_failure = (Time.now.utc - Clacky::BrandConfig::HEARTBEAT_GRACE_PERIOD - 1).iso8601
+      config = described_class.new("license_last_heartbeat_failure" => old_failure)
       expect(config.grace_period_exceeded?).to be true
     end
 
-    it "returns false within grace period" do
-      recent_ts = (Time.now.utc - Clacky::BrandConfig::HEARTBEAT_INTERVAL - 60).iso8601
-      config = described_class.new("license_last_heartbeat" => recent_ts)
+    it "returns false when the failure streak is still within the grace period" do
+      recent_failure = (Time.now.utc - 60).iso8601
+      config = described_class.new("license_last_heartbeat_failure" => recent_failure)
       expect(config.grace_period_exceeded?).to be false
     end
   end

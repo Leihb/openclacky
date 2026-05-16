@@ -44,7 +44,7 @@ module Clacky
                 :license_expires_at, :license_last_heartbeat, :device_id,
                 :logo_url, :support_contact, :license_user_id,
                 :support_qr_url, :theme_color, :homepage_url,
-                :distribution_last_refreshed_at
+                :distribution_last_refreshed_at, :license_last_heartbeat_failure
 
     def initialize(attrs = {})
       @product_name            = attrs["product_name"]
@@ -66,6 +66,11 @@ module Clacky
       # #refresh_distribution!). Persisted to brand.yml so 24h throttling
       # survives restarts.
       @distribution_last_refreshed_at = parse_time(attrs["distribution_last_refreshed_at"])
+      # Tracks when heartbeats started failing continuously. Set on a failed
+      # heartbeat (only if currently nil), cleared on a successful one.
+      # grace_period_exceeded? uses this — NOT last_heartbeat — so a user who
+      # simply hasn't run the app in days doesn't see a stale "offline" warning.
+      @license_last_heartbeat_failure = parse_time(attrs["license_last_heartbeat_failure"])
 
       # In-memory decryption key cache: "skill_id:skill_version_id" => { key:, expires_at: }
       # Never persisted to disk. Survives across multiple skill invocations within one session.
@@ -130,16 +135,19 @@ module Clacky
       due
     end
 
-    # Returns true when the grace period for missed heartbeats has expired.
+    # Returns true when heartbeats have been failing continuously for longer
+    # than the grace period. Only considers ACTUAL failure streaks — a user
+    # who hasn't launched the app in a week is NOT in violation, since no
+    # heartbeat attempt has actually failed.
     def grace_period_exceeded?
-      if @license_last_heartbeat.nil?
-        Clacky::Logger.debug("[Brand] grace_period_exceeded? => false (no heartbeat recorded)")
+      if @license_last_heartbeat_failure.nil?
+        Clacky::Logger.debug("[Brand] grace_period_exceeded? => false (no active failure streak)")
         return false
       end
 
-      elapsed = Time.now.utc - @license_last_heartbeat
+      elapsed = Time.now.utc - @license_last_heartbeat_failure
       exceeded = elapsed >= HEARTBEAT_GRACE_PERIOD
-      Clacky::Logger.debug("[Brand] grace_period_exceeded? elapsed=#{elapsed.to_i}s grace=#{HEARTBEAT_GRACE_PERIOD}s => #{exceeded}")
+      Clacky::Logger.debug("[Brand] grace_period_exceeded? failing_since=#{@license_last_heartbeat_failure.iso8601} elapsed=#{elapsed.to_i}s grace=#{HEARTBEAT_GRACE_PERIOD}s => #{exceeded}")
       exceeded
     end
 
@@ -178,6 +186,7 @@ module Clacky
       @license_user_id        = nil
       @device_id              = nil
       @distribution_last_refreshed_at = nil
+      @license_last_heartbeat_failure = nil
       { success: true }
     end
 
@@ -210,6 +219,7 @@ module Clacky
         data = response[:data]
         @license_activated_at   = Time.now.utc
         @license_last_heartbeat = Time.now.utc
+        @license_last_heartbeat_failure = nil
         @license_expires_at     = parse_time(data["expires_at"])
         server_device_id = data["device_id"].to_s.strip
         @device_id = server_device_id unless server_device_id.empty?
@@ -263,6 +273,7 @@ module Clacky
 
       @license_activated_at   = Time.now.utc
       @license_last_heartbeat = Time.now.utc
+      @license_last_heartbeat_failure = nil
       @license_expires_at     = Time.now.utc + (365 * 86_400)  # 1 year from now
       # Clear old brand skills so stale encrypted files from a previous brand don't linger
       clear_brand_skills!
@@ -306,13 +317,16 @@ module Clacky
 
       if response[:success]
         @license_last_heartbeat = Time.now.utc
+        @license_last_heartbeat_failure = nil
         @license_expires_at = parse_time(response[:data]["expires_at"]) if response[:data]["expires_at"]
         apply_distribution(response[:data]["distribution"])
         save
         Clacky::Logger.info("[Brand] heartbeat! success — expires_at=#{@license_expires_at&.iso8601} last_heartbeat=#{@license_last_heartbeat.iso8601}")
         { success: true, message: "Heartbeat OK" }
       else
-        Clacky::Logger.warn("[Brand] heartbeat! failed — #{response[:error]}")
+        @license_last_heartbeat_failure ||= Time.now.utc
+        save
+        Clacky::Logger.warn("[Brand] heartbeat! failed — #{response[:error]} (failing_since=#{@license_last_heartbeat_failure.iso8601})")
         { success: false, message: response[:error] || "Heartbeat failed" }
       end
     end
@@ -1134,6 +1148,7 @@ module Clacky
       # Persist user_id so user-licensed features remain available across restarts
       data["license_user_id"]        = @license_user_id        if @license_user_id && !@license_user_id.strip.empty?
       data["distribution_last_refreshed_at"] = @distribution_last_refreshed_at.iso8601 if @distribution_last_refreshed_at
+      data["license_last_heartbeat_failure"] = @license_last_heartbeat_failure.iso8601 if @license_last_heartbeat_failure
       YAML.dump(data)
     end
 

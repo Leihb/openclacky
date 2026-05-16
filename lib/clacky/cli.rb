@@ -365,19 +365,12 @@ module Clacky
           return
         end
 
+        # Heartbeat is fire-and-forget — startup must never block on the
+        # license server. The grace_period_exceeded? check below now keys off
+        # license_last_heartbeat_failure (set on a failed heartbeat, cleared
+        # on success), so a user who simply hasn't run the app for >3 days
+        # no longer sees a false "offline" warning on first launch.
         if brand.heartbeat_due?
-          # Fire-and-forget heartbeat in a background thread.
-          #
-          # Rationale: a slow/unreachable license server would otherwise block
-          # CLI startup for up to ~92s (2 hosts × 2 attempts × 23s timeout)
-          # before the user sees the prompt. Heartbeat is "best-effort" by
-          # design — its only job is to refresh `last_heartbeat` / `expires_at`
-          # on disk for the next run's grace-period calculation. Missing a
-          # single heartbeat is harmless; the next launch will try again.
-          #
-          # Consequence: if this run was going to trigger the
-          # grace_period_exceeded warning, the user will see it on the *next*
-          # launch instead of this one. Acceptable trade-off.
           Clacky::Logger.info("[Brand] check_brand_license_cli: heartbeat due, dispatching async...")
           Thread.new do
             begin
@@ -395,10 +388,6 @@ module Clacky
           Clacky::Logger.debug("[Brand] check_brand_license_cli: heartbeat not due yet")
         end
 
-        # Surface the grace-period warning based on *already-persisted* state
-        # (computed from last_heartbeat on disk). This works whether the
-        # previous run's heartbeat succeeded, failed, or was interrupted —
-        # grace_period_exceeded? reads last_heartbeat, not this run's result.
         if brand.grace_period_exceeded?
           say ""
           say "WARNING: Could not reach the #{brand.product_name} license server.", :yellow
