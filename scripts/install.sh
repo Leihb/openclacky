@@ -436,18 +436,15 @@ install_via_gem() {
         target="openclacky"
     fi
 
-    if gem install "$target" --no-document "${source_args[@]}"; then
-        print_success "${DISPLAY_NAME} installed successfully!"
-        return 0
-    fi
-
     # macOS system Ruby 2.6 has a buggy gem resolver that fails on rouge 4.x.
-    # Pin rouge to a 2.6-compatible release and retry once.
+    # Pre-install a 2.6-compatible rouge to avoid resolver failure.
     local ruby_ver; ruby_ver=$(ruby -e 'puts RUBY_VERSION' 2>/dev/null)
     if [[ "$ruby_ver" == 2.6.* ]]; then
-        print_warning "Ruby 2.6 detected — pinning rouge 3.30.0 and retrying"
-        gem install rouge -v 3.30.0 --no-document "${source_args[@]}" || { print_error "gem install failed"; return 1; }
-        gem install "$target" --no-document "${source_args[@]}" || { print_error "gem install failed"; return 1; }
+        print_warning "Ruby 2.6 detected — pinning rouge 3.30.0 first"
+        gem install rouge -v 3.30.0 --no-document "${source_args[@]}" || { print_error "gem install rouge failed"; return 1; }
+    fi
+
+    if gem install "$target" --no-document "${source_args[@]}"; then
         print_success "${DISPLAY_NAME} installed successfully!"
         return 0
     fi
