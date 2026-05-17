@@ -7668,3 +7668,76 @@ body.setup-mode[data-theme="dark"] {
 }
 
 
+
+/* ── Background-task badge in #session-info-bar ────────────────────────
+   Visible only while one or more fire-and-forget tasks are in flight.
+   Renders a rotating dot + count. Tooltip lists command + elapsed time.
+   Click target is the whole badge (touch-friendly).
+*/
+.sib-bgtasks {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--color-bg-tertiary, rgba(120, 120, 120, 0.12));
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: default;
+  user-select: none;
+}
+.sib-bgtasks .bgtasks-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;            /* amber-500 */
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6);
+  animation: bgtasks-pulse 1.4s ease-out infinite;
+}
+@keyframes bgtasks-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(245, 158, 11, 0.5); }
+  70%  { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0);   }
+  100% { box-shadow: 0 0 0 0   rgba(245, 158, 11, 0);   }
+}
+
+/* ── Background-task transition bubble in #messages ────────────────────
+   Lives between the previous turn and the assistant's response to a
+   completed task. Style: small, low-contrast, doesn't compete with real
+   assistant bubbles.
+*/
+.msg-bgtask-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--color-border-primary, #ccc);
+  background: var(--color-bg-secondary, rgba(120, 120, 120, 0.05));
+  color: var(--color-text-secondary);
+  font-size: 12.5px;
+  border-radius: 4px;
+  opacity: 0.9;
+}
+.msg-bgtask-notice .bgtask-icon  { flex: 0 0 auto; font-weight: 600; }
+.msg-bgtask-notice .bgtask-text  { flex: 0 0 auto; }
+.msg-bgtask-notice .bgtask-cmd   {
+  flex: 1 1 auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 1px 5px;
+  background: rgba(120, 120, 120, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-bgtask-notice .bgtask-id    {
+  flex: 0 0 auto;
+  opacity: 0.6;
+  font-size: 11px;
+}
+.msg-bgtask-success   .bgtask-icon { color: #16a34a; }
+.msg-bgtask-failed    .bgtask-icon { color: #dc2626; }
+.msg-bgtask-error     .bgtask-icon { color: #dc2626; }
+.msg-bgtask-cancelled .bgtask-icon { color: #6b7280; }

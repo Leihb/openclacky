@@ -111,6 +111,26 @@ module Clacky
     def set_working_status; end
     def set_idle_status; end
 
+    # === Background task awareness (fire-and-forget tasks) ===
+    # update_background_tasks broadcasts the current list of in-flight
+    # background terminal tasks owned by this session. Implementations that
+    # have a real UI (WebUIController) render a badge; CLI / JSON / channel
+    # implementations may safely ignore.
+    #
+    # @param running [Integer] count of tasks still running
+    # @param tasks   [Array<Hash>] list of {task_id, command, started_at, elapsed}
+    def update_background_tasks(running: 0, tasks: []); end
+
+    # show_background_task_notice is a light "transition bubble" emitted by the
+    # agent right before it processes a fire-and-forget completion. It gives
+    # the human watching the WebUI a hint that the next assistant message is
+    # not unprompted self-chatter, but a reaction to a previously-started task.
+    #
+    # @param command  [String, nil] the original shell command (truncated upstream)
+    # @param task_id  [String, nil] short id (first 8 chars)
+    # @param status   [String]       one of "success" | "failed" | "cancelled" | "error"
+    def show_background_task_notice(command: nil, task_id: nil, status: "success"); end
+
     # === Blocking interaction ===
     def request_confirmation(message, default: true); end
 

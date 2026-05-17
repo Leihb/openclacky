@@ -670,6 +670,33 @@ module Clacky
       end
     end
 
+    # Push the current set of active background tasks to the UI. WebUI
+    # renders a small badge in the session info bar; CLI / JSON / channel
+    # implementations are no-ops by default (see UIInterface).
+    #
+    # Best-effort — never raises into the agent loop.
+    private def broadcast_background_tasks_snapshot
+      return unless @ui
+
+      snapshot = nil
+      @bg_tasks_mutex.synchronize do
+        snapshot = @active_background_tasks.map do |id, info|
+          {
+            task_id: id,
+            command: info[:command],
+            started_at: info[:started_at],
+            elapsed: info[:started_at] ? (Time.now.to_f - info[:started_at]).round : 0
+          }
+        end
+      end
+      @ui.update_background_tasks(running: snapshot.size, tasks: snapshot)
+    rescue => e
+      Clacky::Logger.error("agent.broadcast_bg_tasks_error",
+        session_id: @session_id,
+        error: e
+      )
+    end
+
     # Format a terminal background task result into a notification string
     # for the LLM to consume.
     private def format_terminal_notification(task_result)
@@ -684,6 +711,27 @@ module Clacky
         @active_background_tasks.delete(task_id) if task_id
         remaining_tasks = @active_background_tasks.dup
       end
+
+      # Push updated badge snapshot to the WebUI (task count went down).
+      broadcast_background_tasks_snapshot
+
+      # Emit a transition bubble so the user sees "task X completed → processing"
+      # BEFORE the next assistant_message arrives. Prevents the "agent is
+      # talking to itself" feeling in multi-turn flows.
+      status = if task_result[:cancelled]
+                 "cancelled"
+               elsif task_result[:error]
+                 "error"
+               elsif task_result[:exit_code]
+                 task_result[:exit_code].zero? ? "success" : "failed"
+               else
+                 "success"
+               end
+      @ui&.show_background_task_notice(
+        command: command,
+        task_id: short_id,
+        status: status
+      )
 
       parts = []
       if command
@@ -1063,6 +1111,8 @@ module Clacky
               notification = format_terminal_notification(task_result)
               resume_with_notification(notification)
             end
+            # Push the new active-task snapshot to the WebUI badge.
+            broadcast_background_tasks_snapshot
           end
 
           # Hook: after_tool_use

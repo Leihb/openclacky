@@ -324,6 +324,48 @@ module Clacky
         forward_to_subscribers { |sub| sub.update_todos(todos) }
       end
 
+      # Broadcast current background-task snapshot to the browser.
+      # The frontend renders a small badge in #session-info-bar.
+      #
+      # tasks is an array of { task_id, command, started_at, elapsed }.
+      # We keep the payload tiny (no full output, no env) — the badge only
+      # needs counts + a hoverable list of {command, elapsed}.
+      def update_background_tasks(running: 0, tasks: [])
+        # Truncate commands to keep the payload small and prevent leaking
+        # huge shell one-liners into the WS frame.
+        safe_tasks = Array(tasks).map do |t|
+          cmd = (t[:command] || t["command"]).to_s
+          cmd = "#{cmd[0, 80]}…" if cmd.length > 80
+          {
+            task_id: (t[:task_id] || t["task_id"]).to_s[0, 8],
+            command: cmd,
+            elapsed: (t[:elapsed] || t["elapsed"]).to_i
+          }
+        end
+        emit("background_tasks_update", running: running.to_i, tasks: safe_tasks)
+        # Intentionally not forwarded to IM subscribers — too noisy and the
+        # badge UX is web-specific.
+      end
+
+      # Emit a transient "I'm about to react to a finished background task"
+      # bubble. This sits BEFORE the next assistant_message so the user sees:
+      #
+      #   [info] ⤴ Background task `npm run build` completed — processing…
+      #   [assistant] The build succeeded, proceeding with deploy.
+      #
+      # Without this hint, the assistant_message appears out-of-nowhere in
+      # multi-turn flows and feels like the agent is talking to itself.
+      def show_background_task_notice(command: nil, task_id: nil, status: "success")
+        cmd = command.to_s
+        cmd = "#{cmd[0, 60]}…" if cmd.length > 60
+        emit("background_task_notice",
+             command: cmd,
+             task_id: task_id.to_s[0, 8],
+             status: status.to_s)
+        # Not forwarded — channels receive the full notification as a
+        # follow-up assistant_message anyway.
+      end
+
       def set_working_status
         emit("session_update", status: "working")
         forward_to_subscribers { |sub| sub.set_working_status }

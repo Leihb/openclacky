@@ -53,6 +53,8 @@ If a `run_in_background` task seems stuck or is no longer needed, cancel it:
 To check progress without waiting for the notification:
 `terminal(background_task_id: "<task_id>")` — returns status, elapsed time, and command.
 
+**When multiple background tasks are running concurrently, proactively keep the user informed.** Before starting unrelated new work that the user did not explicitly request, send a one-line status: "I have N background tasks running (build, tests, …); doing X next while they finish." This prevents the WebUI from looking like the agent is talking to itself when notifications arrive — the user already knows what's in flight.
+
 ## Long-term Memory
 
 Topical knowledge lives in `~/.clacky/memories/`.
