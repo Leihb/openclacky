@@ -494,6 +494,12 @@ module Clacky
           else
             cleanup_session(session)
           end
+          if xcode_tools_missing?(cleaned)
+            cleaned = "Xcode Command Line Tools are not installed.\n" \
+                      "Run: bash ~/.clacky/scripts/install_system_deps.sh\n" \
+                      "Then retry the original command."
+            exit_code = 1
+          end
           {
             output: cleaned,
             exit_code: exit_code,
@@ -519,6 +525,11 @@ module Clacky
             hint: background_hint(background, session.id)
           }.compact
         end
+      end
+
+      private def xcode_tools_missing?(output)
+        return false if output.nil? || output.empty?
+        output.include?("xcode-select") && output.include?("No developer tools were found")
       end
 
       private def session_healthy?(session)

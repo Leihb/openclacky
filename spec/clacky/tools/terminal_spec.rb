@@ -914,6 +914,57 @@ RSpec.describe Clacky::Tools::Terminal do
     end
   end
 
+  describe "Xcode Command Line Tools detection (macOS)" do
+    let(:fake_session_class) do
+      Struct.new(:id, :read_offset, :marker_token, :marker_regex,
+                 :log_file, :exit_code, :status, :pid, keyword_init: true)
+    end
+
+    before do
+      allow(tool).to receive(:read_log_slice) { |_, _, _| @stub_output }
+      allow(tool).to receive(:log_size) { @stub_output.bytesize }
+      allow(tool).to receive(:strip_command_echo) { |s, **| s }
+      allow(tool).to receive(:cleanup_session)
+      allow(tool).to receive(:session_healthy?).and_return(false)
+      allow(Clacky::Tools::Terminal::SessionManager).to receive(:advance_offset)
+    end
+
+    it "rewrites the xcode-select shim message into an actionable install hint" do
+      @stub_output = "xcode-select: note: No developer tools were found, " \
+                     "requesting install."
+      allow(tool).to receive(:read_until_marker).and_return([nil, 1, :matched])
+
+      session = fake_session_class.new(
+        id: "sess-x", read_offset: 0, marker_token: "TOKEN",
+        marker_regex: nil, log_file: "/dev/null", exit_code: 1,
+        status: "exited", pid: 0
+      )
+
+      result = tool.send(:wait_and_package, session, timeout: 5)
+
+      expect(result[:exit_code]).to eq(1)
+      expect(result[:output]).to include("Xcode Command Line Tools are not installed")
+      expect(result[:output]).to include("install_system_deps.sh")
+      expect(result[:output]).not_to include("xcode-select")
+    end
+
+    it "leaves normal output unchanged" do
+      @stub_output = "hello world"
+      allow(tool).to receive(:read_until_marker).and_return([nil, 0, :matched])
+
+      session = fake_session_class.new(
+        id: "sess-ok", read_offset: 0, marker_token: "TOKEN",
+        marker_regex: nil, log_file: "/dev/null", exit_code: 0,
+        status: "exited", pid: 0
+      )
+
+      result = tool.send(:wait_and_package, session, timeout: 5)
+
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:output]).to eq("hello world")
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # OutputCleaner (kept here, independent utility)
   # ---------------------------------------------------------------------------
