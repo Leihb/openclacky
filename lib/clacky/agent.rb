@@ -23,6 +23,7 @@ require_relative "agent/memory_updater"
 require_relative "agent/skill_evolution"
 require_relative "agent/skill_reflector"
 require_relative "agent/skill_auto_creator"
+require_relative "background_task_registry"
 
 module Clacky
   class Agent
@@ -84,6 +85,12 @@ module Clacky
       @pending_injections = []     # Pending inline skill injections to flush after observe()
       @pending_script_tmpdirs = [] # Decrypted-script tmpdirs to shred when agent.run completes
       @pending_error_rollback = false  # Deferred rollback flag set by restore_session on error
+      @in_run_loop = false         # True while agent.run() is active (guards against concurrent runs)
+      @pending_system_notifications = []  # Queued background-task notifications waiting for agent idle
+      @state_mutex = Mutex.new     # Protects @in_run_loop and @pending_system_notifications
+      @run_mutex = Mutex.new       # Serializes agent.run() calls from background notifications
+      @active_background_tasks = {}  # {task_id => {command, started_at}} — fire-and-forget tasks started by this agent
+      @bg_tasks_mutex = Mutex.new    # Protects @active_background_tasks
 
       # Compression tracking
       @compression_level = 0  # Tracks how many times we've compressed (for progressive summarization)
@@ -195,7 +202,12 @@ module Clacky
       @name = new_name.to_s.strip
     end
 
-    def run(user_input, files: [])
+    def run(user_input, files: [], system_notification: nil)
+      # Guard against concurrent runs. Background-task notifications that
+      # arrive while the agent is already processing are queued and handled
+      # when this run completes.
+      @state_mutex.synchronize { @in_run_loop = true }
+
       # Show the "thinking" indicator as early as possible so the user gets
       # immediate feedback after sending a message. Without this the UI stays
       # silent during synchronous setup work (system prompt assembly, file
@@ -252,70 +264,83 @@ module Clacky
       # Inject chunk index card if archived chunks exist and index is stale
       inject_chunk_index_if_needed
 
-      # Split files into vision images and disk files; downgrade oversized images to disk
-      image_files, disk_files = partition_files(Array(files))
-      vision_images, downgraded = resolve_vision_images(image_files)
-      all_disk_files = disk_files + downgraded
+      if system_notification
+        # System notification mode — triggered by background task completion.
+        # Skip all user input processing; inject the notification directly.
+        @history.append({
+          role: "user",
+          content: system_notification,
+          system_injected: true,
+          task_id: task_id,
+          created_at: Time.now.to_f
+        })
+        @total_tasks += 1
+      else
+        # Normal user message mode — process input, files, etc.
+        # Split files into vision images and disk files; downgrade oversized images to disk
+        image_files, disk_files = partition_files(Array(files))
+        vision_images, downgraded = resolve_vision_images(image_files)
+        all_disk_files = disk_files + downgraded
 
-      # Format user message — text + inline vision images
-      # Store the tmp path alongside the data_url so the history replay can
-      # reconstruct the image if the base64 was stripped (e.g. after compression).
-      user_content = format_user_content(user_input, vision_images.map { |v| { url: v[:url], path: v[:path] } })
+        # Format user message — text + inline vision images
+        # Store the tmp path alongside the data_url so the history replay can
+        # reconstruct the image if the base64 was stripped (e.g. after compression).
+        user_content = format_user_content(user_input, vision_images.map { |v| { url: v[:url], path: v[:path] } })
 
-      # Parse disk files — agent's responsibility, not the upload layer.
-      # process_path runs the parser script and returns a FileRef with preview_path or parse_error.
-      all_disk_files = all_disk_files.map do |f|
-        path = f[:path] || f["path"]
-        name = f[:name] || f["name"]
-        next f unless path && File.exist?(path.to_s)
-        # Preserve the downgrade_reason tag across the remap (process_path
-        # returns a fresh FileRef that doesn't know about it). Without this,
-        # the file_prompt builder can't emit the "not supported by model" /
-        # "too large" note for downgraded images.
-        downgrade_reason = f[:downgrade_reason] || f["downgrade_reason"]
-        ref = Utils::FileProcessor.process_path(path, name: name)
-        { name: ref.name, type: ref.type.to_s, path: ref.original_path,
-          preview_path: ref.preview_path, parse_error: ref.parse_error, parser_path: ref.parser_path,
-          downgrade_reason: downgrade_reason }
-      end
-
-      # Build display_files for replay: lightweight metadata so the UI can reconstruct
-      # file badges (PDF, doc, etc.) on page refresh. Images are NOT stored here — they
-      # are recovered from the image_url blocks in user_content by extract_image_files_from_content.
-      display_files = all_disk_files.filter_map do |f|
-        name = f[:name] || f["name"]
-        next unless name
-        { name: name, type: f[:type] || f["type"] || "file",
-          preview_path: f[:preview_path] || f["preview_path"] }
-      end
-
-      @history.append({ role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f,
-                        display_files: display_files.empty? ? nil : display_files })
-      @total_tasks += 1
-
-      # Inject disk file references as a system_injected message so:
-      #   - LLM sees the file info (system_injected is NOT stripped from to_api)
-      #   - replay_history skips it (next if ev[:system_injected]), keeping the user bubble clean
-      #
-      # Images: also injected here (alongside vision inline) so LLM knows filename + size.
-      all_meta_files = vision_images.map { |v|
-        { name: v[:name], type: "image", size_bytes: v[:size_bytes], path: v[:path] }
-      } + all_disk_files
-
-      unless all_meta_files.empty?
-        file_prompt = all_meta_files.filter_map do |f|
-          name             = f[:name]             || f["name"]
-          type             = f[:type]             || f["type"]
-          path             = f[:path]             || f["path"]
-          preview_path     = f[:preview_path]     || f["preview_path"]
-          size_bytes       = f[:size_bytes]       || f["size_bytes"]
-          parse_error      = f[:parse_error]      || f["parse_error"]
-          parser_path      = f[:parser_path]      || f["parser_path"]
+        # Parse disk files — agent's responsibility, not the upload layer.
+        # process_path runs the parser script and returns a FileRef with preview_path or parse_error.
+        all_disk_files = all_disk_files.map do |f|
+          path = f[:path] || f["path"]
+          name = f[:name] || f["name"]
+          next f unless path && File.exist?(path.to_s)
+          # Preserve the downgrade_reason tag across the remap (process_path
+          # returns a fresh FileRef that doesn't know about it). Without this,
+          # the file_prompt builder can't emit the "not supported by model" /
+          # "too large" note for downgraded images.
           downgrade_reason = f[:downgrade_reason] || f["downgrade_reason"]
+          ref = Utils::FileProcessor.process_path(path, name: name)
+          { name: ref.name, type: ref.type.to_s, path: ref.original_path,
+            preview_path: ref.preview_path, parse_error: ref.parse_error, parser_path: ref.parser_path,
+            downgrade_reason: downgrade_reason }
+        end
 
+        # Build display_files for replay: lightweight metadata so the UI can reconstruct
+        # file badges (PDF, doc, etc.) on page refresh. Images are NOT stored here — they
+        # are recovered from the image_url blocks in user_content by extract_image_files_from_content.
+        display_files = all_disk_files.filter_map do |f|
+          name = f[:name] || f["name"]
           next unless name
+          { name: name, type: f[:type] || f["type"] || "file",
+            preview_path: f[:preview_path] || f["preview_path"] }
+        end
 
-          lines = ["[File: #{name}]", "Type: #{type || "file"}"]
+        @history.append({ role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f,
+                          display_files: display_files.empty? ? nil : display_files })
+        @total_tasks += 1
+
+        # Inject disk file references as a system_injected message so:
+        #   - LLM sees the file info (system_injected is NOT stripped from to_api)
+        #   - replay_history skips it (next if ev[:system_injected]), keeping the user bubble clean
+        #
+        # Images: also injected here (alongside vision inline) so LLM knows filename + size.
+        all_meta_files = vision_images.map { |v|
+          { name: v[:name], type: "image", size_bytes: v[:size_bytes], path: v[:path] }
+        } + all_disk_files
+
+        unless all_meta_files.empty?
+          file_prompt = all_meta_files.filter_map do |f|
+            name             = f[:name]             || f["name"]
+            type             = f[:type]             || f["type"]
+            path             = f[:path]             || f["path"]
+            preview_path     = f[:preview_path]     || f["preview_path"]
+            size_bytes       = f[:size_bytes]       || f["size_bytes"]
+            parse_error      = f[:parse_error]      || f["parse_error"]
+            parser_path      = f[:parser_path]      || f["parser_path"]
+            downgrade_reason = f[:downgrade_reason] || f["downgrade_reason"]
+
+            next unless name
+
+            lines = ["[File: #{name}]", "Type: #{type || "file"}"]
           lines << "Size: #{format_size(size_bytes)}" if size_bytes
           lines << "Original: #{path}" if path
           lines << "Preview (Markdown): #{preview_path}" if preview_path
@@ -345,13 +370,14 @@ module Clacky
           @history.append({ role: "user", content: file_prompt, system_injected: true, task_id: task_id })
         end
       end
+      end
 
       # If the user typed a slash command targeting a skill with disable-model-invocation: true,
       # inject the skill content as a synthetic assistant message so the LLM can act on it.
       # Skills already in the system prompt (model_invocation_allowed?) are skipped.
-      inject_skill_command_as_assistant_message(user_input, task_id)
+      inject_skill_command_as_assistant_message(user_input, task_id) unless system_notification
 
-      @hooks.trigger(:on_start, user_input)
+      @hooks.trigger(:on_start, system_notification ? "[background task notification]" : user_input)
 
       begin
         # Track if request_user_feedback was called
@@ -558,6 +584,8 @@ module Clacky
         result = build_result(:error, error: e.message)  # rubocop:disable Lint/UselessAssignment
         raise
       ensure
+        @state_mutex.synchronize { @in_run_loop = false }
+
         # Safety net: ensure any lingering progress spinner is stopped.
         # Normal paths close their own spinners; this guards against exceptions
         # raised between a progress slot's active/done pair.
@@ -571,7 +599,125 @@ module Clacky
         # Fire-and-forget telemetry after every agent run.
         # Tracks daily active users (distinct devices per day) and task volume.
         Clacky::Telemetry.task!
+
+        # If a background-task notification arrived while we were running,
+        # process it now on a fresh thread so we don't block the caller.
+        flush_pending_system_notifications
       end
+    end
+
+    # Called by BackgroundTaskRegistry when a fire-and-forget background task
+    # completes. Injects a <task-notification> into the conversation and runs
+    # the agent loop without requiring a real user message.
+    def resume_with_notification(notification_content)
+      should_run = false
+
+      @state_mutex.synchronize do
+        if @in_run_loop
+          # Agent is already processing — queue for later delivery
+          @pending_system_notifications << notification_content
+          Clacky::Logger.info("agent.notification_queued",
+            session_id: @session_id,
+            queue_size: @pending_system_notifications.size
+          )
+          return
+        end
+        should_run = true
+      end
+
+      return unless should_run
+
+      formatted = <<~MSG.strip
+        <task-notification>
+        #{notification_content}
+        </task-notification>
+      MSG
+
+      @run_mutex.synchronize do
+        run("", system_notification: formatted)
+      end
+    end
+
+    # Flush any pending system notifications that were queued while the agent
+    # was busy. Called from the ensure block of run().
+    private def flush_pending_system_notifications
+      pending = nil
+      @state_mutex.synchronize do
+        pending = @pending_system_notifications.shift
+      end
+      return unless pending
+
+      # Run on a fresh thread so the ensure block doesn't block
+      Thread.new do
+        Thread.current.name = "bg-notify-#{@session_id[0, 8]}"
+        begin
+          resume_with_notification(pending)
+        rescue => e
+          Clacky::Logger.error("agent.flush_notification_error",
+            session_id: @session_id,
+            error: e
+          )
+        end
+      end
+    end
+
+    # Format a terminal background task result into a notification string
+    # for the LLM to consume.
+    private def format_terminal_notification(task_result)
+      task_id = task_result[:task_id]
+      command = task_result[:command]
+      short_id = task_id ? task_id[0, 8] : nil
+
+      # Remove from active tasks; was added when the task was started in act().
+      # Snapshot remaining tasks atomically under the same lock.
+      remaining_tasks = nil
+      @bg_tasks_mutex.synchronize do
+        @active_background_tasks.delete(task_id) if task_id
+        remaining_tasks = @active_background_tasks.dup
+      end
+
+      parts = []
+      if command
+        parts << "Background task completed: `#{command}`"
+      else
+        parts << "A background terminal task has completed."
+      end
+      parts << "Task ID: #{short_id}" if short_id
+
+      if task_result[:cancelled]
+        parts << "Status: CANCELLED"
+      elsif task_result[:error]
+        parts << "Status: ERROR"
+        parts << "Error: #{task_result[:error]}"
+      elsif task_result[:exit_code]
+        parts << "Status: #{task_result[:exit_code].zero? ? 'SUCCESS' : 'FAILED (exit code ' + task_result[:exit_code].to_s + ')'}"
+      else
+        parts << "Status: COMPLETED (no exit code available)"
+      end
+
+      if task_result[:output] && !task_result[:output].to_s.empty?
+        parts << ""
+        parts << "Output:"
+        parts << "```"
+        parts << task_result[:output].to_s
+        parts << "```"
+      end
+
+      if task_result[:full_output_file]
+        parts << ""
+        parts << "Full output saved to: #{task_result[:full_output_file]}"
+      end
+
+      if remaining_tasks && !remaining_tasks.empty?
+        parts << ""
+        parts << "#{remaining_tasks.size} other background task(s) still running:"
+        remaining_tasks.each do |id, info|
+          elapsed = info[:started_at] ? (Time.now - info[:started_at]).round : "?"
+          parts << "  • #{info[:command] || 'unknown'} (started #{elapsed}s ago, ID: #{id[0, 8]}...)"
+        end
+      end
+
+      parts.join("\n")
     end
 
     private def think
@@ -891,6 +1037,24 @@ module Clacky
 
           # Track modified files for Time Machine snapshots
           track_modified_files(call[:name], args)
+
+          # If a terminal tool was started in fire-and-forget background mode,
+          # register a callback so the agent is resumed when it completes.
+          if call[:name] == "terminal" && result.is_a?(Hash) && result[:accepted] && result[:task_id]
+            @bg_tasks_mutex.synchronize do
+              @active_background_tasks[result[:task_id]] = {
+                command: args[:command],
+                started_at: Time.now.to_f
+              }
+            end
+            BackgroundTaskRegistry.register_callback(
+              task_id: result[:task_id],
+              agent: self
+            ) do |task_result|
+              notification = format_terminal_notification(task_result)
+              resume_with_notification(notification)
+            end
+          end
 
           # Hook: after_tool_use
           @hooks.trigger(:after_tool_use, call, result)

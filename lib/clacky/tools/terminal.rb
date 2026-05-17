@@ -9,6 +9,7 @@ require_relative "../utils/trash_directory"
 require_relative "terminal/session_manager"
 require_relative "terminal/output_cleaner"
 require_relative "terminal/persistent_session"
+require_relative "../background_task_registry"
 
 module Clacky
   module Tools
@@ -67,28 +68,40 @@ module Clacky
         Run shell commands via PTY. Safety: rm→trash, sudo blocked, secrets protected.
 
         Shapes:
-          {command}                       run + wait
-          {command, background:true}      long-running; returns session_id after ~2s if alive
-          {session_id, input:"pw\n"}      reply to prompt / poll (input:"")
-          {session_id, kill:true}         stop
+          {command}                           run + wait (default for quick commands)
+          {command, run_in_background:true}   RECOMMENDED for long one-shot tasks (build, test, install). Harness tracks and notifies on completion. No polling needed.
+          {command, background:true}          ONLY for interactive long-running processes you need to control later (dev servers, REPLs, watchers).
+          {session_id, input:"pw\n"}          reply to prompt / poll (input:"")
+          {session_id, kill:true}             stop interactive background session
+          {background_task_id}              check status of a fire-and-forget task
+          {background_task_id, kill:true}   cancel a fire-and-forget background task
 
         Response: exit_code = done; session_id = running (state: waiting/background/timeout).
         If output exceeds the limit, `output` is truncated and `full_output_file` points
         at a file on disk — use terminal(command: "grep ... <path>") to search it.
         input supports byte escapes: \x03 Ctrl-C, \x04 Ctrl-D, \t Tab, \x1b Esc.
+
+        GUIDANCE: For one-shot tasks (builds, tests, installs, deploy scripts), always
+        prefer run_in_background. You will receive a <task-notification> when done.
+        If a run_in_background task seems stuck, cancel it with {background_task_id, kill:true}.
+        To check progress without polling: {background_task_id} returns current status.
+        Only use background:true when you need to send input or kill the process later.
+        NEVER poll a background session in a loop — it wastes tokens and is unnecessary.
       DESC
       self.tool_category = "system"
       self.tool_parameters = {
         type: "object",
         properties: {
-          command:    { type: "string",  description: "Shell command. Starts a new run. Mutually exclusive with session_id." },
-          background: { type: "boolean", description: "Expect long-running (dev server, watcher). Returns session_id if still alive after ~2s." },
-          session_id: { type: "integer", description: "Continue a running session. Pair with input or kill." },
-          input:      { type: "string",  description: "Input to running session (usually ends with \n). \"\" = poll." },
-          cwd:        { type: "string",  description: "Working dir for new command." },
-          env:        { type: "object",  description: "Extra env vars for new command.", additionalProperties: { type: "string" } },
-          timeout:    { type: "integer", description: "Max seconds to wait (default 60). Ignored when background." },
-          kill:       { type: "boolean", description: "Kill the session_id." }
+          command:           { type: "string",  description: "Shell command. Starts a new run. Mutually exclusive with session_id / background_task_id." },
+          run_in_background: { type: "boolean", description: "RECOMMENDED for one-shot long tasks (builds, tests, installs). Harness notifies you on completion. No session_id, no polling." },
+          background:        { type: "boolean", description: "LEGACY mode for interactive processes you need to control later (dev servers, REPLs). Returns session_id for input/kill. Avoid for one-shot tasks." },
+          session_id:        { type: "integer", description: "Continue or kill an interactive background session (returned by background:true)." },
+          background_task_id:{ type: "string",  description: "Query or cancel a fire-and-forget background task (returned by run_in_background:true). Use alone to check status; pair with kill:true to cancel." },
+          input:             { type: "string",  description: "Input to running session (usually ends with \n). \"\" = poll." },
+          cwd:               { type: "string",  description: "Working dir for new command." },
+          env:               { type: "object",  description: "Extra env vars for new command.", additionalProperties: { type: "string" } },
+          timeout:           { type: "integer", description: "Max seconds to wait (default 60). Ignored when background or run_in_background." },
+          kill:              { type: "boolean", description: "Stop a session (via session_id) or cancel a background task (via background_task_id)." }
         }
       }
 
@@ -167,6 +180,34 @@ module Clacky
       # 180s matches the legacy safe_shell "hard_timeout" for slow commands.
       SLOW_COMMAND_TIMEOUT = 180
 
+      # Patterns that are obviously quick — using run_in_background on these
+      # is almost certainly a mistake and wastes tokens. The harness rejects
+      # such calls at runtime with a clear error so the LLM falls back to
+      # foreground mode.
+      QUICK_COMMAND_PATTERNS = [
+        /\A\s*ls\b/,
+        /\A\s*cd\s/,
+        /\A\s*pwd\b/,
+        /\A\s*cat\s/,
+        /\A\s*echo\b/,
+        /\A\s*head\b/,
+        /\A\s*tail\b/,
+        /\A\s*wc\b/,
+        /\A\s*which\b/,
+        /\A\s*whoami\b/,
+        /\A\s*date\b/,
+        /\A\s*uname\b/,
+        /\A\s*env\b/,
+        /\A\s*clear\b/,
+        /\A\s*history\b/,
+        /\A\s*ps\b/,
+        /\A\s*mkdir\b/,
+        /\A\s*touch\b/,
+        /\A\s*rm\b/,
+        /\A\s*mv\b/,
+        /\A\s*cp\b/
+      ].freeze
+
       # Absolute path to the safe-rm shell snippet shipped with the gem.
       # Sourced by every interactive PTY session to install a `rm` shell
       # function that moves files to $CLACKY_TRASH_DIR instead of
@@ -194,9 +235,9 @@ module Clacky
       # ---------------------------------------------------------------------
       # Public entrypoint — dispatches on parameter shape
       # ---------------------------------------------------------------------
-      def execute(command: nil, session_id: nil, input: nil, background: false,
-                  cwd: nil, env: nil, timeout: nil, kill: nil, idle_ms: nil,
-                  working_dir: nil, **_ignored)
+      def execute(command: nil, session_id: nil, background_task_id: nil, input: nil,
+                  background: false, run_in_background: false, cwd: nil, env: nil,
+                  timeout: nil, kill: nil, idle_ms: nil, working_dir: nil, **_ignored)
         # Auto-tune: if the caller didn't explicitly set a timeout/idle_ms
         # AND the command is a well-known long-runner (rspec, bundle install,
         # cargo build, etc.), we stretch the budget AND disable idle-return.
@@ -205,7 +246,7 @@ module Clacky
         # session-continuation calls are NOT auto-tuned — background already
         # returns quickly by design, and continuing a session uses whatever
         # budget the caller requests.
-        if command && !background && !session_id && slow_command?(command)
+        if command && !background && !run_in_background && !session_id && slow_command?(command)
           timeout ||= SLOW_COMMAND_TIMEOUT
           idle_ms ||= DISABLED_IDLE_MS
         end
@@ -214,7 +255,16 @@ module Clacky
         idle_ms = (idle_ms || DEFAULT_IDLE_MS).to_i
         cwd ||= working_dir
 
-        # Kill
+        # Query or cancel a fire-and-forget background task
+        if background_task_id
+          if kill
+            return do_cancel_background_task(background_task_id.to_s)
+          else
+            return do_query_background_task(background_task_id.to_s)
+          end
+        end
+
+        # Kill an interactive background session
         if kill
           return { error: "session_id is required when kill: true" } if session_id.nil?
           return do_kill(session_id.to_i)
@@ -228,11 +278,22 @@ module Clacky
 
         # Start a new command
         if command && !command.to_s.strip.empty?
+          # Runtime guard: reject run_in_background for obviously quick
+          # commands to prevent the LLM from wasting tokens.
+          if run_in_background && quick_command?(command.to_s)
+            return {
+              error: "run_in_background is for long-running tasks (builds, tests, installs). " \
+                     "This command looks quick — use foreground mode instead.",
+              hint: "Commands like ls, cat, pwd, echo should not use run_in_background.",
+              command: command.to_s
+            }
+          end
           return do_start(command.to_s, cwd: cwd, env: env, timeout: timeout,
-                          idle_ms: idle_ms, background: background ? true : false)
+                          idle_ms: idle_ms, background: background ? true : false,
+                          run_in_background: run_in_background ? true : false)
         end
 
-        { error: "terminal: must provide either `command`, or `session_id`+`input`, or `session_id`+`kill: true`." }
+        { error: "terminal: must provide either `command`, or `session_id`+`input`, or `session_id`/`background_task_id`+`kill: true`." }
       rescue SecurityError => e
         { error: "[Security] #{e.message}", security_blocked: true }
       rescue StandardError => e
@@ -313,7 +374,7 @@ module Clacky
       # ---------------------------------------------------------------------
       # 1) Start a new command
       # ---------------------------------------------------------------------
-      private def do_start(command, cwd:, env:, timeout:, background:, idle_ms: DEFAULT_IDLE_MS)
+      private def do_start(command, cwd:, env:, timeout:, background:, run_in_background: false, idle_ms: DEFAULT_IDLE_MS)
         if cwd && !Dir.exist?(cwd.to_s)
           return { error: "cwd does not exist: #{cwd}" }
         end
@@ -325,8 +386,68 @@ module Clacky
           project_root: cwd || Dir.pwd
         )
 
-        # Background / dedicated path — never reuse the persistent shell,
-        # because these commands stay running and would occupy the slot.
+        # Fire-and-forget background path — harness tracks lifecycle, agent
+        # does not poll. Returns immediately after spawning.
+        if run_in_background
+          session = spawn_dedicated_session(cwd: cwd, env: env)
+          return session if session.is_a?(Hash) && session[:error]
+
+          write_user_command(session, safe_command, with_hooks: true)
+
+          # Collect ~2s of startup output so crashes are visible
+          result = wait_and_package(
+            session,
+            timeout: BACKGROUND_COLLECT_SECONDS,
+            idle_ms: DISABLED_IDLE_MS,
+            background: true,
+            persistent: false,
+            original_command: command,
+            rewritten_command: safe_command
+          )
+
+          # If still running after startup window, hand off to harness
+          if result[:session_id] && result[:state] == "background"
+            task_id = BackgroundTaskRegistry.create_task(
+              type: "terminal",
+              metadata: {
+                command: command,
+                cwd: cwd,
+                started_at: Time.now.to_f
+              },
+              on_cancel: ->(_task) {
+                # Kill the session when the task is cancelled
+                begin
+                  SessionManager.kill(session.id, signal: "TERM")
+                  sleep 0.1
+                  Process.kill("KILL", session.pid)
+                rescue StandardError
+                  # ignore — best-effort cleanup
+                end
+                begin
+                  session.writer.close
+                  session.reader.close
+                  session.log_io.close
+                rescue StandardError
+                  # ignore
+                end
+                SessionManager.forget(session.id)
+              }
+            )
+            start_background_watcher(session, task_id, command: command)
+
+            return {
+              accepted: true,
+              task_id: task_id,
+              message: "Background task started. You will be notified when it completes. Do not poll.",
+              startup_output: result[:output]
+            }
+          end
+
+          # Crashed during startup window — return the failure directly
+          return result
+        end
+
+        # Interactive background path — agent gets session_id and can poll/kill
         if background
           session = spawn_dedicated_session(cwd: cwd, env: env)
           return session if session.is_a?(Hash) && session[:error]
@@ -416,6 +537,59 @@ module Clacky
         cleanup_session(session)
 
         { killed: true, session_id: session_id, message: "Session ##{session_id} killed." }
+      end
+
+      # Cancel a fire-and-forget background task via BackgroundTaskRegistry.
+      private def do_cancel_background_task(task_id)
+        cancelled = BackgroundTaskRegistry.cancel(task_id)
+        if cancelled
+          { killed: true, background_task_id: task_id, message: "Background task #{task_id} cancelled." }
+        else
+          { error: "Background task #{task_id} not found or already completed." }
+        end
+      end
+
+      # Query the status of a fire-and-forget background task.
+      private def do_query_background_task(task_id)
+        task = BackgroundTaskRegistry.get(task_id)
+        unless task
+          return { error: "Background task #{task_id} not found." }
+        end
+
+        elapsed = task[:created_at] ? (Time.now - task[:created_at]).round : nil
+        {
+          background_task_id: task_id,
+          status: task[:status],
+          command: task[:metadata]&.[](:command),
+          started_at: task[:created_at]&.iso8601,
+          elapsed_seconds: elapsed,
+          message: status_message_for_background_task(task, elapsed)
+        }.compact
+      end
+
+      private def status_message_for_background_task(task, elapsed)
+        status = task[:status]
+        cmd = task[:metadata]&.[](:command) || "unknown command"
+        time_str = elapsed ? "(running for #{elapsed}s)" : ""
+
+        case status
+        when "running"
+          "Background task is still running #{time_str}: #{cmd}. You will be notified when it completes."
+        when "completed"
+          result = task[:result] || {}
+          exit_code = result[:exit_code]
+          if exit_code.nil?
+            "Background task completed with unknown status: #{cmd}."
+          elsif exit_code.zero?
+            "Background task completed successfully: #{cmd}."
+          else
+            "Background task failed with exit code #{exit_code}: #{cmd}."
+          end
+        when "cancelled"
+          "Background task was cancelled: #{cmd}."
+        else
+          "Background task status: #{status} #{time_str}: #{cmd}."
+        end
       end
 
       # =====================================================================
@@ -522,7 +696,7 @@ module Clacky
             output_truncated: truncated,
             full_output_file: overflow_file,
             security_rewrite: rewrite_note,
-            hint: background_hint(background, session.id)
+            hint: background_hint(background, session.id, original_command: original_command)
           }.compact
         end
       end
@@ -652,11 +826,18 @@ module Clacky
         text
       end
 
-      private def background_hint(background, session_id)
+      private def background_hint(background, session_id, original_command: nil)
+        nudge = ""
+        if background && original_command && slow_command?(original_command)
+          nudge = "\n\n[Nudge: This looks like a one-shot task. Next time, consider using " \
+            "`run_in_background: true` instead of `background: true` — the harness will " \
+            "notify you automatically when it completes, with no polling needed.]"
+        end
+
         if background
           "Running as background session ##{session_id}. Poll with " \
             "{session_id: #{session_id}, input: \"\"} or stop with " \
-            "{session_id: #{session_id}, kill: true}."
+            "{session_id: #{session_id}, kill: true}.#{nudge}"
         else
           "Command is still running. If it's waiting for input, reply with " \
             "{session_id: #{session_id}, input: \"...\"}. To just check " \
@@ -683,6 +864,84 @@ module Clacky
         session.reader.close rescue nil
         session.log_io.close rescue nil
         SessionManager.forget(session.id)
+      end
+
+      # -----------------------------------------------------------------
+      # Background task watcher (run_in_background mode)
+      # -----------------------------------------------------------------
+
+      # Spawn a watcher thread that waits for the background session to
+      # finish, then packages the result and notifies the registry.
+      # The session is cleaned up after completion (success or crash).
+      private def start_background_watcher(session, task_id, command: nil)
+        Thread.new do
+          Thread.current.name = "bg-terminal-#{task_id[0, 8]}"
+          begin
+            start_offset = session.read_offset
+
+            _before, code, state = read_until_marker(
+              session,
+              timeout: 3_600,          # 1 hour default for bg tasks
+              idle_ms: DISABLED_IDLE_MS
+            )
+
+            result = package_background_result(session, start_offset, code, state)
+            result[:task_id] = task_id
+            result[:command] = command
+            BackgroundTaskRegistry.complete(task_id, result)
+          rescue => e
+            BackgroundTaskRegistry.complete(task_id, {
+              error: "Background watcher failed: #{e.class}: #{e.message}",
+              exit_code: nil,
+              task_id: task_id,
+              command: command
+            })
+          ensure
+            cleanup_session(session)
+          end
+        end
+      end
+
+      # Package the final result of a background session for the registry.
+      # Mirrors wait_and_package but without session pooling logic.
+      private def package_background_result(session, start_offset, code, state)
+        new_offset = log_size(session)
+        raw = read_log_slice(session.log_file, start_offset, new_offset)
+        cleaned = OutputCleaner.clean(raw)
+        cleaned = cleaned.sub(session.marker_regex, "").rstrip if session.marker_regex
+        cleaned = strip_command_echo(cleaned, marker_token: session.marker_token)
+        cleaned = truncate_long_lines(cleaned)
+
+        exit_code = nil
+        if state == :matched || state == :eof
+          exit_code = code || session.exit_code
+        end
+
+        # Spill if oversized
+        overflow_file = nil
+        if cleaned.bytesize > MAX_LLM_OUTPUT_CHARS
+          overflow_file = spill_overflow_file(cleaned, session_id: session.id)
+          preview = cleaned.byteslice(0, OVERFLOW_PREVIEW_CHARS)
+          preview.force_encoding(Encoding::UTF_8)
+          preview = preview.scrub("?") unless preview.valid_encoding?
+          notice = if overflow_file
+            "\n\n...[Output truncated for LLM: showing first #{OVERFLOW_PREVIEW_CHARS} " \
+              "of #{cleaned.bytesize} chars. Full output saved to: #{overflow_file}]"
+          else
+            "\n\n...[output truncated at #{OVERFLOW_PREVIEW_CHARS} chars]"
+          end
+          cleaned = preview + notice
+        end
+
+        result = {
+          output: cleaned,
+          exit_code: exit_code,
+          state: state.to_s,
+          bytes_read: new_offset - start_offset
+        }
+        result[:full_output_file] = overflow_file if overflow_file
+        result[:error] = "Process exited without exit code" if state == :eof && exit_code.nil?
+        result
       end
 
       private def chdir_args(cwd)
@@ -1179,6 +1438,14 @@ module Clacky
         SLOW_COMMAND_PATTERNS.any? { |pat| s.include?(pat) }
       end
 
+      # Check if a command is obviously quick and should never use
+      # run_in_background. Used as a runtime guard to prevent token waste.
+      private def quick_command?(command)
+        return false if command.nil? || command.empty?
+        s = command.to_s
+        QUICK_COMMAND_PATTERNS.any? { |pat| s.match?(pat) }
+      end
+
       # Apply per-line truncation to a cleaned (post-OutputCleaner) string.
       # If any single line exceeds MAX_LINE_CHARS, we chop it at that length
       # and append `…[line truncated: <original> chars]` so the LLM knows
@@ -1265,11 +1532,17 @@ module Clacky
       def format_call(args)
         cmd  = args[:command] || args["command"]
         sid  = args[:session_id] || args["session_id"]
+        btid = args[:background_task_id] || args["background_task_id"]
         inp  = args[:input] || args["input"]
         kill = args[:kill] || args["kill"]
         bg   = args[:background] || args["background"]
+        rbg  = args[:run_in_background] || args["run_in_background"]
 
-        if kill && sid
+        if btid && !kill
+          "terminal(query background task)"
+        elsif kill && btid
+          "terminal(cancel background task)"
+        elsif kill && sid
           "terminal(stop)"
         elsif sid
           if inp.to_s.empty?
@@ -1281,7 +1554,13 @@ module Clacky
           end
         elsif cmd
           display_cmd = compact_command_for_display(cmd)
-          bg ? "terminal(#{display_cmd}, background)" : "terminal(#{display_cmd})"
+          if rbg
+            "terminal(#{display_cmd}, run_in_background)"
+          elsif bg
+            "terminal(#{display_cmd}, background)"
+          else
+            "terminal(#{display_cmd})"
+          end
         else
           "terminal(?)"
         end
@@ -1309,6 +1588,11 @@ module Clacky
         return "stopped" if result.is_a?(Hash) && result[:killed]
 
         return "done" unless result.is_a?(Hash)
+
+        # Fire-and-forget background task accepted
+        if result[:accepted]
+          return "background task accepted"
+        end
 
         prefix = result[:security_rewrite] ? "[Safe] " : ""
         tail   = display_tail(result[:output])

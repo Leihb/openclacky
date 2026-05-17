@@ -749,10 +749,11 @@ RSpec.describe Clacky::Tools::Terminal do
       # actual run, only that auto-tuning kicked in — so we stub do_start
       # to return immediately.
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
         captured[:background] = background
+        captured[:run_in_background] = run_in_background
         { exit_code: 0, output: "", bytes_read: 0 }
       end
 
@@ -761,11 +762,12 @@ RSpec.describe Clacky::Tools::Terminal do
       expect(captured[:timeout]).to eq(Clacky::Tools::Terminal::SLOW_COMMAND_TIMEOUT)
       expect(captured[:idle_ms]).to eq(Clacky::Tools::Terminal::DISABLED_IDLE_MS)
       expect(captured[:background]).to eq(false)
+      expect(captured[:run_in_background]).to eq(false)
     end
 
     it "respects caller-supplied timeout/idle_ms even for slow commands" do
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
         { exit_code: 0, output: "", bytes_read: 0 }
@@ -779,16 +781,18 @@ RSpec.describe Clacky::Tools::Terminal do
 
     it "does NOT auto-tune background launches" do
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
         captured[:background] = background
+        captured[:run_in_background] = run_in_background
         { exit_code: 0, output: "", bytes_read: 0 }
       end
 
       tool.execute(command: "bundle exec rspec", background: true)
 
       expect(captured[:background]).to eq(true)
+      expect(captured[:run_in_background]).to eq(false)
       expect(captured[:timeout]).to eq(Clacky::Tools::Terminal::DEFAULT_TIMEOUT)
       # background leaves idle_ms at whatever default the caller wanted —
       # in practice wait_and_package disables idle for backgrounds anyway.
