@@ -995,6 +995,22 @@ RSpec.describe Clacky::Tools::Terminal do
       expect(result[:hint]).to include("ls, cat, pwd, echo")
     end
 
+    it "does not reject cd-prefixed commands that chain a long runner" do
+      result = tool.execute(command: "cd /tmp \u0026\u0026 bundle exec rspec", run_in_background: true)
+      expect(result[:error].to_s).not_to include("looks quick")
+
+      result = tool.execute(command: "cd /tmp; make install", run_in_background: true)
+      expect(result[:error].to_s).not_to include("looks quick")
+    end
+
+    it "does not reject env-prefixed or sudo-prefixed long commands" do
+      result = tool.execute(command: "FOO=bar bundle exec rspec", run_in_background: true)
+      expect(result[:error].to_s).not_to include("looks quick")
+
+      result = tool.execute(command: "sudo apt-get update", run_in_background: true)
+      expect(result[:error].to_s).not_to include("looks quick")
+    end
+
     it "returns the failure directly if the command crashes during the startup window" do
       result = tool.execute(command: "false", run_in_background: true)
       # `false` exits immediately; the startup window catches it

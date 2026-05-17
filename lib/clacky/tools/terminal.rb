@@ -1465,6 +1465,15 @@ module Clacky
       private def quick_command?(command)
         return false if command.nil? || command.empty?
         s = command.to_s
+
+        # Strip leading `cd ... && ` / `cd ...;` — the real command follows.
+        s = s.sub(/\A\s*cd\s+\S+\s*(?:&&|;)\s*/, "")
+        # Strip leading env-var assignments.
+        s = s.sub(/\A(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)+/, "")
+        # Strip leading `sudo `.
+        s = s.sub(/\Asudo\s+/, "")
+        s = s.lstrip
+
         QUICK_COMMAND_PATTERNS.any? { |pat| s.match?(pat) }
       end
 
