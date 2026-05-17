@@ -421,6 +421,7 @@ install_via_gem() {
     configure_gem_source
     setup_gem_home
 
+    local target source_args=()
     if [ "$USE_CN_MIRRORS" = true ]; then
         print_info "Fetching latest version from OSS..."
         local cn_version; cn_version=$(curl -fsSL "$CN_GEM_LATEST_URL" | tr -d '[:space:]')
@@ -429,17 +430,29 @@ install_via_gem() {
         local gem_file="/tmp/openclacky-${cn_version}.gem"
         print_info "Downloading openclacky-${cn_version}.gem..."
         curl -fsSL "$gem_url" -o "$gem_file"
-        gem install "$gem_file" --no-document --source "$CN_RUBYGEMS_URL"
+        target="$gem_file"
+        source_args=(--source "$CN_RUBYGEMS_URL")
     else
-        gem install openclacky --no-document
+        target="openclacky"
     fi
 
-    if [ $? -eq 0 ]; then
+    if gem install "$target" --no-document "${source_args[@]}"; then
         print_success "${DISPLAY_NAME} installed successfully!"
         return 0
-    else
-        print_error "gem install failed"; return 1
     fi
+
+    # macOS system Ruby 2.6 has a buggy gem resolver that fails on rouge 4.x.
+    # Pin rouge to a 2.6-compatible release and retry once.
+    local ruby_ver; ruby_ver=$(ruby -e 'puts RUBY_VERSION' 2>/dev/null)
+    if [[ "$ruby_ver" == 2.6.* ]]; then
+        print_warning "Ruby 2.6 detected — pinning rouge 3.30.0 and retrying"
+        gem install rouge -v 3.30.0 --no-document "${source_args[@]}" || { print_error "gem install failed"; return 1; }
+        gem install "$target" --no-document "${source_args[@]}" || { print_error "gem install failed"; return 1; }
+        print_success "${DISPLAY_NAME} installed successfully!"
+        return 0
+    fi
+
+    print_error "gem install failed"; return 1
 }
 
 # --------------------------------------------------------------------------
