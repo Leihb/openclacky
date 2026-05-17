@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-05-17
+
+### Added
+- **WeChat SendQueue with batching, throttling, and retry.** Messages sent to multiple WeChat official account users are now queued, batched (up to 100 recipients per call), throttled to 1 batch/second, and automatically retried on failure — preventing 45007 rate-limit errors during broadcasts. (#127)
+- **Session ID in TUI session bar.** The terminal UI session bar now displays the session ID alongside the session name, making it easy to identify sessions when cross-referencing with logs or Web UI.
+- **TUI todo clean-up on task completion.** Completed todos are now removed from the terminal display when a task finishes, keeping the TUI uncluttered. (#94)
+
+### Improved
+- **Brand skills persist across same-brand upgrades.** Brand skills are no longer removed and re-downloaded when the brand stays the same after an upgrade — eliminating unnecessary network calls and keeping skill state stable.
+- **Ruby 2.6 install reliability.** The installer now pre-installs rouge 3.30.0 before `gem install` and retries with a pinned version on Ruby 2.6, avoiding dependency resolution failures on older macOS system Ruby.
+
+### Fixed
+- **TUI progress bar flicker.** The progress bar in terminal mode no longer flashes when updating rapidly, providing a smoother visual experience.
+- **Xcode command auto-install loop.** The agent no longer gets stuck in a loop trying to auto-install missing Xcode command-line tools.
+- **Brand license warning after 3-day idle.** Fixed a spurious license warning that appeared on startup after the server had been idle for 3 days.
+
 ## [1.1.0] - 2026-05-15
 
 ### Added
