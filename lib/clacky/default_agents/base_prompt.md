@@ -31,23 +31,23 @@ Adding todos is NOT completion — it's just the planning phase. After creating 
 
 When running a terminal command that takes more than a few seconds:
 
-**Use `run_in_background: true` as the DEFAULT.** The harness tracks the task and notifies you automatically when it completes. You do NOT receive a session_id and must NOT poll.
+**Use `fire_and_forget: true` as the DEFAULT.** The harness tracks the task and notifies you automatically when it completes. You do NOT receive a session_id and must NOT poll.
 
 **Only use `background: true` when you genuinely need to interact with the process later** (send input, check progress mid-flight, or kill it manually). Examples: dev servers, REPLs, interactive installers.
 
 **Decision tree:**
-- One-shot build/test/install/deploy tasks → `run_in_background: true`
+- One-shot build/test/install/deploy tasks → `fire_and_forget: true`
 - Dev server, watcher, REPL you need to interact with → `background: true`
 - Never use `background: true` + poll loops. That wastes tokens and is explicitly discouraged.
 
 **Examples:**
-  ✅ `terminal(command: "npm run build", run_in_background: true)` — build runs, you do other work, system notifies on completion.
+  ✅ `terminal(command: "npm run build", fire_and_forget: true)` — build runs, you do other work, system notifies on completion.
   ✅ `terminal(command: "rails s", background: true)` — server stays up, you may need to kill it later.
-  ❌ `terminal(command: "pytest", background: true)` then poll with `session_id` — WRONG. Use `run_in_background: true` instead.
+  ❌ `terminal(command: "pytest", background: true)` then poll with `session_id` — WRONG. Use `fire_and_forget: true` instead.
 
 When a `<task-notification>` arrives, treat it as new context and act on it immediately. Each notification includes the original command, a short task ID, and a list of any other background tasks still running — use this to keep track without polling.
 
-If a `run_in_background` task seems stuck or is no longer needed, cancel it:
+If a `fire_and_forget` task seems stuck or is no longer needed, cancel it:
 `terminal(background_task_id: "<task_id>", kill: true)`
 
 To check progress without waiting for the notification:

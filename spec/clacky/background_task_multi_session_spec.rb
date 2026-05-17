@@ -171,7 +171,7 @@ RSpec.describe "Terminal tool stamps agent_session_id on background tasks" do
       orig.call(**kwargs)
     end
 
-    tool.execute(command: "sleep 30", run_in_background: true)
+    tool.execute(command: "sleep 30", fire_and_forget: true)
 
     expect(captured).not_to be_nil
     expect(captured[:metadata][:agent_session_id]).to eq("sess-X")
@@ -184,8 +184,8 @@ RSpec.describe "Terminal tool stamps agent_session_id on background tasks" do
     stub_background_path(tool_a, session_id: 42)
     stub_background_path(tool_b, session_id: 43)
 
-    tool_a.execute(command: "sleep 30", run_in_background: true)
-    tool_b.execute(command: "sleep 60", run_in_background: true)
+    tool_a.execute(command: "sleep 30", fire_and_forget: true)
+    tool_b.execute(command: "sleep 60", fire_and_forget: true)
 
     a_running = Clacky::BackgroundTaskRegistry.list_running(agent_session_id: "sess-A")
     b_running = Clacky::BackgroundTaskRegistry.list_running(agent_session_id: "sess-B")
@@ -206,7 +206,7 @@ RSpec.describe "Terminal tool stamps agent_session_id on background tasks" do
       orig.call(**kwargs)
     end
 
-    tool.execute(command: "sleep 5", run_in_background: true)
+    tool.execute(command: "sleep 5", fire_and_forget: true)
 
     expect(captured[:metadata]).to have_key(:agent_session_id)
     expect(captured[:metadata][:agent_session_id]).to be_nil

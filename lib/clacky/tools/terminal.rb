@@ -69,7 +69,7 @@ module Clacky
 
         Shapes:
           {command}                           run + wait (default for quick commands)
-          {command, run_in_background:true}   RECOMMENDED for long one-shot tasks (build, test, install). Harness tracks and notifies on completion. No polling needed.
+          {command, fire_and_forget:true}   RECOMMENDED for long one-shot tasks (build, test, install). Harness tracks and notifies on completion. No polling needed.
           {command, background:true}          ONLY for interactive long-running processes you need to control later (dev servers, REPLs, watchers).
           {session_id, input:"pw\n"}          reply to prompt / poll (input:"")
           {session_id, kill:true}             stop interactive background session
@@ -82,8 +82,8 @@ module Clacky
         input supports byte escapes: \x03 Ctrl-C, \x04 Ctrl-D, \t Tab, \x1b Esc.
 
         GUIDANCE: For one-shot tasks (builds, tests, installs, deploy scripts), always
-        prefer run_in_background. You will receive a <task-notification> when done.
-        If a run_in_background task seems stuck, cancel it with {background_task_id, kill:true}.
+        prefer fire_and_forget. You will receive a <task-notification> when done.
+        If a fire_and_forget task seems stuck, cancel it with {background_task_id, kill:true}.
         To check progress without polling: {background_task_id} returns current status.
         Only use background:true when you need to send input or kill the process later.
         NEVER poll a background session in a loop — it wastes tokens and is unnecessary.
@@ -103,16 +103,16 @@ module Clacky
         type: "object",
         properties: {
           command:           { type: "string",  description: "Shell command. Starts a new run. Mutually exclusive with session_id / background_task_id." },
-          run_in_background: { type: "boolean", description: "RECOMMENDED for one-shot long tasks (builds, tests, installs). Harness notifies you on completion. No session_id, no polling." },
+          fire_and_forget: { type: "boolean", description: "RECOMMENDED for one-shot long tasks (builds, tests, installs). Harness notifies you on completion. No session_id, no polling." },
           background:        { type: "boolean", description: "LEGACY mode for interactive processes you need to control later (dev servers, REPLs). Returns session_id for input/kill. Avoid for one-shot tasks." },
           session_id:        { type: "integer", description: "Continue or kill an interactive background session (returned by background:true)." },
-          background_task_id:{ type: "string",  description: "Query or cancel a fire-and-forget background task (returned by run_in_background:true). Use alone to check status; pair with kill:true to cancel." },
+          background_task_id:{ type: "string",  description: "Query or cancel a fire-and-forget background task (returned by fire_and_forget:true). Use alone to check status; pair with kill:true to cancel." },
           input:             { type: "string",  description: "Input to running session (usually ends with \n). \"\" = poll." },
           cwd:               { type: "string",  description: "Working dir for new command." },
           env:               { type: "object",  description: "Extra env vars for new command.", additionalProperties: { type: "string" } },
-          timeout:           { type: "integer", description: "Max seconds to wait (default 60). Ignored when background or run_in_background." },
+          timeout:           { type: "integer", description: "Max seconds to wait (default 60). Ignored when background or fire_and_forget." },
           kill:              { type: "boolean", description: "Stop a session (via session_id) or cancel a background task (via background_task_id)." },
-          max_duration:      { type: "integer", description: "Optional ceiling (seconds) for a run_in_background task. Defaults to 7200 (2h). Use a higher value for very long jobs (large docker build, full integration suite)." }
+          max_duration:      { type: "integer", description: "Optional ceiling (seconds) for a fire_and_forget task. Defaults to 7200 (2h). Use a higher value for very long jobs (large docker build, full integration suite)." }
         }
       }
 
@@ -151,7 +151,7 @@ module Clacky
       # Background commands collect this many seconds of startup output so
       # the agent can see crashes / readiness before getting the session_id.
       BACKGROUND_COLLECT_SECONDS = 2
-      # Default ceiling for a fire-and-forget background task (run_in_background).
+      # Default ceiling for a fire-and-forget background task (fire_and_forget).
       # Tasks running longer than this are treated as stuck and the watcher
       # returns a timeout result. Callers can override via metadata[:max_duration].
       # 2 hours covers large CI suites (full rspec, big docker build, slow
@@ -197,7 +197,7 @@ module Clacky
       # 180s matches the legacy safe_shell "hard_timeout" for slow commands.
       SLOW_COMMAND_TIMEOUT = 180
 
-      # Patterns that are obviously quick — using run_in_background on these
+      # Patterns that are obviously quick — using fire_and_forget on these
       # is almost certainly a mistake and wastes tokens. The harness rejects
       # such calls at runtime with a clear error so the LLM falls back to
       # foreground mode.
@@ -253,7 +253,7 @@ module Clacky
       # Public entrypoint — dispatches on parameter shape
       # ---------------------------------------------------------------------
       def execute(command: nil, session_id: nil, background_task_id: nil, input: nil,
-                  background: false, run_in_background: false, cwd: nil, env: nil,
+                  background: false, fire_and_forget: false, cwd: nil, env: nil,
                   timeout: nil, kill: nil, idle_ms: nil, working_dir: nil,
                   max_duration: nil, **_ignored)
         # Auto-tune: if the caller didn't explicitly set a timeout/idle_ms
@@ -264,7 +264,7 @@ module Clacky
         # session-continuation calls are NOT auto-tuned — background already
         # returns quickly by design, and continuing a session uses whatever
         # budget the caller requests.
-        if command && !background && !run_in_background && !session_id && slow_command?(command)
+        if command && !background && !fire_and_forget && !session_id && slow_command?(command)
           timeout ||= SLOW_COMMAND_TIMEOUT
           idle_ms ||= DISABLED_IDLE_MS
         end
@@ -296,19 +296,19 @@ module Clacky
 
         # Start a new command
         if command && !command.to_s.strip.empty?
-          # Runtime guard: reject run_in_background for obviously quick
+          # Runtime guard: reject fire_and_forget for obviously quick
           # commands to prevent the LLM from wasting tokens.
-          if run_in_background && quick_command?(command.to_s)
+          if fire_and_forget && quick_command?(command.to_s)
             return {
-              error: "run_in_background is for long-running tasks (builds, tests, installs). " \
+              error: "fire_and_forget is for long-running tasks (builds, tests, installs). " \
                      "This command looks quick — use foreground mode instead.",
-              hint: "Commands like ls, cat, pwd, echo should not use run_in_background.",
+              hint: "Commands like ls, cat, pwd, echo should not use fire_and_forget.",
               command: command.to_s
             }
           end
           return do_start(command.to_s, cwd: cwd, env: env, timeout: timeout,
                           idle_ms: idle_ms, background: background ? true : false,
-                          run_in_background: run_in_background ? true : false,
+                          fire_and_forget: fire_and_forget ? true : false,
                           max_duration: max_duration ? max_duration.to_i : nil)
         end
 
@@ -393,7 +393,7 @@ module Clacky
       # ---------------------------------------------------------------------
       # 1) Start a new command
       # ---------------------------------------------------------------------
-      private def do_start(command, cwd:, env:, timeout:, background:, run_in_background: false, max_duration: nil, idle_ms: DEFAULT_IDLE_MS)
+      private def do_start(command, cwd:, env:, timeout:, background:, fire_and_forget: false, max_duration: nil, idle_ms: DEFAULT_IDLE_MS)
         if cwd && !Dir.exist?(cwd.to_s)
           return { error: "cwd does not exist: #{cwd}" }
         end
@@ -407,7 +407,7 @@ module Clacky
 
         # Fire-and-forget background path — harness tracks lifecycle, agent
         # does not poll. Returns immediately after spawning.
-        if run_in_background
+        if fire_and_forget
           session = spawn_dedicated_session(cwd: cwd, env: env)
           return session if session.is_a?(Hash) && session[:error]
 
@@ -852,7 +852,7 @@ module Clacky
         nudge = ""
         if background && original_command && slow_command?(original_command)
           nudge = "\n\n[Nudge: This looks like a one-shot task. Next time, consider using " \
-            "`run_in_background: true` instead of `background: true` — the harness will " \
+            "`fire_and_forget: true` instead of `background: true` — the harness will " \
             "notify you automatically when it completes, with no polling needed.]"
         end
 
@@ -889,7 +889,7 @@ module Clacky
       end
 
       # -----------------------------------------------------------------
-      # Background task watcher (run_in_background mode)
+      # Background task watcher (fire_and_forget mode)
       # -----------------------------------------------------------------
 
       # Spawn a watcher thread that waits for the background session to
@@ -1461,7 +1461,7 @@ module Clacky
       end
 
       # Check if a command is obviously quick and should never use
-      # run_in_background. Used as a runtime guard to prevent token waste.
+      # fire_and_forget. Used as a runtime guard to prevent token waste.
       private def quick_command?(command)
         return false if command.nil? || command.empty?
         s = command.to_s
@@ -1567,7 +1567,7 @@ module Clacky
         inp  = args[:input] || args["input"]
         kill = args[:kill] || args["kill"]
         bg   = args[:background] || args["background"]
-        rbg  = args[:run_in_background] || args["run_in_background"]
+        rbg  = args[:fire_and_forget] || args["fire_and_forget"]
 
         if btid && !kill
           "terminal(query background task)"
@@ -1586,7 +1586,7 @@ module Clacky
         elsif cmd
           display_cmd = compact_command_for_display(cmd)
           if rbg
-            "terminal(#{display_cmd}, run_in_background)"
+            "terminal(#{display_cmd}, fire_and_forget)"
           elsif bg
             "terminal(#{display_cmd}, background)"
           else

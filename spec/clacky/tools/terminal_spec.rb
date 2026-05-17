@@ -749,11 +749,11 @@ RSpec.describe Clacky::Tools::Terminal do
       # actual run, only that auto-tuning kicked in — so we stub do_start
       # to return immediately.
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:, max_duration: nil|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, fire_and_forget:, max_duration: nil|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
         captured[:background] = background
-        captured[:run_in_background] = run_in_background
+        captured[:fire_and_forget] = fire_and_forget
         { exit_code: 0, output: "", bytes_read: 0 }
       end
 
@@ -762,12 +762,12 @@ RSpec.describe Clacky::Tools::Terminal do
       expect(captured[:timeout]).to eq(Clacky::Tools::Terminal::SLOW_COMMAND_TIMEOUT)
       expect(captured[:idle_ms]).to eq(Clacky::Tools::Terminal::DISABLED_IDLE_MS)
       expect(captured[:background]).to eq(false)
-      expect(captured[:run_in_background]).to eq(false)
+      expect(captured[:fire_and_forget]).to eq(false)
     end
 
     it "respects caller-supplied timeout/idle_ms even for slow commands" do
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:, max_duration: nil|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, fire_and_forget:, max_duration: nil|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
         { exit_code: 0, output: "", bytes_read: 0 }
@@ -781,18 +781,18 @@ RSpec.describe Clacky::Tools::Terminal do
 
     it "does NOT auto-tune background launches" do
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:, max_duration: nil|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, fire_and_forget:, max_duration: nil|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
         captured[:background] = background
-        captured[:run_in_background] = run_in_background
+        captured[:fire_and_forget] = fire_and_forget
         { exit_code: 0, output: "", bytes_read: 0 }
       end
 
       tool.execute(command: "bundle exec rspec", background: true)
 
       expect(captured[:background]).to eq(true)
-      expect(captured[:run_in_background]).to eq(false)
+      expect(captured[:fire_and_forget]).to eq(false)
       expect(captured[:timeout]).to eq(Clacky::Tools::Terminal::DEFAULT_TIMEOUT)
       # background leaves idle_ms at whatever default the caller wanted —
       # in practice wait_and_package disables idle for backgrounds anyway.
@@ -970,9 +970,9 @@ RSpec.describe Clacky::Tools::Terminal do
   end
 
   # ---------------------------------------------------------------------------
-  # Fire-and-forget background tasks (run_in_background)
+  # Fire-and-forget background tasks (fire_and_forget)
   # ---------------------------------------------------------------------------
-  describe "run_in_background" do
+  describe "fire_and_forget" do
     before do
       Clacky::BackgroundTaskRegistry.reset!
     end
@@ -982,44 +982,44 @@ RSpec.describe Clacky::Tools::Terminal do
     end
 
     it "returns accepted: true with a task_id for a running command" do
-      result = tool.execute(command: "sleep 5", run_in_background: true)
+      result = tool.execute(command: "sleep 5", fire_and_forget: true)
       expect(result[:accepted]).to be true
       expect(result[:task_id]).to match(/\A[0-9a-f-]{36}\z/)
       expect(result[:message]).to include("notified when it completes")
       expect(result[:startup_output]).to be_a(String)
     end
 
-    it "rejects run_in_background for obviously quick commands" do
-      result = tool.execute(command: "ls -la", run_in_background: true)
-      expect(result[:error]).to include("run_in_background is for long-running tasks")
+    it "rejects fire_and_forget for obviously quick commands" do
+      result = tool.execute(command: "ls -la", fire_and_forget: true)
+      expect(result[:error]).to include("fire_and_forget is for long-running tasks")
       expect(result[:hint]).to include("ls, cat, pwd, echo")
     end
 
     it "does not reject cd-prefixed commands that chain a long runner" do
-      result = tool.execute(command: "cd /tmp \u0026\u0026 bundle exec rspec", run_in_background: true)
+      result = tool.execute(command: "cd /tmp \u0026\u0026 bundle exec rspec", fire_and_forget: true)
       expect(result[:error].to_s).not_to include("looks quick")
 
-      result = tool.execute(command: "cd /tmp; make install", run_in_background: true)
+      result = tool.execute(command: "cd /tmp; make install", fire_and_forget: true)
       expect(result[:error].to_s).not_to include("looks quick")
     end
 
     it "does not reject env-prefixed or sudo-prefixed long commands" do
-      result = tool.execute(command: "FOO=bar bundle exec rspec", run_in_background: true)
+      result = tool.execute(command: "FOO=bar bundle exec rspec", fire_and_forget: true)
       expect(result[:error].to_s).not_to include("looks quick")
 
-      result = tool.execute(command: "sudo apt-get update", run_in_background: true)
+      result = tool.execute(command: "sudo apt-get update", fire_and_forget: true)
       expect(result[:error].to_s).not_to include("looks quick")
     end
 
     it "returns the failure directly if the command crashes during the startup window" do
-      result = tool.execute(command: "false", run_in_background: true)
+      result = tool.execute(command: "false", fire_and_forget: true)
       # `false` exits immediately; the startup window catches it
       expect(result[:accepted]).to be_falsy
       expect(result[:exit_code]).to eq(1)
     end
 
     it "registers a task that can be queried by task_id" do
-      result = tool.execute(command: "sleep 10", run_in_background: true)
+      result = tool.execute(command: "sleep 10", fire_and_forget: true)
       task_id = result[:task_id]
 
       query = tool.execute(background_task_id: task_id)
@@ -1032,7 +1032,7 @@ RSpec.describe Clacky::Tools::Terminal do
     end
 
     it "cancels a running background task and reports it as killed" do
-      result = tool.execute(command: "sleep 30", run_in_background: true)
+      result = tool.execute(command: "sleep 30", fire_and_forget: true)
       task_id = result[:task_id]
 
       cancel = tool.execute(background_task_id: task_id, kill: true)
@@ -1054,7 +1054,7 @@ RSpec.describe Clacky::Tools::Terminal do
       # Start a task, wait for it to finish, then try to cancel.
       # We use a short sleep so it goes through the background path
       # (exits after the startup window).
-      result = tool.execute(command: "sleep 0.8", run_in_background: true)
+      result = tool.execute(command: "sleep 0.8", fire_and_forget: true)
       expect(result[:accepted]).to be true
       task_id = result[:task_id]
 
@@ -1068,7 +1068,7 @@ RSpec.describe Clacky::Tools::Terminal do
     it "uses max_duration from metadata for the watcher timeout" do
       # We can't easily test the full watcher timeout, but we can verify
       # the task metadata stores the value.
-      result = tool.execute(command: "sleep 5", run_in_background: true, max_duration: 300)
+      result = tool.execute(command: "sleep 5", fire_and_forget: true, max_duration: 300)
       task_id = result[:task_id]
 
       task = Clacky::BackgroundTaskRegistry.get(task_id)

@@ -4,7 +4,7 @@ require "securerandom"
 
 module Clacky
   # BackgroundTaskRegistry tracks fire-and-forget tasks started by tools
-  # (e.g. terminal run_in_background) and notifies the owning agent when
+  # (e.g. terminal fire_and_forget) and notifies the owning agent when
   # they complete.
   #
   # Flow:
