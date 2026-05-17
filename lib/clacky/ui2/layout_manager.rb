@@ -126,6 +126,10 @@ module Clacky
 
           old_lines = entry.lines.dup
           new_lines = wrap_content_to_lines(content)
+          if old_lines == new_lines
+            screen.flush
+            return
+          end
           @buffer.replace(id, new_lines)
 
           unless @fullscreen_mode
@@ -288,24 +292,28 @@ module Clacky
           end
         end
 
-        # Clear the rows the entry currently occupies
-        (start_row...@output_row).each do |row|
-          screen.move_cursor(row, 0)
-          screen.clear_line
-        end
-
-        # Paint the new content
+        # Clear only rows whose content actually changed, then repaint
+        # those. Lines that are byte-identical to the previous frame stay
+        # untouched — avoiding the clear-then-redraw flicker that an
+        # always-on ticker produces 2-10x per second on slower terminals.
         cur = start_row
-        new_lines.each do |line|
-          screen.move_cursor(cur, 0)
-          print line
+        new_lines.each_with_index do |line, i|
+          if i >= old_n || old_lines[i] != line
+            screen.move_cursor(cur, 0)
+            screen.clear_line
+            print line
+          end
           cur += 1
         end
+        # If content shrank, blank out the rows the old frame occupied
+        # below the new tail.
+        if new_n < old_n
+          (cur...(start_row + old_n)).each do |row|
+            screen.move_cursor(row, 0)
+            screen.clear_line
+          end
+        end
         @output_row = start_row + new_n
-
-        # If content shrank, extra rows below may still hold the old content
-        # if they were outside the cleared range — but since we cleared the
-        # full old span above, nothing extra is needed here.
       end
 
       # Clear the last N rows of the output area (used by remove_entry on tail).

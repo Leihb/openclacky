@@ -198,9 +198,35 @@ module Clacky
         @input_area.set_agent(agent, agent_profile)
       end
 
-      # Append output to the output area
-      # @param content [String] Content to append
+      # Append output to the output area.
+      #
+      # If a progress indicator is currently active (somewhere in the
+      # buffer), rotate it to the tail after the append: business content
+      # ends up above, the spinner stays at the bottom. Without this,
+      # every subsequent ticker tick on a non-tail progress entry would
+      # trigger a full output repaint (visible flicker) and the visual
+      # order would have business messages appearing below the spinner.
       def append_output(content)
+        @progress_mutex.synchronize do
+          top = @progress_stack.last
+          if top && top.entry_id
+            @layout.remove_entry(top.entry_id)
+            top.__detach_entry!
+            new_id = @layout.append_output(content)
+            progress_id = @layout.append_output(render_for(top))
+            top.__rebind_entry!(progress_id)
+            new_id
+          else
+            @layout.append_output(content)
+          end
+        end
+      end
+
+      # Internal append that bypasses the progress-rotation logic and the
+      # @progress_mutex. Used by register_progress / unregister_progress,
+      # which already hold the mutex and are themselves placing a fresh
+      # progress entry at the tail.
+      private def append_output_unlocked(content)
         @layout.append_output(content)
       end
 
@@ -604,7 +630,7 @@ module Clacky
           end
 
           @progress_stack.push(handle)
-          entry_id = append_output(render_for(handle))
+          entry_id = append_output_unlocked(render_for(handle))
           recompute_sessionbar_status
           entry_id
         end
@@ -630,7 +656,7 @@ module Clacky
           # Restore the new top, if any: allocate a fresh entry and let it
           # resume rendering from where it left off.
           if (restored = @progress_stack.last)
-            new_id = append_output(render_for(restored))
+            new_id = append_output_unlocked(render_for(restored))
             restored.__reattach_entry!(new_id)
           end
 

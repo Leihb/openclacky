@@ -225,6 +225,15 @@ module Clacky
         render_now
       end
 
+      # Like __reattach_entry! but skips the render_now hop. Used by the
+      # owner when it has just painted a frame into the new entry itself
+      # (e.g. while rotating the handle to remain at the buffer tail) and
+      # is still inside its own synchronization — calling render_now there
+      # would re-enter the owner's mutex.
+      def __rebind_entry!(new_entry_id)
+        @monitor.synchronize { @entry_id = new_entry_id }
+      end
+
       # Test hook: force a synchronous render regardless of tick cadence.
       def __force_render!
         render_now
