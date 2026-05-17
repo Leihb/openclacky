@@ -604,7 +604,7 @@ module Clacky
         # unboundedly across a long session. Best-effort; runs synchronously
         # but is cheap (a single mutex + Hash#delete_if).
         begin
-          BackgroundTaskRegistry.prune_completed(max_age: 3_600)
+          BackgroundTaskRegistry.prune_completed(max_age: 3_600, agent_session_id: @session_id)
         rescue => e
           Clacky::Logger.error("background_task_prune_error", error: e)
         end
@@ -1328,7 +1328,7 @@ module Clacky
     end
 
     private def register_builtin_tools
-      @tool_registry.register(Tools::Terminal.new)
+      @tool_registry.register(Tools::Terminal.new(agent_session_id: @session_id))
       @tool_registry.register(Tools::FileReader.new)
       @tool_registry.register(Tools::Write.new)
       @tool_registry.register(Tools::Edit.new)

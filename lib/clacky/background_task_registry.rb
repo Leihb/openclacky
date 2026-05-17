@@ -210,11 +210,17 @@ module Clacky
       end
 
       # Forget stale completed tasks older than max_age seconds.
-      def prune_completed(max_age: 3600)
+      # When agent_session_id is given, only that session's tasks are pruned —
+      # this keeps long-lived sessions from racing each other in the shared
+      # registry (server mode runs many agents in one process).
+      def prune_completed(max_age: 3600, agent_session_id: nil)
         cutoff = Time.now - max_age
         @mutex.synchronize do
           @tasks.delete_if do |_id, task|
-            task[:status] == "completed" && task[:completed_at] && task[:completed_at] < cutoff
+            next false unless task[:status] == "completed"
+            next false unless task[:completed_at] && task[:completed_at] < cutoff
+            next false if agent_session_id && task[:metadata][:agent_session_id] != agent_session_id
+            true
           end
         end
       end

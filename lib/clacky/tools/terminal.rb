@@ -89,6 +89,16 @@ module Clacky
         NEVER poll a background session in a loop — it wastes tokens and is unnecessary.
       DESC
       self.tool_category = "system"
+
+      # agent_session_id is injected by the Agent that owns this tool instance.
+      # It is NOT exposed in tool_parameters — AI agents cannot set it.
+      attr_reader :agent_session_id
+
+      def initialize(agent_session_id: nil)
+        super()
+        @agent_session_id = agent_session_id
+      end
+
       self.tool_parameters = {
         type: "object",
         properties: {
@@ -422,7 +432,8 @@ module Clacky
                 command: command,
                 cwd: cwd,
                 started_at: Time.now.to_f,
-                max_duration: max_duration || BACKGROUND_TASK_MAX_DURATION
+                max_duration: max_duration || BACKGROUND_TASK_MAX_DURATION,
+                agent_session_id: @agent_session_id
               },
               on_cancel: ->(_task) {
                 # Kill the session when the task is cancelled
