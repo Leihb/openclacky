@@ -749,7 +749,7 @@ RSpec.describe Clacky::Tools::Terminal do
       # actual run, only that auto-tuning kicked in — so we stub do_start
       # to return immediately.
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:, max_duration: nil|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
         captured[:background] = background
@@ -767,7 +767,7 @@ RSpec.describe Clacky::Tools::Terminal do
 
     it "respects caller-supplied timeout/idle_ms even for slow commands" do
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:, max_duration: nil|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
         { exit_code: 0, output: "", bytes_read: 0 }
@@ -781,7 +781,7 @@ RSpec.describe Clacky::Tools::Terminal do
 
     it "does NOT auto-tune background launches" do
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:, run_in_background:, max_duration: nil|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
         captured[:background] = background
@@ -966,6 +966,99 @@ RSpec.describe Clacky::Tools::Terminal do
 
       expect(result[:exit_code]).to eq(0)
       expect(result[:output]).to eq("hello world")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Fire-and-forget background tasks (run_in_background)
+  # ---------------------------------------------------------------------------
+  describe "run_in_background" do
+    before do
+      Clacky::BackgroundTaskRegistry.reset!
+    end
+
+    after do
+      Clacky::BackgroundTaskRegistry.reset!
+    end
+
+    it "returns accepted: true with a task_id for a running command" do
+      result = tool.execute(command: "sleep 5", run_in_background: true)
+      expect(result[:accepted]).to be true
+      expect(result[:task_id]).to match(/\A[0-9a-f-]{36}\z/)
+      expect(result[:message]).to include("notified when it completes")
+      expect(result[:startup_output]).to be_a(String)
+    end
+
+    it "rejects run_in_background for obviously quick commands" do
+      result = tool.execute(command: "ls -la", run_in_background: true)
+      expect(result[:error]).to include("run_in_background is for long-running tasks")
+      expect(result[:hint]).to include("ls, cat, pwd, echo")
+    end
+
+    it "returns the failure directly if the command crashes during the startup window" do
+      result = tool.execute(command: "false", run_in_background: true)
+      # `false` exits immediately; the startup window catches it
+      expect(result[:accepted]).to be_falsy
+      expect(result[:exit_code]).to eq(1)
+    end
+
+    it "registers a task that can be queried by task_id" do
+      result = tool.execute(command: "sleep 10", run_in_background: true)
+      task_id = result[:task_id]
+
+      query = tool.execute(background_task_id: task_id)
+      expect(query[:status]).to eq("running")
+      expect(query[:command]).to eq("sleep 10")
+      expect(query[:elapsed_seconds]).to be_a(Integer)
+
+      # Cancel so we don't leak
+      tool.execute(background_task_id: task_id, kill: true)
+    end
+
+    it "cancels a running background task and reports it as killed" do
+      result = tool.execute(command: "sleep 30", run_in_background: true)
+      task_id = result[:task_id]
+
+      cancel = tool.execute(background_task_id: task_id, kill: true)
+      expect(cancel[:killed]).to be true
+      expect(cancel[:background_task_id]).to eq(task_id)
+
+      # Give the registry a moment to process
+      sleep 0.2
+      task = Clacky::BackgroundTaskRegistry.get(task_id)
+      expect(task[:status]).to eq("cancelled")
+    end
+
+    it "returns error for querying a non-existent task" do
+      result = tool.execute(background_task_id: "nonexistent-uuid")
+      expect(result[:error]).to include("not found")
+    end
+
+    it "returns error for cancelling an already-completed task" do
+      # Start a task, wait for it to finish, then try to cancel.
+      # We use a short sleep so it goes through the background path
+      # (exits after the startup window).
+      result = tool.execute(command: "sleep 0.8", run_in_background: true)
+      expect(result[:accepted]).to be true
+      task_id = result[:task_id]
+
+      # Wait long enough for the task to finish and watcher to complete it
+      sleep 2
+
+      cancel = tool.execute(background_task_id: task_id, kill: true)
+      expect(cancel[:error]).to include("not found or already completed")
+    end
+
+    it "uses max_duration from metadata for the watcher timeout" do
+      # We can't easily test the full watcher timeout, but we can verify
+      # the task metadata stores the value.
+      result = tool.execute(command: "sleep 5", run_in_background: true, max_duration: 300)
+      task_id = result[:task_id]
+
+      task = Clacky::BackgroundTaskRegistry.get(task_id)
+      expect(task[:metadata][:max_duration]).to eq(300)
+
+      tool.execute(background_task_id: task_id, kill: true)
     end
   end
 

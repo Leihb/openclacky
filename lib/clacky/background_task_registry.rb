@@ -46,18 +46,52 @@ module Clacky
 
       # Register a completion callback for a task. Called by the agent after
       # it sees the tool accepted the background request.
+      #
+      # Race-safe: if the task already finished between create_task and
+      # register_callback (rare but possible — e.g. a task that completes
+      # within milliseconds of the 2s startup window), we fire the callback
+      # immediately on a fresh thread instead of dropping the notification.
       def register_callback(task_id:, agent:, &block)
+        fire_immediately = nil
+
         @mutex.synchronize do
           task = @tasks[task_id]
           return false unless task
 
-          @callbacks[task_id] = {
-            agent: agent,
-            callback: block,
-            registered_at: Time.now
-          }
-          true
+          if task[:status] == "completed" || task[:status] == "cancelled"
+            # Task already finished — capture its result and fire after
+            # releasing the lock to avoid holding it across user code.
+            fire_immediately = task[:result] || {
+              cancelled: task[:status] == "cancelled",
+              output: task[:status] == "cancelled" ? "Task was cancelled by user." : "",
+              exit_code: nil,
+              state: task[:status]
+            }
+          else
+            @callbacks[task_id] = {
+              agent: agent,
+              callback: block,
+              registered_at: Time.now
+            }
+          end
         end
+
+        if fire_immediately
+          Thread.new do
+            Thread.current.name = "bg-task-notify-late-#{task_id[0, 8]}"
+            begin
+              block.call(fire_immediately)
+            rescue => e
+              Clacky::Logger.error("background_task_callback_error",
+                task_id: task_id,
+                agent_session: agent&.session_id,
+                error: e
+              )
+            end
+          end
+        end
+
+        true
       end
 
       # Cancel a running background task. Calls the on_cancel proc if present,

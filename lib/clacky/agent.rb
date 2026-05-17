@@ -600,6 +600,15 @@ module Clacky
         # Tracks daily active users (distinct devices per day) and task volume.
         Clacky::Telemetry.task!
 
+        # Reap stale completed background tasks so the registry doesn't grow
+        # unboundedly across a long session. Best-effort; runs synchronously
+        # but is cheap (a single mutex + Hash#delete_if).
+        begin
+          BackgroundTaskRegistry.prune_completed(max_age: 3_600)
+        rescue => e
+          Clacky::Logger.error("background_task_prune_error", error: e)
+        end
+
         # If a background-task notification arrived while we were running,
         # process it now on a fresh thread so we don't block the caller.
         flush_pending_system_notifications

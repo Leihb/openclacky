@@ -101,7 +101,8 @@ module Clacky
           cwd:               { type: "string",  description: "Working dir for new command." },
           env:               { type: "object",  description: "Extra env vars for new command.", additionalProperties: { type: "string" } },
           timeout:           { type: "integer", description: "Max seconds to wait (default 60). Ignored when background or run_in_background." },
-          kill:              { type: "boolean", description: "Stop a session (via session_id) or cancel a background task (via background_task_id)." }
+          kill:              { type: "boolean", description: "Stop a session (via session_id) or cancel a background task (via background_task_id)." },
+          max_duration:      { type: "integer", description: "Optional ceiling (seconds) for a run_in_background task. Defaults to 7200 (2h). Use a higher value for very long jobs (large docker build, full integration suite)." }
         }
       }
 
@@ -140,6 +141,12 @@ module Clacky
       # Background commands collect this many seconds of startup output so
       # the agent can see crashes / readiness before getting the session_id.
       BACKGROUND_COLLECT_SECONDS = 2
+      # Default ceiling for a fire-and-forget background task (run_in_background).
+      # Tasks running longer than this are treated as stuck and the watcher
+      # returns a timeout result. Callers can override via metadata[:max_duration].
+      # 2 hours covers large CI suites (full rspec, big docker build, slow
+      # `npm install` on a cold cache) but still bounds resource usage.
+      BACKGROUND_TASK_MAX_DURATION = 7_200
       # Sentinel: when passed as idle_ms, disables idle early-return.
       DISABLED_IDLE_MS = 10_000_000
 
@@ -237,7 +244,8 @@ module Clacky
       # ---------------------------------------------------------------------
       def execute(command: nil, session_id: nil, background_task_id: nil, input: nil,
                   background: false, run_in_background: false, cwd: nil, env: nil,
-                  timeout: nil, kill: nil, idle_ms: nil, working_dir: nil, **_ignored)
+                  timeout: nil, kill: nil, idle_ms: nil, working_dir: nil,
+                  max_duration: nil, **_ignored)
         # Auto-tune: if the caller didn't explicitly set a timeout/idle_ms
         # AND the command is a well-known long-runner (rspec, bundle install,
         # cargo build, etc.), we stretch the budget AND disable idle-return.
@@ -290,7 +298,8 @@ module Clacky
           end
           return do_start(command.to_s, cwd: cwd, env: env, timeout: timeout,
                           idle_ms: idle_ms, background: background ? true : false,
-                          run_in_background: run_in_background ? true : false)
+                          run_in_background: run_in_background ? true : false,
+                          max_duration: max_duration ? max_duration.to_i : nil)
         end
 
         { error: "terminal: must provide either `command`, or `session_id`+`input`, or `session_id`/`background_task_id`+`kill: true`." }
@@ -374,7 +383,7 @@ module Clacky
       # ---------------------------------------------------------------------
       # 1) Start a new command
       # ---------------------------------------------------------------------
-      private def do_start(command, cwd:, env:, timeout:, background:, run_in_background: false, idle_ms: DEFAULT_IDLE_MS)
+      private def do_start(command, cwd:, env:, timeout:, background:, run_in_background: false, max_duration: nil, idle_ms: DEFAULT_IDLE_MS)
         if cwd && !Dir.exist?(cwd.to_s)
           return { error: "cwd does not exist: #{cwd}" }
         end
@@ -412,7 +421,8 @@ module Clacky
               metadata: {
                 command: command,
                 cwd: cwd,
-                started_at: Time.now.to_f
+                started_at: Time.now.to_f,
+                max_duration: max_duration || BACKGROUND_TASK_MAX_DURATION
               },
               on_cancel: ->(_task) {
                 # Kill the session when the task is cancelled
@@ -433,7 +443,8 @@ module Clacky
                 SessionManager.forget(session.id)
               }
             )
-            start_background_watcher(session, task_id, command: command)
+            start_background_watcher(session, task_id, command: command,
+                                     max_duration: max_duration || BACKGROUND_TASK_MAX_DURATION)
 
             return {
               accepted: true,
@@ -873,7 +884,7 @@ module Clacky
       # Spawn a watcher thread that waits for the background session to
       # finish, then packages the result and notifies the registry.
       # The session is cleaned up after completion (success or crash).
-      private def start_background_watcher(session, task_id, command: nil)
+      private def start_background_watcher(session, task_id, command: nil, max_duration: BACKGROUND_TASK_MAX_DURATION)
         Thread.new do
           Thread.current.name = "bg-terminal-#{task_id[0, 8]}"
           begin
@@ -881,7 +892,7 @@ module Clacky
 
             _before, code, state = read_until_marker(
               session,
-              timeout: 3_600,          # 1 hour default for bg tasks
+              timeout: max_duration,
               idle_ms: DISABLED_IDLE_MS
             )
 
